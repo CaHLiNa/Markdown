@@ -61,6 +61,12 @@ export type MarkdownEditor = {
   getDocumentJSON: () => JSONNode
   runCommand: (command: EditorCommand) => boolean
   revealHeading: (title: string) => boolean
+  setSelectionInBlock: (
+    type: MarkdownBlock['type'],
+    index: number,
+    startOffset: number,
+    endOffset?: number
+  ) => void
   setSelectionInParagraph: (index: number, startOffset: number, endOffset?: number) => void
   destroy: () => Promise<void>
 }
@@ -102,9 +108,24 @@ class PreviewBlockWidget extends WidgetType {
   }
 }
 
+const headingPrefixPattern = /^\s{0,3}#{1,6}\s+/
+const blockquotePrefixPattern = /^\s{0,3}>\s?/
+const listPrefixPattern = /^\s{0,3}(?:[-+*]\s+(?:\[[ xX]\]\s+)?|\d+\.\s+)/
+const fencedCodeDelimiterPattern = /^\s*(?:```|~~~).*$/
+const mathDelimiterPattern = /^\s*\$\$\s*$/
+const syntaxTokenDecoration = Decoration.mark({ class: 'cm-markdown-syntax-token' })
+
 const selectionTouchesBlock = (from: number, to: number, block: MarkdownBlock) => {
   const end = Math.max(from + 1, to)
   return block.from <= end && block.to >= from
+}
+
+const getSelectedBlocks = (state: EditorState) => {
+  const markdownText = state.doc.toString()
+  const selection = state.selection.main
+  return extractMarkdownBlocks(markdownText).filter((block) =>
+    selectionTouchesBlock(selection.from, selection.to, block)
+  )
 }
 
 const buildPreviewDecorations = (state: EditorState): DecorationSet => {
@@ -135,6 +156,81 @@ const buildPreviewDecorations = (state: EditorState): DecorationSet => {
   return builder.finish()
 }
 
+const addSyntaxTokenDecoration = (
+  builder: RangeSetBuilder<Decoration>,
+  lineText: string,
+  lineFrom: number,
+  pattern: RegExp
+) => {
+  const match = lineText.match(pattern)
+
+  if (!match || match[0].length === 0) {
+    return
+  }
+
+  builder.add(
+    lineFrom,
+    lineFrom + match[0].length,
+    syntaxTokenDecoration
+  )
+}
+
+const buildSyntaxTokenDecorations = (state: EditorState): DecorationSet => {
+  const blocks = getSelectedBlocks(state)
+  const builder = new RangeSetBuilder<Decoration>()
+
+  for (const block of blocks) {
+    const lines = block.text.split('\n')
+    let offset = block.from
+
+    switch (block.type) {
+      case 'heading':
+        addSyntaxTokenDecoration(builder, lines[0] ?? '', offset, headingPrefixPattern)
+        break
+      case 'blockquote':
+        for (const line of lines) {
+          addSyntaxTokenDecoration(builder, line, offset, blockquotePrefixPattern)
+          offset += line.length + 1
+        }
+        break
+      case 'list':
+        for (const line of lines) {
+          addSyntaxTokenDecoration(builder, line, offset, listPrefixPattern)
+          offset += line.length + 1
+        }
+        break
+      case 'code': {
+        const firstLine = lines[0] ?? ''
+        const lastLine = lines[lines.length - 1] ?? ''
+        addSyntaxTokenDecoration(builder, firstLine, offset, fencedCodeDelimiterPattern)
+
+        if (lines.length > 1) {
+          const lastLineOffset = block.to - lastLine.length
+          addSyntaxTokenDecoration(builder, lastLine, lastLineOffset, fencedCodeDelimiterPattern)
+        }
+        break
+      }
+      case 'math': {
+        const firstLine = lines[0] ?? ''
+        const lastLine = lines[lines.length - 1] ?? ''
+        addSyntaxTokenDecoration(builder, firstLine, offset, mathDelimiterPattern)
+
+        if (lines.length > 1) {
+          const lastLineOffset = block.to - lastLine.length
+          addSyntaxTokenDecoration(builder, lastLine, lastLineOffset, mathDelimiterPattern)
+        }
+        break
+      }
+      case 'paragraph':
+      case 'table':
+      case 'hr':
+        break
+    }
+  }
+
+  return builder.finish()
+}
+
 const previewDecorationsField = StateField.define<DecorationSet>({
   create(state) {
     return buildPreviewDecorations(state)
@@ -142,6 +238,22 @@ const previewDecorationsField = StateField.define<DecorationSet>({
   update(decorations, transaction) {
     if (transaction.docChanged || transaction.selection) {
       return buildPreviewDecorations(transaction.state)
+    }
+
+    return decorations
+  },
+  provide(field): Extension {
+    return EditorView.decorations.from(field)
+  }
+})
+
+const syntaxTokenDecorationsField = StateField.define<DecorationSet>({
+  create(state) {
+    return buildSyntaxTokenDecorations(state)
+  },
+  update(decorations, transaction) {
+    if (transaction.docChanged || transaction.selection) {
+      return buildSyntaxTokenDecorations(transaction.state)
     }
 
     return decorations
@@ -203,6 +315,29 @@ const resolveRoot = (root: Root) => {
 
 const getDocumentText = (view: EditorView) => view.state.doc.toString()
 
+const setSelectionInBlock = (
+  view: EditorView,
+  type: MarkdownBlock['type'],
+  index: number,
+  startOffset: number,
+  endOffset = startOffset
+) => {
+  const blocks = extractMarkdownBlocks(getDocumentText(view)).filter(
+    (block) => block.type === type
+  )
+  const block = blocks[index]
+
+  if (!block) {
+    throw new Error(`Block "${type}" at index ${index} was not found.`)
+  }
+
+  const maxOffset = block.text.length
+  const anchor = block.from + Math.max(0, Math.min(startOffset, maxOffset))
+  const head = block.from + Math.max(0, Math.min(endOffset, maxOffset))
+
+  updateSelection(view, anchor, head)
+}
+
 const getActiveBlock = (view: EditorView) => {
   const markdownText = getDocumentText(view)
   const position = view.state.selection.main.from
@@ -233,12 +368,11 @@ const replaceRange = (
   })
 }
 
-const stripHeadingPrefix = (line: string) => line.replace(/^\s{0,3}#{1,6}\s+/, '')
+const stripHeadingPrefix = (line: string) => line.replace(headingPrefixPattern, '')
 
-const stripQuotePrefix = (line: string) => line.replace(/^\s{0,3}>\s?/, '')
+const stripQuotePrefix = (line: string) => line.replace(blockquotePrefixPattern, '')
 
-const stripListPrefix = (line: string) =>
-  line.replace(/^\s{0,3}(?:[-+*]\s+(?:\[[ xX]\]\s+)?|\d+\.\s+)/, '')
+const stripListPrefix = (line: string) => line.replace(listPrefixPattern, '')
 
 const stripBlockSyntax = (line: string) => {
   return stripListPrefix(stripQuotePrefix(stripHeadingPrefix(line)))
@@ -412,6 +546,7 @@ export const createMarkdownEditor = async ({
         syntaxHighlighting(defaultHighlightStyle),
         editorTheme,
         previewDecorationsField,
+        syntaxTokenDecorationsField,
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) {
@@ -478,21 +613,17 @@ export const createMarkdownEditor = async ({
       return true
     },
 
+    setSelectionInBlock(
+      type: MarkdownBlock['type'],
+      index: number,
+      startOffset: number,
+      endOffset = startOffset
+    ) {
+      setSelectionInBlock(view, type, index, startOffset, endOffset)
+    },
+
     setSelectionInParagraph(index: number, startOffset: number, endOffset = startOffset) {
-      const paragraphs = extractMarkdownBlocks(getDocumentText(view)).filter(
-        (block) => block.type === 'paragraph'
-      )
-      const block = paragraphs[index]
-
-      if (!block) {
-        throw new Error(`Paragraph at index ${index} was not found.`)
-      }
-
-      const maxOffset = block.text.length
-      const anchor = block.from + Math.max(0, Math.min(startOffset, maxOffset))
-      const head = block.from + Math.max(0, Math.min(endOffset, maxOffset))
-
-      updateSelection(view, anchor, head)
+      setSelectionInBlock(view, 'paragraph', index, startOffset, endOffset)
     },
 
     async destroy() {

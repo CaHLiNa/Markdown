@@ -20,7 +20,7 @@ enum EditorSidebarPane: String, CaseIterable, Identifiable {
 
 enum EditorMode: String, CaseIterable, Identifiable {
     case wysiwyg = "所见即所得"
-    case sourceCode = "源码模式"
+    case sourceView = "源码视图"
 
     var id: String { rawValue }
 }
@@ -80,7 +80,7 @@ final class EditorDocumentController: ObservableObject {
     @Published private(set) var recentFiles: [URL]
     @Published var sidebarPane: EditorSidebarPane = .files
     @Published var editorMode: EditorMode = .wysiwyg
-    @Published var appearanceMode: EditorAppearanceMode = .dark
+    @Published var appearanceMode: EditorAppearanceMode = .followSystem
     @Published var editorTheme: EditorTheme = .defaultTheme
     @Published var isSidebarVisible = true
     @Published var isFocusModeEnabled = false
@@ -115,11 +115,19 @@ final class EditorDocumentController: ObservableObject {
     }
 
     var canExportRenderedDocument: Bool {
-        editorMode == .wysiwyg
+        true
     }
 
     var currentTitle: String {
         activeTab?.title ?? "未命名"
+    }
+
+    var editableCurrentTitle: String {
+        if let currentFileURL {
+            return currentFileURL.deletingPathExtension().lastPathComponent
+        }
+
+        return currentTitle
     }
 
     var currentRelativePath: String? {
@@ -343,11 +351,6 @@ final class EditorDocumentController: ObservableObject {
     }
 
     func exportHTMLDocument() {
-        guard canExportRenderedDocument else {
-            presentModeRestrictionError(for: "导出 HTML")
-            return
-        }
-
         let panel = NSSavePanel()
         panel.allowedContentTypes = [MarkdownFileService.htmlContentType]
         panel.canCreateDirectories = true
@@ -390,11 +393,6 @@ final class EditorDocumentController: ObservableObject {
     }
 
     func exportPDFDocument() {
-        guard canExportRenderedDocument else {
-            presentModeRestrictionError(for: "导出 PDF")
-            return
-        }
-
         let panel = NSSavePanel()
         panel.allowedContentTypes = [MarkdownFileService.pdfContentType]
         panel.canCreateDirectories = true
@@ -432,11 +430,6 @@ final class EditorDocumentController: ObservableObject {
     }
 
     func printDocument() {
-        guard canExportRenderedDocument else {
-            presentModeRestrictionError(for: "打印")
-            return
-        }
-
         do {
             try editorController.printDocument()
         } catch {
@@ -459,8 +452,38 @@ final class EditorDocumentController: ObservableObject {
         }
     }
 
+    func toggleSourceView() {
+        editorMode = editorMode == .wysiwyg ? .sourceView : .wysiwyg
+    }
+
     func toggleTabStripVisibility() {
         isTabStripVisible.toggle()
+    }
+
+    func renameCurrentDocument(to proposedName: String) {
+        let trimmedName = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, let activeTab else {
+            return
+        }
+
+        guard let fileURL = activeTab.fileURL else {
+            updateActiveTab {
+                $0.title = trimmedName
+            }
+            return
+        }
+
+        do {
+            let destinationURL = try MarkdownFileService.renameMarkdownFile(at: fileURL, to: trimmedName)
+            updateActiveTab {
+                $0.fileURL = destinationURL
+                $0.title = destinationURL.lastPathComponent
+            }
+            addRecentFile(destinationURL)
+            refreshWorkspace()
+        } catch {
+            presentError(error, title: "无法重命名文件")
+        }
     }
 
     func toggleFolderExpansion(_ id: String) {
@@ -541,18 +564,6 @@ final class EditorDocumentController: ObservableObject {
         alert.informativeText = error.localizedDescription
         alert.runModal()
     }
-
-    private func presentModeRestrictionError(for action: String) {
-        presentError(
-            NSError(
-                domain: "Markdown",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "请切换回所见即所得模式后再试。"]
-            ),
-            title: "\(action)仅在所见即所得模式下可用"
-        )
-    }
-
     private static func relativePath(for fileURL: URL, inside folderURL: URL) -> String {
         let folderPath = folderURL.standardizedFileURL.path + "/"
         let filePath = fileURL.standardizedFileURL.path

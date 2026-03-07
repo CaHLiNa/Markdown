@@ -18,7 +18,7 @@ beforeAll(() => {
   }
 
   if (!Range.prototype.getClientRects) {
-    Range.prototype.getClientRects = (() => []) as () => DOMRectList
+    Range.prototype.getClientRects = (() => [] as unknown as DOMRectList) as () => DOMRectList
   }
 
   if (!Range.prototype.getBoundingClientRect) {
@@ -109,6 +109,65 @@ describe('createMarkdownEditor', () => {
 
     expect(markdown).toContain('| 列 1 | 列 2 |')
     expect(renderedHTML).toContain('<table>')
+
+    await editor.destroy()
+  })
+
+  test('dims markdown syntax markers inside the active heading and list blocks', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for syntax marker test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n- [ ] 任务项'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    let markerTexts = Array.from(
+      root.querySelectorAll<HTMLElement>('.cm-markdown-syntax-token')
+    ).map((element) => element.textContent)
+
+    expect(markerTexts).toContain('# ')
+
+    editor.setSelectionInBlock('list', 0, 0)
+
+    markerTexts = Array.from(
+      root.querySelectorAll<HTMLElement>('.cm-markdown-syntax-token')
+    ).map((element) => element.textContent)
+
+    expect(markerTexts).toContain('- [ ] ')
+
+    await editor.destroy()
+  })
+
+  test('dims fenced delimiters when editing an active code block', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for code fence test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '```ts\nconst value = 1\n```'
+    })
+
+    editor.setSelectionInBlock('code', 0, 0)
+
+    const markerTexts = Array.from(
+      root.querySelectorAll<HTMLElement>('.cm-markdown-syntax-token')
+    ).map((element) => element.textContent)
+
+    expect(markerTexts).toContain('```ts')
+    expect(markerTexts).toContain('```')
 
     await editor.destroy()
   })

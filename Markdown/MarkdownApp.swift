@@ -21,7 +21,7 @@ struct MarkdownApp: App {
                 }
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1460, height: 900)
+        .defaultSize(width: 1180, height: 760)
         .commands {
             EditorAppCommands(documentController: documentController)
         }
@@ -39,17 +39,45 @@ struct MarkdownApp: App {
             NSApp.mainMenu?.automaticallyInsertsWritingToolsItems = false
         }
 
-        if #available(macOS 11.0, *) {
-            window.toolbarStyle = .unifiedCompact
-            window.titlebarSeparatorStyle = .none
-        }
-
+        window.toolbar = nil
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.styleMask.insert(.fullSizeContentView)
         window.isOpaque = false
         window.backgroundColor = .clear
+
+        DispatchQueue.main.async {
+            positionTrafficLights(in: window)
+        }
+    }
+}
+
+private enum WindowChromeMetrics {
+    static let topBarHeight: CGFloat = 38
+    static let trafficLightsLeading: CGFloat = 12
+    static let trafficLightsVerticalOffset: CGFloat = -9
+}
+
+private func positionTrafficLights(in window: NSWindow) {
+    guard
+        let closeButton = window.standardWindowButton(.closeButton),
+        let miniButton = window.standardWindowButton(.miniaturizeButton),
+        let zoomButton = window.standardWindowButton(.zoomButton)
+    else {
+        return
+    }
+
+    let buttons = [closeButton, miniButton, zoomButton]
+    let spacing = miniButton.frame.minX - closeButton.frame.maxX
+    let buttonHeight = closeButton.frame.height
+    let y = round((WindowChromeMetrics.topBarHeight - buttonHeight) / 2 + WindowChromeMetrics.trafficLightsVerticalOffset)
+
+    var nextX = WindowChromeMetrics.trafficLightsLeading
+    for button in buttons {
+        button.translatesAutoresizingMaskIntoConstraints = true
+        button.setFrameOrigin(NSPoint(x: nextX, y: y))
+        nextX += button.frame.width + spacing
     }
 }
 
@@ -331,9 +359,8 @@ private struct EditorViewCommands: Commands {
 
     var body: some Commands {
         CommandMenu("视图") {
-            Button("源码模式") {
-                documentController.editorMode =
-                    documentController.editorMode == .wysiwyg ? .sourceCode : .wysiwyg
+            Button("源码视图") {
+                documentController.toggleSourceView()
             }
             .keyboardShortcut("s", modifiers: [.command, .option])
 
@@ -397,7 +424,7 @@ private struct EditorSettingsView: View {
             }
 
             Section("编辑") {
-                Picker("默认模式", selection: $documentController.editorMode) {
+                Picker("启动视图", selection: $documentController.editorMode) {
                     ForEach(EditorMode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)
                     }

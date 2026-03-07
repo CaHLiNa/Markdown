@@ -187,6 +187,14 @@ body {
   padding: 0.3rem 0;
 }
 
+.cm-markdown-syntax-token {
+  color: var(--editor-muted);
+  opacity: 0.34;
+  transition:
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
 .editor-error {
   display: grid;
   min-height: 100vh;

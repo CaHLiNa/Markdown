@@ -23,6 +23,33 @@ enum MarkdownFileService {
         try markdown.write(to: destinationURL, atomically: true, encoding: .utf8)
     }
 
+    static func renameMarkdownFile(at fileURL: URL, to proposedName: String) throws -> URL {
+        let trimmedName = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw NSError(
+                domain: "Markdown",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "文件名不能为空。"]
+            )
+        }
+
+        let destinationURL = renamedMarkdownURL(from: fileURL, to: trimmedName)
+        guard destinationURL.standardizedFileURL != fileURL.standardizedFileURL else {
+            return fileURL
+        }
+
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: CocoaError.fileWriteFileExists.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "已存在同名文件。"]
+            )
+        }
+
+        try FileManager.default.moveItem(at: fileURL, to: destinationURL)
+        return destinationURL
+    }
+
     static func normalizedMarkdownURL(from fileURL: URL) -> URL {
         guard fileURL.pathExtension.isEmpty else {
             return fileURL
@@ -41,6 +68,18 @@ enum MarkdownFileService {
         }
 
         return fileURL.appendingPathExtension(preferredPathExtension)
+    }
+
+    static func renamedMarkdownURL(from fileURL: URL, to proposedName: String) -> URL {
+        let trimmedName = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pathExtension = fileURL.pathExtension.isEmpty ? "md" : fileURL.pathExtension
+        let candidateURL = fileURL.deletingLastPathComponent().appendingPathComponent(trimmedName)
+
+        if candidateURL.pathExtension.isEmpty {
+            return candidateURL.appendingPathExtension(pathExtension)
+        }
+
+        return candidateURL
     }
 
     static func writeHTMLDocument(_ html: String, to fileURL: URL) throws {
