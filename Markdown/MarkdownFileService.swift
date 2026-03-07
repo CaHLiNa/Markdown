@@ -8,6 +8,34 @@
 import Foundation
 import UniformTypeIdentifiers
 
+enum MarkdownRenderedTheme: String {
+    case light
+    case dark
+    case sepia
+}
+
+enum MarkdownExportTheme: String, CaseIterable, Identifiable, Codable {
+    case matchEditor = "跟随编辑器"
+    case light = "浅色"
+    case dark = "深色"
+    case sepia = "纸张"
+
+    var id: String { rawValue }
+
+    func resolvedTheme(matching editorTheme: String) -> MarkdownRenderedTheme {
+        switch self {
+        case .matchEditor:
+            return MarkdownRenderedTheme(rawValue: editorTheme) ?? .light
+        case .light:
+            return .light
+        case .dark:
+            return .dark
+        case .sepia:
+            return .sepia
+        }
+    }
+}
+
 enum MarkdownFileService {
     static let markdownContentType = UTType(filenameExtension: "md") ?? .plainText
     static let htmlContentType = UTType.html
@@ -257,8 +285,13 @@ enum MarkdownFileService {
         try data.write(to: destinationURL, options: .atomic)
     }
 
-    static func renderedHTMLDocument(title: String, bodyHTML: String) -> String {
+    static func renderedHTMLDocument(
+        title: String,
+        bodyHTML: String,
+        theme: MarkdownRenderedTheme = .light
+    ) -> String {
         let escapedTitle = htmlEscaped(title)
+        let palette = exportPalette(for: theme)
 
         return """
         <!doctype html>
@@ -269,7 +302,7 @@ enum MarkdownFileService {
           <title>\(escapedTitle)</title>
           <style>
             :root {
-              color-scheme: light;
+              color-scheme: \(palette.colorScheme);
             }
 
             * {
@@ -279,8 +312,8 @@ enum MarkdownFileService {
             body {
               margin: 0;
               font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
-              background: #f6f3ed;
-              color: #111827;
+              background: \(palette.backgroundColor);
+              color: \(palette.textColor);
             }
 
             .markdown-body {
@@ -288,6 +321,15 @@ enum MarkdownFileService {
               margin: 0 auto;
               padding: 56px 48px 72px;
               line-height: 1.72;
+            }
+
+            .markdown-body h1,
+            .markdown-body h2,
+            .markdown-body h3,
+            .markdown-body h4,
+            .markdown-body h5,
+            .markdown-body h6 {
+              color: \(palette.headingColor);
             }
 
             .markdown-body img,
@@ -300,8 +342,8 @@ enum MarkdownFileService {
               overflow-x: auto;
               padding: 16px 18px;
               border-radius: 14px;
-              background: #181a1f;
-              color: #f5f7fa;
+              background: \(palette.codeBackgroundColor);
+              color: \(palette.codeTextColor);
             }
 
             .markdown-body code {
@@ -317,15 +359,19 @@ enum MarkdownFileService {
             .markdown-body th,
             .markdown-body td {
               padding: 10px 12px;
-              border: 1px solid #d5d9e0;
+              border: 1px solid \(palette.tableBorderColor);
               text-align: left;
+            }
+
+            .markdown-body th {
+              background: \(palette.tableHeaderBackgroundColor);
             }
 
             .markdown-body blockquote {
               margin: 20px 0;
               padding: 8px 0 8px 18px;
-              border-left: 4px solid #8b9bb4;
-              color: #4b5563;
+              border-left: 4px solid \(palette.blockquoteBorderColor);
+              color: \(palette.blockquoteTextColor);
             }
           </style>
         </head>
@@ -366,6 +412,63 @@ enum MarkdownFileService {
 
         return results.sorted {
             $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
+    }
+
+    private struct ExportPalette {
+        let colorScheme: String
+        let backgroundColor: String
+        let textColor: String
+        let headingColor: String
+        let codeBackgroundColor: String
+        let codeTextColor: String
+        let tableBorderColor: String
+        let tableHeaderBackgroundColor: String
+        let blockquoteBorderColor: String
+        let blockquoteTextColor: String
+    }
+
+    private static func exportPalette(for theme: MarkdownRenderedTheme) -> ExportPalette {
+        switch theme {
+        case .light:
+            return ExportPalette(
+                colorScheme: "light",
+                backgroundColor: "#f6f3ed",
+                textColor: "#111827",
+                headingColor: "#0f172a",
+                codeBackgroundColor: "#181a1f",
+                codeTextColor: "#f5f7fa",
+                tableBorderColor: "#d5d9e0",
+                tableHeaderBackgroundColor: "#eceff4",
+                blockquoteBorderColor: "#8b9bb4",
+                blockquoteTextColor: "#4b5563"
+            )
+        case .dark:
+            return ExportPalette(
+                colorScheme: "dark",
+                backgroundColor: "#111318",
+                textColor: "#e7ebf3",
+                headingColor: "#ffffff",
+                codeBackgroundColor: "#1b2230",
+                codeTextColor: "#f8fbff",
+                tableBorderColor: "#394251",
+                tableHeaderBackgroundColor: "#1c2432",
+                blockquoteBorderColor: "#6c88b8",
+                blockquoteTextColor: "#b9c5d8"
+            )
+        case .sepia:
+            return ExportPalette(
+                colorScheme: "light",
+                backgroundColor: "#f4ead9",
+                textColor: "#4a392a",
+                headingColor: "#2f241a",
+                codeBackgroundColor: "#ead7b7",
+                codeTextColor: "#3b2d20",
+                tableBorderColor: "#cfba95",
+                tableHeaderBackgroundColor: "#efe0c2",
+                blockquoteBorderColor: "#af7d46",
+                blockquoteTextColor: "#71563d"
+            )
         }
     }
 

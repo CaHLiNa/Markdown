@@ -188,6 +188,31 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
+  test('reveals an explicit offset range for native search navigation', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for reveal offset test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'alpha\nbeta gamma'
+    })
+
+    expect(editor.revealOffset(6, 4)).toBe(true)
+    expect(editor.getSelectionOffsets()).toEqual({
+      anchor: 6,
+      head: 10
+    })
+
+    expect(editor.revealOffset(-1, 3)).toBe(false)
+
+    await editor.destroy()
+  })
+
   test('duplicates and deletes blocks without corrupting surrounding spacing', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 
@@ -487,6 +512,221 @@ describe('createMarkdownEditor', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(editor.getMarkdown()).toBe('# 标题\n\n![示意图](note.assets/updated.png)')
+
+    await editor.destroy()
+  })
+
+  test('opens a link popover from the format toolbar and inserts link metadata', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for link popover test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'OpenAI'
+    })
+
+    editor.setSelectionInParagraph(0, 0, 6)
+
+    const linkButton = root.querySelector<HTMLButtonElement>('[data-editor-command="link"]')
+    linkButton?.click()
+
+    const panel = root.querySelector<HTMLElement>('[data-floating-panel="link"]')
+    const textField = root.querySelector<HTMLInputElement>('[data-link-field="text"]')
+    const urlField = root.querySelector<HTMLInputElement>('[data-link-field="url"]')
+    const titleField = root.querySelector<HTMLInputElement>('[data-link-field="title"]')
+    const submitButton = root.querySelector<HTMLButtonElement>('[data-floating-submit="link"]')
+
+    expect(panel?.hidden).toBe(false)
+
+    if (!textField || !urlField || !titleField || !submitButton) {
+      throw new Error('Missing link popover fields.')
+    }
+
+    textField.value = 'OpenAI 官网'
+    textField.dispatchEvent(new Event('input', { bubbles: true }))
+    urlField.value = 'https://openai.com'
+    urlField.dispatchEvent(new Event('input', { bubbles: true }))
+    titleField.value = 'OpenAI'
+    titleField.dispatchEvent(new Event('input', { bubbles: true }))
+    submitButton.click()
+
+    expect(editor.getMarkdown()).toBe('[OpenAI 官网](https://openai.com "OpenAI")')
+
+    await editor.destroy()
+  })
+
+  test('opens an image popover from the image command and inserts markdown', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image popover insert test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: ''
+    })
+
+    expect(editor.runCommand('image')).toBe(true)
+
+    const panel = root.querySelector<HTMLElement>('[data-floating-panel="image"]')
+    const altField = root.querySelector<HTMLInputElement>('[data-image-field="alt"]')
+    const pathField = root.querySelector<HTMLInputElement>('[data-image-field="path"]')
+    const titleField = root.querySelector<HTMLInputElement>('[data-image-field="title"]')
+    const submitButton = root.querySelector<HTMLButtonElement>('[data-floating-submit="image"]')
+
+    expect(panel?.hidden).toBe(false)
+
+    if (!altField || !pathField || !titleField || !submitButton) {
+      throw new Error('Missing image popover fields.')
+    }
+
+    altField.value = '示意图'
+    altField.dispatchEvent(new Event('input', { bubbles: true }))
+    pathField.value = 'note.assets/demo.png'
+    pathField.dispatchEvent(new Event('input', { bubbles: true }))
+    titleField.value = '封面'
+    titleField.dispatchEvent(new Event('input', { bubbles: true }))
+    submitButton.click()
+
+    expect(editor.getMarkdown()).toBe('![示意图](note.assets/demo.png "封面")')
+
+    await editor.destroy()
+  })
+
+  test('edits a preview image block through the image metadata popover', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image metadata edit test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n![示意图](note.assets/diagram.png)'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const editButton = root.querySelector<HTMLButtonElement>('[data-image-tool="edit"]')
+    editButton?.click()
+
+    const altField = root.querySelector<HTMLInputElement>('[data-image-field="alt"]')
+    const pathField = root.querySelector<HTMLInputElement>('[data-image-field="path"]')
+    const titleField = root.querySelector<HTMLInputElement>('[data-image-field="title"]')
+    const submitButton = root.querySelector<HTMLButtonElement>('[data-floating-submit="image"]')
+
+    if (!altField || !pathField || !titleField || !submitButton) {
+      throw new Error('Missing image metadata popover fields.')
+    }
+
+    altField.value = '更新图'
+    altField.dispatchEvent(new Event('input', { bubbles: true }))
+    pathField.value = 'note.assets/updated.png'
+    pathField.dispatchEvent(new Event('input', { bubbles: true }))
+    titleField.value = '新标题'
+    titleField.dispatchEvent(new Event('input', { bubbles: true }))
+    submitButton.click()
+
+    expect(editor.getMarkdown()).toBe('# 标题\n\n![更新图](note.assets/updated.png "新标题")')
+
+    await editor.destroy()
+  })
+
+  test('shows an emoji picker for colon aliases and filters matches', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for emoji picker filter test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: ':sm'
+    })
+
+    editor.setSelectionInParagraph(0, 3)
+
+    const panel = root.querySelector<HTMLElement>('[data-floating-panel="emoji"]')
+    const aliases = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-emoji-alias]')
+    ).map((element) => element.dataset.emojiAlias)
+
+    expect(panel?.hidden).toBe(false)
+    expect(aliases).toContain('smile')
+    expect(aliases).not.toContain('rocket')
+
+    await editor.destroy()
+  })
+
+  test('replaces a colon alias with the selected emoji from the picker', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for emoji picker insert test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'Ship it :roc'
+    })
+
+    editor.setSelectionInParagraph(0, 12)
+
+    const rocketButton = root.querySelector<HTMLButtonElement>('[data-emoji-alias="rocket"]')
+    rocketButton?.click()
+
+    expect(editor.getMarkdown()).toBe('Ship it 🚀')
+    expect(root.querySelector<HTMLElement>('[data-floating-panel="emoji"]')?.hidden).toBe(true)
+
+    await editor.destroy()
+  })
+
+  test('closes the emoji picker on escape and hides it when there are no matches', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for emoji picker close test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: ':sm'
+    })
+
+    editor.setSelectionInParagraph(0, 3)
+
+    const editorElement = root.querySelector<HTMLElement>('.cm-editor')
+    editorElement?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true
+      })
+    )
+
+    const panel = root.querySelector<HTMLElement>('[data-floating-panel="emoji"]')
+    expect(panel?.hidden).toBe(true)
+
+    editor.loadMarkdown(':zzzz')
+    editor.setSelectionInParagraph(0, 5)
+
+    expect(panel?.hidden).toBe(true)
 
     await editor.destroy()
   })

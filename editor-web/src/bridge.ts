@@ -32,6 +32,7 @@ declare global {
     runEditorCommand?: (command: unknown) => boolean
     getEditorState?: () => unknown
     revealHeading?: (text: unknown) => void
+    revealOffset?: (offset: unknown, length?: unknown) => boolean
     getRenderedHTML?: () => string
     setEditorAppearance?: (appearance: EditorAppearance) => void
     webkit?: {

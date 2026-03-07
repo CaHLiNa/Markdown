@@ -29,6 +29,7 @@ struct EditorWebView: NSViewRepresentable {
     @Binding var markdown: String
     let controller: Controller
     var presentation: Presentation
+    var revealRequest: EditorRevealRequest?
     var onContentChanged: ((String) -> Void)?
     var onImageAssetRequest: ((ImageAssetRequest, @escaping (Result<String, Error>) -> Void) -> Void)?
 
@@ -36,12 +37,14 @@ struct EditorWebView: NSViewRepresentable {
         markdown: Binding<String>,
         controller: Controller,
         presentation: Presentation = .default,
+        revealRequest: EditorRevealRequest? = nil,
         onContentChanged: ((String) -> Void)? = nil,
         onImageAssetRequest: ((ImageAssetRequest, @escaping (Result<String, Error>) -> Void) -> Void)? = nil
     ) {
         _markdown = markdown
         self.controller = controller
         self.presentation = presentation
+        self.revealRequest = revealRequest
         self.onContentChanged = onContentChanged
         self.onImageAssetRequest = onImageAssetRequest
     }
@@ -73,6 +76,7 @@ struct EditorWebView: NSViewRepresentable {
         controller.attach(webView: nsView)
         context.coordinator.syncMarkdownToJavaScript()
         context.coordinator.syncPresentationToJavaScript()
+        context.coordinator.syncRevealRequestToJavaScript()
     }
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
@@ -227,6 +231,21 @@ struct EditorWebView: NSViewRepresentable {
             evaluateJavaScript(script, completion: completion)
         }
 
+        func revealOffset(
+            _ offset: Int,
+            length: Int = 0,
+            completion: ((Result<Any?, Error>) -> Void)? = nil
+        ) {
+            let clampedOffset = max(0, offset)
+            let clampedLength = max(0, length)
+            let script = """
+            if (typeof window.revealOffset === 'function') {
+                window.revealOffset(\(clampedOffset), \(clampedLength));
+            }
+            """
+            evaluateJavaScript(script, completion: completion)
+        }
+
         func runCommand(
             _ command: String,
             completion: ((Result<Any?, Error>) -> Void)? = nil
@@ -322,6 +341,7 @@ struct EditorWebView: NSViewRepresentable {
         var parent: EditorWebView
         private var lastSyncedMarkdown: String?
         private var lastSyncedPresentation: Presentation?
+        private var lastRevealRequestID: UUID?
 
         init(parent: EditorWebView) {
             self.parent = parent
@@ -396,10 +416,27 @@ struct EditorWebView: NSViewRepresentable {
             parent.controller.evaluateJavaScript(script)
         }
 
+        func syncRevealRequestToJavaScript() {
+            guard let revealRequest = parent.revealRequest else {
+                return
+            }
+
+            guard revealRequest.id != lastRevealRequestID else {
+                return
+            }
+
+            lastRevealRequestID = revealRequest.id
+            parent.controller.revealOffset(
+                revealRequest.offset,
+                length: revealRequest.length
+            )
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             parent.controller.markPageReady()
             syncMarkdownToJavaScript()
             syncPresentationToJavaScript()
+            syncRevealRequestToJavaScript()
         }
 
         func userContentController(

@@ -16,12 +16,15 @@ struct EditorWorkspaceSearchFile: Equatable {
 struct EditorWorkspaceSearchResult: Identifiable, Equatable {
     let relativePath: String
     let lineNumber: Int
+    let columnNumber: Int
     let lineText: String
     let matchedText: String
+    let matchOffset: Int
+    let matchLength: Int
     let url: URL
 
     var id: String {
-        "\(relativePath)#\(lineNumber)#\(matchedText)"
+        "\(relativePath)#\(lineNumber)#\(matchOffset)"
     }
 }
 
@@ -60,23 +63,33 @@ enum EditorWorkspaceSearch {
         var results: [EditorWorkspaceSearchResult] = []
 
         for file in files {
-            for (lineIndex, lineText) in file.content.components(separatedBy: .newlines).enumerated() {
-                let haystack = isCaseSensitive ? lineText : lineText.lowercased()
-                let needle = isCaseSensitive ? query : query.lowercased()
+            let lines = file.content.components(separatedBy: .newlines)
+            var lineStartOffset = 0
 
-                guard haystack.contains(needle) else {
+            for (lineIndex, lineText) in lines.enumerated() {
+                let options: String.CompareOptions = isCaseSensitive ? [] : [.caseInsensitive]
+                guard let matchRange = lineText.range(of: query, options: options) else {
+                    lineStartOffset += lineText.count + 1
                     continue
                 }
+
+                let columnNumber = lineText.distance(from: lineText.startIndex, to: matchRange.lowerBound) + 1
+                let matchLength = lineText.distance(from: matchRange.lowerBound, to: matchRange.upperBound)
 
                 results.append(
                     EditorWorkspaceSearchResult(
                         relativePath: file.relativePath,
                         lineNumber: lineIndex + 1,
+                        columnNumber: columnNumber,
                         lineText: lineText,
-                        matchedText: query,
+                        matchedText: String(lineText[matchRange]),
+                        matchOffset: lineStartOffset + columnNumber - 1,
+                        matchLength: matchLength,
                         url: file.url
                     )
                 )
+
+                lineStartOffset += lineText.count + 1
             }
         }
 
@@ -96,24 +109,39 @@ enum EditorWorkspaceSearch {
         var results: [EditorWorkspaceSearchResult] = []
 
         for file in files {
-            for (lineIndex, lineText) in file.content.components(separatedBy: .newlines).enumerated() {
+            let lines = file.content.components(separatedBy: .newlines)
+            var lineStartOffset = 0
+
+            for (lineIndex, lineText) in lines.enumerated() {
                 let nsLineText = lineText as NSString
                 let range = NSRange(location: 0, length: nsLineText.length)
 
                 guard let match = regex.firstMatch(in: lineText, options: [], range: range) else {
+                    lineStartOffset += lineText.count + 1
                     continue
                 }
 
+                guard let matchRange = Range(match.range, in: lineText) else {
+                    lineStartOffset += lineText.count + 1
+                    continue
+                }
+
+                let columnNumber = lineText.distance(from: lineText.startIndex, to: matchRange.lowerBound) + 1
                 let matchedText = nsLineText.substring(with: match.range)
                 results.append(
                     EditorWorkspaceSearchResult(
                         relativePath: file.relativePath,
                         lineNumber: lineIndex + 1,
+                        columnNumber: columnNumber,
                         lineText: lineText,
                         matchedText: matchedText,
+                        matchOffset: lineStartOffset + columnNumber - 1,
+                        matchLength: matchedText.count,
                         url: file.url
                     )
                 )
+
+                lineStartOffset += lineText.count + 1
             }
         }
 

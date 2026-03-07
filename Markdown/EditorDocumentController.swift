@@ -81,10 +81,23 @@ struct EditorTab: Identifiable, Equatable {
     }
 }
 
+struct EditorRevealRequest: Equatable {
+    let id: UUID
+    let offset: Int
+    let length: Int
+}
+
 @MainActor
 final class EditorDocumentController: ObservableObject {
     @Published private(set) var tabs: [EditorTab]
-    @Published var activeTabID: UUID
+    @Published var activeTabID: UUID {
+        didSet {
+            refreshDocumentSearchResults(
+                selectActiveMatch: isDocumentSearchPresented,
+                resetToFirst: true
+            )
+        }
+    }
     @Published private(set) var folderURL: URL?
     @Published private(set) var folderFiles: [EditorWorkspaceFile] = []
     @Published private(set) var workspaceTree: [EditorWorkspaceNode] = []
@@ -102,12 +115,20 @@ final class EditorDocumentController: ObservableObject {
     @Published private(set) var recentFiles: [URL]
     @Published var sidebarPane: EditorSidebarPane = .files
     @Published var editorMode: EditorMode {
-        didSet { persistPreferences() }
+        didSet {
+            persistPreferences()
+            if isDocumentSearchPresented {
+                revealCurrentDocumentSearchMatch()
+            }
+        }
     }
     @Published var appearanceMode: EditorAppearanceMode {
         didSet { persistPreferences() }
     }
     @Published var editorTheme: EditorTheme {
+        didSet { persistPreferences() }
+    }
+    @Published var htmlExportTheme: MarkdownExportTheme {
         didSet { persistPreferences() }
     }
     @Published var isSidebarVisible = true
@@ -154,6 +175,37 @@ final class EditorDocumentController: ObservableObject {
     @Published var commandPaletteQuery = ""
     @Published var isQuickOpenPresented = false
     @Published var quickOpenQuery = ""
+    @Published var isDocumentSearchPresented = false
+    @Published var isDocumentReplacePresented = false
+    @Published var documentSearchQuery = "" {
+        didSet {
+            refreshDocumentSearchResults(
+                selectActiveMatch: isDocumentSearchPresented,
+                resetToFirst: true
+            )
+        }
+    }
+    @Published var documentSearchReplacement = ""
+    @Published var documentSearchCaseSensitive = false {
+        didSet {
+            refreshDocumentSearchResults(
+                selectActiveMatch: isDocumentSearchPresented,
+                resetToFirst: true
+            )
+        }
+    }
+    @Published var documentSearchUseRegularExpression = false {
+        didSet {
+            refreshDocumentSearchResults(
+                selectActiveMatch: isDocumentSearchPresented,
+                resetToFirst: true
+            )
+        }
+    }
+    @Published private(set) var documentSearchResults: [EditorDocumentSearchMatch] = []
+    @Published private(set) var documentSearchCurrentMatchIndex: Int?
+    @Published private(set) var documentSearchErrorDescription: String?
+    @Published private(set) var revealRequest: EditorRevealRequest?
 
     let editorController = EditorWebView.Controller()
     private var untitledDocumentCount = 1
@@ -167,6 +219,7 @@ final class EditorDocumentController: ObservableObject {
         self.editorMode = preferences.editorMode
         self.appearanceMode = preferences.appearanceMode
         self.editorTheme = preferences.editorTheme
+        self.htmlExportTheme = preferences.exportTheme
         self.isFocusModeEnabled = preferences.focusMode
         self.isTypewriterModeEnabled = preferences.typewriterMode
         self.isTabStripVisible = preferences.tabBarVisibility
@@ -263,6 +316,12 @@ final class EditorDocumentController: ObservableObject {
         )
     }
 
+    var currentExportTheme: MarkdownRenderedTheme {
+        htmlExportTheme.resolvedTheme(
+            matching: editorTheme.webTheme(for: effectiveInterfaceStyle)
+        )
+    }
+
     var filteredQuickOpenFiles: [EditorWorkspaceFile] {
         let query = quickOpenQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = folderFiles.isEmpty
@@ -291,6 +350,31 @@ final class EditorDocumentController: ObservableObject {
                 item.keywords.contains(where: { $0.localizedCaseInsensitiveContains(query) }) ||
                 item.id.localizedCaseInsensitiveContains(query)
         }
+    }
+
+    var documentSearchStatusText: String {
+        if let documentSearchErrorDescription {
+            return documentSearchErrorDescription
+        }
+
+        let trimmedQuery = documentSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else {
+            return "输入关键词"
+        }
+
+        guard let documentSearchCurrentMatchIndex, !documentSearchResults.isEmpty else {
+            return "0 个结果"
+        }
+
+        return "\(documentSearchCurrentMatchIndex + 1) / \(documentSearchResults.count)"
+    }
+
+    var canNavigateDocumentSearchMatches: Bool {
+        !documentSearchResults.isEmpty
+    }
+
+    var canReplaceCurrentDocumentSearchMatch: Bool {
+        documentSearchCurrentMatchIndex != nil && !documentSearchResults.isEmpty
     }
 
     func openDocument() {
@@ -382,6 +466,118 @@ final class EditorDocumentController: ObservableObject {
 
     func hideQuickOpen() {
         isQuickOpenPresented = false
+    }
+
+    func showDocumentSearch(replacing: Bool = false) {
+        isCommandPalettePresented = false
+        isQuickOpenPresented = false
+        isDocumentSearchPresented = true
+
+        if replacing {
+            isDocumentReplacePresented = true
+        }
+
+        refreshDocumentSearchResults(
+            selectActiveMatch: true,
+            resetToFirst: documentSearchCurrentMatchIndex == nil
+        )
+    }
+
+    func hideDocumentSearch() {
+        isDocumentSearchPresented = false
+        isDocumentReplacePresented = false
+        documentSearchErrorDescription = nil
+    }
+
+    func toggleDocumentReplacePresentation() {
+        isDocumentReplacePresented.toggle()
+    }
+
+    func selectNextDocumentSearchMatch() {
+        guard !documentSearchResults.isEmpty else {
+            return
+        }
+
+        let nextIndex: Int
+        if let documentSearchCurrentMatchIndex {
+            nextIndex = (documentSearchCurrentMatchIndex + 1) % documentSearchResults.count
+        } else {
+            nextIndex = 0
+        }
+
+        documentSearchCurrentMatchIndex = nextIndex
+        revealCurrentDocumentSearchMatch()
+    }
+
+    func selectPreviousDocumentSearchMatch() {
+        guard !documentSearchResults.isEmpty else {
+            return
+        }
+
+        let previousIndex: Int
+        if let documentSearchCurrentMatchIndex {
+            previousIndex = (documentSearchCurrentMatchIndex - 1 + documentSearchResults.count) % documentSearchResults.count
+        } else {
+            previousIndex = documentSearchResults.count - 1
+        }
+
+        documentSearchCurrentMatchIndex = previousIndex
+        revealCurrentDocumentSearchMatch()
+    }
+
+    func replaceCurrentDocumentSearchMatch() {
+        guard let documentSearchCurrentMatchIndex else {
+            return
+        }
+
+        let result = EditorDocumentSearch.replaceCurrentMatch(
+            query: documentSearchQuery,
+            replacement: documentSearchReplacement,
+            in: currentMarkdown,
+            currentMatchIndex: documentSearchCurrentMatchIndex,
+            isCaseSensitive: documentSearchCaseSensitive,
+            useRegularExpression: documentSearchUseRegularExpression
+        )
+
+        guard result.errorDescription == nil else {
+            documentSearchErrorDescription = result.errorDescription
+            return
+        }
+
+        guard result.replacedCount > 0 else {
+            return
+        }
+
+        currentMarkdown = result.updatedText
+        refreshDocumentSearchResults(
+            selectActiveMatch: true,
+            preferredIndex: result.nextMatchIndex
+        )
+    }
+
+    func replaceAllDocumentSearchMatches() {
+        let result = EditorDocumentSearch.replaceAllMatches(
+            query: documentSearchQuery,
+            replacement: documentSearchReplacement,
+            in: currentMarkdown,
+            isCaseSensitive: documentSearchCaseSensitive,
+            useRegularExpression: documentSearchUseRegularExpression
+        )
+
+        guard result.errorDescription == nil else {
+            documentSearchErrorDescription = result.errorDescription
+            return
+        }
+
+        guard result.replacedCount > 0 else {
+            return
+        }
+
+        currentMarkdown = result.updatedText
+        refreshDocumentSearchResults(
+            selectActiveMatch: true,
+            preferredIndex: result.nextMatchIndex
+        )
     }
 
     func openQuickOpenFile(_ item: EditorWorkspaceFile) {
@@ -552,7 +748,8 @@ final class EditorDocumentController: ObservableObject {
                 case .success(let bodyHTML):
                     let document = MarkdownFileService.renderedHTMLDocument(
                         title: self.currentTitle,
-                        bodyHTML: bodyHTML
+                        bodyHTML: bodyHTML,
+                        theme: self.currentExportTheme
                     )
 
                     do {
@@ -644,6 +841,16 @@ final class EditorDocumentController: ObservableObject {
 
     func openWorkspaceSearchResult(_ result: EditorWorkspaceSearchResult) {
         openDocument(at: result.url)
+
+        guard currentFileURL?.standardizedFileURL == result.url.standardizedFileURL else {
+            return
+        }
+
+        revealRequest = EditorRevealRequest(
+            id: UUID(),
+            offset: result.matchOffset,
+            length: result.matchLength
+        )
     }
 
     func toggleSidebarVisibility() {
@@ -742,9 +949,13 @@ final class EditorDocumentController: ObservableObject {
             return
         }
 
+        let preferredOffset = currentDocumentSearchMatch?.offset
         var tab = tabs[index]
         transform(&tab)
         tabs[index] = tab
+        refreshDocumentSearchResults(
+            preferredOffset: preferredOffset
+        )
     }
 
     private func addRecentFile(_ fileURL: URL) {
@@ -781,6 +992,67 @@ final class EditorDocumentController: ObservableObject {
         )
     }
 
+    private var currentDocumentSearchMatch: EditorDocumentSearchMatch? {
+        guard let documentSearchCurrentMatchIndex, documentSearchResults.indices.contains(documentSearchCurrentMatchIndex) else {
+            return nil
+        }
+
+        return documentSearchResults[documentSearchCurrentMatchIndex]
+    }
+
+    private func refreshDocumentSearchResults(
+        selectActiveMatch: Bool = false,
+        resetToFirst: Bool = false,
+        preferredIndex: Int? = nil,
+        preferredOffset: Int? = nil
+    ) {
+        let result = EditorDocumentSearch.search(
+            query: documentSearchQuery,
+            in: currentMarkdown,
+            isCaseSensitive: documentSearchCaseSensitive,
+            useRegularExpression: documentSearchUseRegularExpression
+        )
+
+        documentSearchErrorDescription = result.errorDescription
+        documentSearchResults = result.matches
+
+        guard result.errorDescription == nil, !result.matches.isEmpty else {
+            documentSearchCurrentMatchIndex = nil
+            return
+        }
+
+        if resetToFirst {
+            documentSearchCurrentMatchIndex = 0
+        } else if let preferredIndex, result.matches.indices.contains(preferredIndex) {
+            documentSearchCurrentMatchIndex = preferredIndex
+        } else if let preferredOffset {
+            documentSearchCurrentMatchIndex = Self.closestSearchMatchIndex(
+                for: preferredOffset,
+                in: result.matches
+            )
+        } else if let documentSearchCurrentMatchIndex, result.matches.indices.contains(documentSearchCurrentMatchIndex) {
+            self.documentSearchCurrentMatchIndex = documentSearchCurrentMatchIndex
+        } else {
+            documentSearchCurrentMatchIndex = 0
+        }
+
+        if selectActiveMatch {
+            revealCurrentDocumentSearchMatch()
+        }
+    }
+
+    private func revealCurrentDocumentSearchMatch() {
+        guard let currentDocumentSearchMatch else {
+            return
+        }
+
+        revealRequest = EditorRevealRequest(
+            id: UUID(),
+            offset: currentDocumentSearchMatch.offset,
+            length: currentDocumentSearchMatch.length
+        )
+    }
+
     private func performCommand(id: String) {
         if let editorCommand = EditorCommand(rawValue: id) {
             executeEditorCommand(editorCommand)
@@ -788,6 +1060,14 @@ final class EditorDocumentController: ObservableObject {
         }
 
         switch id {
+        case "edit.find":
+            showDocumentSearch()
+        case "edit.replace":
+            showDocumentSearch(replacing: true)
+        case "edit.find-next":
+            selectNextDocumentSearchMatch()
+        case "edit.find-previous":
+            selectPreviousDocumentSearchMatch()
         case "file.new-document":
             createUntitledDocument()
         case "file.open-document":
@@ -829,6 +1109,7 @@ final class EditorDocumentController: ObservableObject {
         let preferences = EditorPreferences(
             appearanceMode: appearanceMode,
             editorTheme: editorTheme,
+            exportTheme: htmlExportTheme,
             editorMode: editorMode,
             tabBarVisibility: isTabStripVisible,
             typewriterMode: isTypewriterModeEnabled,
@@ -863,6 +1144,18 @@ final class EditorDocumentController: ObservableObject {
         alert.informativeText = error.localizedDescription
         alert.runModal()
     }
+
+    private static func closestSearchMatchIndex(
+        for offset: Int,
+        in matches: [EditorDocumentSearchMatch]
+    ) -> Int {
+        if let exactIndex = matches.firstIndex(where: { $0.offset >= offset }) {
+            return exactIndex
+        }
+
+        return max(0, matches.count - 1)
+    }
+
     private static func relativePath(for fileURL: URL, inside folderURL: URL) -> String {
         let folderPath = folderURL.standardizedFileURL.path + "/"
         let filePath = fileURL.standardizedFileURL.path

@@ -93,6 +93,66 @@ body {
   min-width: 220px;
 }
 
+.cm-link-popover,
+.cm-image-popover {
+  min-width: 320px;
+  max-width: min(360px, calc(100% - 24px));
+}
+
+.cm-floating-form {
+  display: grid;
+  gap: 0.55rem;
+  width: 100%;
+}
+
+.cm-floating-field {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.cm-floating-field-label {
+  color: var(--editor-muted);
+  font: 600 11px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  letter-spacing: 0.02em;
+}
+
+.cm-floating-field-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--editor-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--editor-panel) 92%, transparent);
+  color: var(--editor-heading);
+  padding: 0.58rem 0.72rem;
+  font: 500 12px/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+}
+
+.cm-floating-field-input:focus {
+  outline: 1px solid color-mix(in srgb, var(--editor-quote) 40%, transparent);
+  border-color: color-mix(in srgb, var(--editor-quote) 36%, transparent);
+}
+
+.cm-floating-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.cm-floating-action-button {
+  border: 1px solid var(--editor-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--editor-panel) 92%, transparent);
+  color: var(--editor-heading);
+  padding: 0.45rem 0.82rem;
+  font: 600 12px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  cursor: pointer;
+}
+
+.cm-floating-action-button:hover {
+  background: var(--editor-selection);
+}
+
 .cm-floating-command-button {
   border: 0;
   border-radius: 999px;

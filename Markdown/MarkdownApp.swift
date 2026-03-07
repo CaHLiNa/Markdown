@@ -179,6 +179,28 @@ private struct EditorEditCommands: Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
 
+            Button("查找...") {
+                documentController.showDocumentSearch()
+            }
+            .keyboardShortcut("f", modifiers: [.command])
+
+            Button("替换...") {
+                documentController.showDocumentSearch(replacing: true)
+            }
+            .keyboardShortcut("f", modifiers: [.command, .option])
+
+            Button("查找下一个") {
+                documentController.selectNextDocumentSearchMatch()
+            }
+            .keyboardShortcut("g", modifiers: [.command])
+            .disabled(!documentController.canNavigateDocumentSearchMatches)
+
+            Button("查找上一个") {
+                documentController.selectPreviousDocumentSearchMatch()
+            }
+            .keyboardShortcut("g", modifiers: [.command, .shift])
+            .disabled(!documentController.canNavigateDocumentSearchMatches)
+
             Button("命令面板") {
                 documentController.showCommandPalette()
             }
@@ -451,6 +473,12 @@ private struct EditorSettingsView: View {
 
                 Picker("编辑器主题", selection: $documentController.editorTheme) {
                     ForEach(EditorTheme.allCases) { theme in
+                        Text(theme.rawValue).tag(theme)
+                    }
+                }
+
+                Picker("HTML 导出主题", selection: $documentController.htmlExportTheme) {
+                    ForEach(MarkdownExportTheme.allCases) { theme in
                         Text(theme.rawValue).tag(theme)
                     }
                 }

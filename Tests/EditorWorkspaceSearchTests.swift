@@ -6,6 +6,7 @@ struct EditorWorkspaceSearchTests {
         testSearchFindsPlainTextMatches()
         testSearchHonorsCaseSensitivity()
         testSearchSupportsRegularExpressions()
+        testSearchReportsMatchOffsetsAndColumns()
     }
 
     private static func testSearchFindsPlainTextMatches() {
@@ -35,6 +36,14 @@ struct EditorWorkspaceSearchTests {
 
         guard results[0].lineNumber == 2 else {
             fatalError("Expected match on line 2.")
+        }
+
+        guard results[0].columnNumber == 1 else {
+            fatalError("Expected match to start at column 1.")
+        }
+
+        guard results[0].matchOffset == 7 else {
+            fatalError("Expected match offset to account for the heading line and newline.")
         }
     }
 
@@ -84,6 +93,36 @@ struct EditorWorkspaceSearchTests {
 
         guard results[0].matchedText == "a1" else {
             fatalError("Expected regex search to preserve the matched text.")
+        }
+    }
+
+    private static func testSearchReportsMatchOffsetsAndColumns() {
+        let results = EditorWorkspaceSearch.search(
+            query: "beta",
+            in: [
+                makeFile("notes/example.md", """
+                alpha
+                gamma beta delta
+                """)
+            ],
+            isCaseSensitive: false,
+            useRegularExpression: false
+        )
+
+        guard results.count == 1 else {
+            fatalError("Expected exactly one match for offset test.")
+        }
+
+        guard results[0].columnNumber == 7 else {
+            fatalError("Expected match to start at column 7, got \(results[0].columnNumber).")
+        }
+
+        guard results[0].matchLength == 4 else {
+            fatalError("Expected match length to equal the matched text length.")
+        }
+
+        guard results[0].matchOffset == 12 else {
+            fatalError("Expected absolute match offset to include the first line and newline.")
         }
     }
 

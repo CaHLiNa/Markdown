@@ -32,6 +32,12 @@ const normalizeMarkdown = (value: unknown) => {
   return typeof value === 'string' ? value : ''
 }
 
+const normalizeNonNegativeInteger = (value: unknown) => {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : null
+}
+
 const applyAppearance = (appearance: EditorPresentation) => {
   pendingAppearance = appearance
   document.documentElement.dataset.editorTheme = appearance.theme
@@ -86,6 +92,21 @@ const revealHeading = (value: unknown) => {
   return editor.revealHeading(targetText)
 }
 
+const revealOffset = (offset: unknown, length: unknown) => {
+  if (!editor) {
+    return false
+  }
+
+  const normalizedOffset = normalizeNonNegativeInteger(offset)
+
+  if (normalizedOffset == null) {
+    return false
+  }
+
+  const normalizedLength = normalizeNonNegativeInteger(length) ?? 0
+  return editor.revealOffset(normalizedOffset, normalizedLength)
+}
+
 const getRenderedHTML = () => {
   if (editor) {
     return editor.getRenderedHTML()
@@ -112,6 +133,7 @@ const getEditorState = () => {
 installNativeBridge(setMarkdownFromNative, runCommandFromNative, getEditorState)
 window.setEditorAppearance = setAppearanceFromNative
 window.revealHeading = revealHeading
+window.revealOffset = revealOffset
 window.getRenderedHTML = getRenderedHTML
 applyAppearance(pendingAppearance)
 

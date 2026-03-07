@@ -5,6 +5,7 @@ struct EditorPreferencesTests {
     static func main() {
         testDefaultPreferencesProduceExpectedPresentation()
         testCustomizedPreferencesCarryAcrossPresentationFields()
+        testDefaultExportThemeMatchesEditor()
     }
 
     private static func testDefaultPreferencesProduceExpectedPresentation() {
@@ -74,6 +75,14 @@ struct EditorPreferencesTests {
 
         guard presentation.autoPairMarkdownSyntax == false else {
             fatalError("Expected autoPairMarkdownSyntax override to be preserved.")
+        }
+    }
+
+    private static func testDefaultExportThemeMatchesEditor() {
+        let preferences = EditorPreferences.defaultValue
+
+        guard preferences.exportTheme == .matchEditor else {
+            fatalError("Expected export theme to default to following the editor theme.")
         }
     }
 }

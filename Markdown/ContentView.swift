@@ -11,8 +11,15 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var documentController: EditorDocumentController
     @FocusState private var isTitleFieldFocused: Bool
+    @FocusState private var focusedSearchField: SearchField?
     @State private var isRenamingTitle = false
     @State private var titleDraft = ""
+    @State private var sourceSelection: TextSelection?
+
+    private enum SearchField: Hashable {
+        case query
+        case replacement
+    }
 
     private enum Metrics {
         static let sidebarWidth: CGFloat = 286
@@ -92,6 +99,28 @@ struct ContentView: View {
                 DispatchQueue.main.async {
                     isTitleFieldFocused = true
                 }
+            }
+        }
+        .onChange(of: documentController.revealRequest) { _, request in
+            applySourceSelection(for: request)
+        }
+        .onChange(of: documentController.isDocumentSearchPresented) { _, isPresented in
+            guard isPresented else {
+                focusedSearchField = nil
+                return
+            }
+
+            DispatchQueue.main.async {
+                focusedSearchField = documentController.isDocumentReplacePresented ? .replacement : .query
+            }
+        }
+        .onChange(of: documentController.isDocumentReplacePresented) { _, isPresented in
+            guard documentController.isDocumentSearchPresented else {
+                return
+            }
+
+            DispatchQueue.main.async {
+                focusedSearchField = isPresented ? .replacement : .query
             }
         }
     }
@@ -464,7 +493,7 @@ struct ContentView: View {
 
                                             Spacer(minLength: 0)
 
-                                            Text("第 \(result.lineNumber) 行")
+                                            Text("第 \(result.lineNumber) 行 · 列 \(result.columnNumber)")
                                                 .font(.system(size: 11, weight: .medium))
                                                 .foregroundStyle(palette.mutedText)
                                         }
@@ -648,13 +677,14 @@ struct ContentView: View {
                 markdown: markdownBinding,
                 controller: documentController.editorController,
                 presentation: documentController.currentPresentation,
+                revealRequest: documentController.revealRequest,
                 onImageAssetRequest: documentController.persistImageAsset
             )
             .opacity(documentController.editorMode == .wysiwyg ? 1 : 0.0001)
             .allowsHitTesting(documentController.editorMode == .wysiwyg)
 
             if documentController.editorMode == .sourceView {
-                TextEditor(text: markdownBinding)
+                TextEditor(text: markdownBinding, selection: $sourceSelection)
                     .font(.system(size: 15, weight: .regular, design: .monospaced))
                     .foregroundStyle(palette.primaryText)
                     .scrollContentBackground(.hidden)
@@ -669,8 +699,121 @@ struct ContentView: View {
                     .padding(.top, Metrics.editorTopInset)
                     .allowsHitTesting(false)
             }
+
+            if documentController.isDocumentSearchPresented {
+                VStack {
+                    HStack {
+                        Spacer(minLength: 0)
+                        documentSearchOverlay
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 16)
+                .padding(.trailing, 18)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var documentSearchOverlay: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(palette.mutedText)
+
+                TextField("查找", text: $documentController.documentSearchQuery)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(palette.primaryText)
+                    .focused($focusedSearchField, equals: .query)
+                    .onSubmit(documentController.selectNextDocumentSearchMatch)
+
+                Text(documentController.documentSearchStatusText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(
+                        documentController.documentSearchErrorDescription == nil
+                            ? palette.mutedText
+                            : Color.red.opacity(0.8)
+                    )
+                    .lineLimit(1)
+
+                overlayIconButton(systemName: "chevron.up", title: "上一个匹配") {
+                    documentController.selectPreviousDocumentSearchMatch()
+                }
+                .disabled(!documentController.canNavigateDocumentSearchMatches)
+
+                overlayIconButton(systemName: "chevron.down", title: "下一个匹配") {
+                    documentController.selectNextDocumentSearchMatch()
+                }
+                .disabled(!documentController.canNavigateDocumentSearchMatches)
+
+                overlayIconButton(
+                    systemName: documentController.isDocumentReplacePresented ? "rectangle.compress.vertical" : "rectangle.expand.vertical",
+                    title: documentController.isDocumentReplacePresented ? "收起替换栏" : "展开替换栏"
+                ) {
+                    if documentController.isDocumentReplacePresented {
+                        documentController.toggleDocumentReplacePresentation()
+                    } else {
+                        documentController.showDocumentSearch(replacing: true)
+                    }
+                }
+
+                overlayIconButton(systemName: "xmark", title: "关闭查找") {
+                    documentController.hideDocumentSearch()
+                }
+            }
+
+            if documentController.isDocumentReplacePresented {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.swap")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(palette.mutedText)
+
+                    TextField("替换", text: $documentController.documentSearchReplacement)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(palette.primaryText)
+                        .focused($focusedSearchField, equals: .replacement)
+                        .onSubmit(documentController.replaceCurrentDocumentSearchMatch)
+
+                    overlayTextButton("替换") {
+                        documentController.replaceCurrentDocumentSearchMatch()
+                    }
+                    .disabled(!documentController.canReplaceCurrentDocumentSearchMatch)
+
+                    overlayTextButton("全部替换") {
+                        documentController.replaceAllDocumentSearchMatches()
+                    }
+                    .disabled(documentController.documentSearchResults.isEmpty)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Toggle("区分大小写", isOn: $documentController.documentSearchCaseSensitive)
+                    .toggleStyle(.button)
+
+                Toggle("正则", isOn: $documentController.documentSearchUseRegularExpression)
+                    .toggleStyle(.button)
+
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 11, weight: .medium))
+            .tint(palette.accentText)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(width: 360)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(palette.panelSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(palette.controlBorder, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.08), radius: 20, x: 0, y: 10)
+        .onExitCommand(perform: documentController.hideDocumentSearch)
     }
 
     private func chromeButton(systemName: String, title: String, action: @escaping () -> Void) -> some View {
@@ -688,6 +831,38 @@ struct ContentView: View {
         .help(title)
     }
 
+    private func overlayIconButton(
+        systemName: String,
+        title: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(palette.secondaryText)
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(palette.controlSurface)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(title)
+    }
+
+    private func overlayTextButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(palette.secondaryText)
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(palette.controlSurface)
+            )
+    }
+
     private func beginTitleRename() {
         titleDraft = displayTitle
         isRenamingTitle = true
@@ -702,6 +877,21 @@ struct ContentView: View {
     private func cancelTitleRename() {
         isRenamingTitle = false
         titleDraft = displayTitle
+    }
+
+    private func applySourceSelection(for request: EditorRevealRequest?) {
+        guard let request else {
+            return
+        }
+
+        let markdown = documentController.currentMarkdown
+        let clampedOffset = max(0, min(request.offset, markdown.count))
+        let maxLength = markdown.count - clampedOffset
+        let clampedLength = max(0, min(request.length, maxLength))
+        let startIndex = markdown.index(markdown.startIndex, offsetBy: clampedOffset)
+        let endIndex = markdown.index(startIndex, offsetBy: clampedLength)
+
+        sourceSelection = TextSelection(range: startIndex..<endIndex)
     }
 }
 

@@ -51,6 +51,14 @@ struct EditorCommandPaletteTests {
             fatalError("Expected command palette catalog to include workspace search.")
         }
 
+        guard ids.contains("edit.find") else {
+            fatalError("Expected command palette catalog to include in-document find.")
+        }
+
+        guard ids.contains("edit.replace") else {
+            fatalError("Expected command palette catalog to include in-document replace.")
+        }
+
         guard ids.contains(EditorCommand.upgradeHeading.rawValue) else {
             fatalError("Expected command palette catalog to include heading promotion.")
         }

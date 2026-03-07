@@ -215,6 +215,30 @@ enum EditorCommandPaletteCatalog {
             keywords: ["command", "palette", "search"]
         ),
         EditorCommandPaletteItem(
+            id: "edit.find",
+            title: "查找",
+            category: "编辑",
+            keywords: ["find", "search", "document"]
+        ),
+        EditorCommandPaletteItem(
+            id: "edit.replace",
+            title: "替换",
+            category: "编辑",
+            keywords: ["replace", "search", "document"]
+        ),
+        EditorCommandPaletteItem(
+            id: "edit.find-next",
+            title: "下一个匹配",
+            category: "编辑",
+            keywords: ["find", "next", "search"]
+        ),
+        EditorCommandPaletteItem(
+            id: "edit.find-previous",
+            title: "上一个匹配",
+            category: "编辑",
+            keywords: ["find", "previous", "search"]
+        ),
+        EditorCommandPaletteItem(
             id: "view.search",
             title: "切换搜索面板",
             category: "视图",

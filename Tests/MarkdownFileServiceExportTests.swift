@@ -7,6 +7,7 @@ struct MarkdownFileServiceExportTests {
         testHTMLExportKeepsExtension()
         testPDFExportAppendsExtension()
         testRenderedHTMLDocumentWrapsBodyContent()
+        testRenderedHTMLDocumentAppliesDarkThemePalette()
     }
 
     private static func testHTMLExportKeepsExtension() {
@@ -43,6 +44,22 @@ struct MarkdownFileServiceExportTests {
 
         guard document.contains("<main class=\"markdown-body\"><h1>标题</h1><p>正文</p></main>") else {
             fatalError("Expected HTML document to wrap rendered body HTML.")
+        }
+    }
+
+    private static func testRenderedHTMLDocumentAppliesDarkThemePalette() {
+        let document = MarkdownFileService.renderedHTMLDocument(
+            title: "夜间文档",
+            bodyHTML: "<p>正文</p>",
+            theme: .dark
+        )
+
+        guard document.contains("color-scheme: dark;") else {
+            fatalError("Expected dark export theme to set dark color-scheme.")
+        }
+
+        guard document.contains("background: #111318;") else {
+            fatalError("Expected dark export theme to use the dark background palette.")
         }
     }
 }

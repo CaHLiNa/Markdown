@@ -35,6 +35,7 @@ import {
   type EditorPresentation
 } from './editor-presentation'
 import { type EditorRuntimeState } from './editor-state'
+import { searchEmojiOptions, type EmojiOption } from './emoji'
 
 type Root = HTMLElement | string
 
@@ -70,6 +71,7 @@ export type MarkdownEditor = {
   pressKey: (key: string) => boolean
   runCommand: (command: EditorCommand) => boolean
   revealHeading: (title: string) => boolean
+  revealOffset: (offset: number, length?: number) => boolean
   setSelectionInBlock: (
     type: MarkdownBlock['type'],
     index: number,
@@ -80,6 +82,18 @@ export type MarkdownEditor = {
   destroy: () => Promise<void>
 }
 
+type MarkdownLink = {
+  text: string
+  url: string
+  title: string | null
+}
+
+type EmojiTrigger = {
+  from: number
+  to: number
+  query: string
+}
+
 class PreviewBlockWidget extends WidgetType {
   constructor(
     private readonly block: MarkdownBlock,
@@ -87,6 +101,7 @@ class PreviewBlockWidget extends WidgetType {
     private readonly imageTools: {
       persistImageAsset?: (file: File) => Promise<string | null>
       pickImageFile: () => Promise<File | null>
+      openImageEditor?: (block: MarkdownBlock, imageBlock: StandaloneImageBlock) => void
     }
   ) {
     super()
@@ -136,7 +151,18 @@ const listPrefixPattern = /^\s{0,3}(?:[-+*]\s+(?:\[[ xX]\]\s+)?|\d+\.\s+)/
 const fencedCodeDelimiterPattern = /^\s*(?:```|~~~).*$/
 const mathDelimiterPattern = /^\s*\$\$\s*$/
 const leadingWhitespacePattern = /^\s*/
+const emojiAliasCharacterPattern = /[a-z0-9_+-]/i
 const syntaxTokenDecoration = Decoration.mark({ class: 'cm-markdown-syntax-token' })
+
+const isEmojiAliasCharacter = (character: string) => emojiAliasCharacterPattern.test(character)
+
+const isEmojiBoundaryCharacter = (character: string) => {
+  return (
+    character.length === 0 ||
+    /\s/.test(character) ||
+    ['(', '[', '{', '<', '>', '"', "'", '`'].includes(character)
+  )
+}
 
 const selectionTouchesBlock = (from: number, to: number, block: MarkdownBlock) => {
   const end = Math.max(from + 1, to)
@@ -156,6 +182,7 @@ const buildPreviewDecorationsWithImageTools = (
   imageTools: {
     persistImageAsset?: (file: File) => Promise<string | null>
     pickImageFile: () => Promise<File | null>
+    openImageEditor?: (block: MarkdownBlock, imageBlock: StandaloneImageBlock) => void
   }
 ): DecorationSet => {
   const markdownText = state.doc.toString()
@@ -359,6 +386,7 @@ const buildSyntaxTokenDecorations = (state: EditorState): DecorationSet => {
 const createPreviewDecorationsField = (imageTools: {
   persistImageAsset?: (file: File) => Promise<string | null>
   pickImageFile: () => Promise<File | null>
+  openImageEditor?: (block: MarkdownBlock, imageBlock: StandaloneImageBlock) => void
 }) =>
   StateField.define<DecorationSet>({
     create(state) {
@@ -551,6 +579,68 @@ const updateSelection = (view: EditorView, anchor: number, head = anchor) => {
     selection: EditorSelection.single(anchor, head),
     scrollIntoView: true
   })
+}
+
+const getActiveEmojiTrigger = (view: EditorView): EmojiTrigger | null => {
+  const selection = view.state.selection.main
+
+  if (!selection.empty) {
+    return null
+  }
+
+  const line = view.state.doc.lineAt(selection.from)
+  const offsetInLine = selection.from - line.from
+  const lineText = line.text
+
+  if (offsetInLine === 0) {
+    return null
+  }
+
+  let aliasStart = offsetInLine
+
+  while (aliasStart > 0 && isEmojiAliasCharacter(lineText.charAt(aliasStart - 1))) {
+    aliasStart -= 1
+  }
+
+  const colonIndex = aliasStart - 1
+
+  if (colonIndex < 0 || lineText.charAt(colonIndex) !== ':') {
+    return null
+  }
+
+  const boundaryCharacter = colonIndex > 0 ? lineText.charAt(colonIndex - 1) : ''
+
+  if (!isEmojiBoundaryCharacter(boundaryCharacter)) {
+    return null
+  }
+
+  let aliasEnd = offsetInLine
+
+  while (aliasEnd < lineText.length && isEmojiAliasCharacter(lineText.charAt(aliasEnd))) {
+    aliasEnd += 1
+  }
+
+  if (offsetInLine < colonIndex + 1 || offsetInLine > aliasEnd) {
+    return null
+  }
+
+  return {
+    from: line.from + colonIndex,
+    to: line.from + aliasEnd,
+    query: lineText.slice(colonIndex + 1, aliasEnd)
+  }
+}
+
+const revealOffsetRange = (view: EditorView, offset: number, length = 0) => {
+  const documentLength = view.state.doc.length
+
+  if (offset < 0 || offset > documentLength || length < 0) {
+    return false
+  }
+
+  const clampedHead = Math.min(documentLength, offset + length)
+  updateSelection(view, offset, clampedHead)
+  return true
 }
 
 const replaceRange = (
@@ -1224,6 +1314,7 @@ const transformSelectedLines = (
 }
 
 const imageFilenamePattern = /\.(apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i
+const markdownLinkPattern = /^\[([^\]]+)\]\((.+?)(?:\s+"([^"]*)")?\)$/
 const standaloneImageBlockPattern =
   /^\s*!\[([^\]]*)\]\((.+?)(?:\s+"([^"]*)")?\)\s*$/
 
@@ -1235,6 +1326,28 @@ type StandaloneImageBlock = {
   alt: string
   path: string
   title: string | null
+}
+
+const parseMarkdownLink = (text: string): MarkdownLink | null => {
+  const match = text.trim().match(markdownLinkPattern)
+
+  if (!match) {
+    return null
+  }
+
+  return {
+    text: match[1] ?? '',
+    url: (match[2] ?? '').trim(),
+    title: match[3] ?? null
+  }
+}
+
+const serializeMarkdownLink = ({ text, url, title }: MarkdownLink) => {
+  const normalizedTitle = title?.trim()
+  const titleSuffix =
+    normalizedTitle && normalizedTitle.length > 0 ? ` "${normalizedTitle}"` : ''
+
+  return `[${text}](${url}${titleSuffix})`
 }
 
 const parseStandaloneImageText = (text: string): StandaloneImageBlock | null => {
@@ -1271,6 +1384,45 @@ const serializeStandaloneImageBlock = ({
   return `![${alt}](${path}${titleSuffix})`
 }
 
+const insertStandaloneMarkdownBlock = (
+  view: EditorView,
+  markdownText: string,
+  selectionAnchorOffset: number,
+  selectionHeadOffset = selectionAnchorOffset
+) => {
+  const selection = view.state.selection.main
+  const currentText = getDocumentText(view)
+  const previousCharacter =
+    selection.from > 0 ? currentText.slice(selection.from - 1, selection.from) : ''
+  const nextCharacter =
+    selection.to < currentText.length ? currentText.slice(selection.to, selection.to + 1) : ''
+  const leadingBreak = currentText.length > 0 && previousCharacter !== '\n' ? '\n\n' : ''
+  const trailingBreak = currentText.length > 0 && nextCharacter !== '\n' ? '\n\n' : ''
+  const replacement = `${leadingBreak}${markdownText}${trailingBreak}`
+  const anchor = selection.from + leadingBreak.length + selectionAnchorOffset
+  const head = selection.from + leadingBreak.length + selectionHeadOffset
+
+  replaceRange(view, selection.from, selection.to, replacement, anchor, head)
+  return true
+}
+
+const updateStandaloneImageBlock = (
+  view: EditorView,
+  block: MarkdownBlock,
+  imageBlock: StandaloneImageBlock
+) => {
+  const nextMarkdown = serializeStandaloneImageBlock(imageBlock)
+  replaceRange(
+    view,
+    block.from,
+    block.to,
+    nextMarkdown,
+    block.from + 2,
+    block.from + 2 + imageBlock.alt.length
+  )
+  return true
+}
+
 const replaceStandaloneImageBlock = (
   view: EditorView,
   block: MarkdownBlock,
@@ -1284,21 +1436,11 @@ const replaceStandaloneImageBlock = (
   }
 
   const nextAlt = imageBlock.alt.trim().length > 0 ? imageBlock.alt : imageAltText(file)
-  const nextMarkdown = serializeStandaloneImageBlock({
+  return updateStandaloneImageBlock(view, block, {
     alt: nextAlt,
     path: relativePath,
     title: imageBlock.title
   })
-
-  replaceRange(
-    view,
-    block.from,
-    block.to,
-    nextMarkdown,
-    block.from + 2,
-    block.from + 2 + nextAlt.length
-  )
-  return true
 }
 
 const removeStandaloneImageBlock = (view: EditorView, block: MarkdownBlock) => {
@@ -1454,6 +1596,7 @@ const attachImageToolbar = (
   imageTools: {
     persistImageAsset?: (file: File) => Promise<string | null>
     pickImageFile: () => Promise<File | null>
+    openImageEditor?: (block: MarkdownBlock, imageBlock: StandaloneImageBlock) => void
   }
 ) => {
   const toolbar = document.createElement('div')
@@ -1503,6 +1646,12 @@ const attachImageToolbar = (
     replaceButton.disabled = true
   }
 
+  const editButton = createImageToolButton('编辑', 'edit', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    imageTools.openImageEditor?.(block, imageBlock)
+  })
+
   const reloadButton = createImageToolButton('重载', 'reload', (event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -1515,7 +1664,7 @@ const attachImageToolbar = (
     removeStandaloneImageBlock(view, block)
   })
 
-  toolbar.append(replaceButton, reloadButton, deleteButton)
+  toolbar.append(editButton, replaceButton, reloadButton, deleteButton)
   root.append(toolbar)
 
   root.dataset.imageAlt = imageBlock.alt
@@ -1589,19 +1738,13 @@ const imageAltText = (file: File) => {
 }
 
 const insertImageMarkdown = (view: EditorView, file: File, relativePath: string) => {
-  const selection = view.state.selection.main
-  const currentText = getDocumentText(view)
-  const previousCharacter =
-    selection.from > 0 ? currentText.slice(selection.from - 1, selection.from) : ''
-  const nextCharacter =
-    selection.to < currentText.length ? currentText.slice(selection.to, selection.to + 1) : ''
   const imageMarkdown = `![${imageAltText(file)}](${relativePath})`
-  const leadingBreak = currentText.length > 0 && previousCharacter !== '\n' ? '\n\n' : ''
-  const trailingBreak = currentText.length > 0 && nextCharacter !== '\n' ? '\n\n' : ''
-  const replacement = `${leadingBreak}${imageMarkdown}${trailingBreak}`
-  const nextSelectionOffset = selection.from + leadingBreak.length + imageMarkdown.length
 
-  replaceRange(view, selection.from, selection.to, replacement, nextSelectionOffset)
+  insertStandaloneMarkdownBlock(
+    view,
+    imageMarkdown,
+    imageMarkdown.length
+  )
 }
 
 const applyImageAtSelection = (
@@ -1959,7 +2102,51 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
   const blockMenu = document.createElement('div')
   blockMenu.className = 'cm-floating-ui cm-block-menu'
 
-  rootElement.append(formatToolbar, quickInsertMenu, blockMenu)
+  const linkPopover = document.createElement('div')
+  linkPopover.className = 'cm-floating-ui cm-link-popover'
+  linkPopover.dataset.floatingPanel = 'link'
+
+  const imagePopover = document.createElement('div')
+  imagePopover.className = 'cm-floating-ui cm-image-popover'
+  imagePopover.dataset.floatingPanel = 'image'
+
+  const emojiPopover = document.createElement('div')
+  emojiPopover.className = 'cm-floating-ui cm-emoji-popover'
+  emojiPopover.dataset.floatingPanel = 'emoji'
+
+  rootElement.append(formatToolbar, quickInsertMenu, blockMenu, linkPopover, imagePopover, emojiPopover)
+
+  type LinkPopoverState = {
+    from: number
+    to: number
+    values: {
+      text: string
+      url: string
+      title: string
+    }
+  }
+
+  type ImagePopoverState = {
+    from: number
+    to: number
+    values: {
+      alt: string
+      path: string
+      title: string
+    }
+  }
+
+  type EmojiPopoverState = {
+    from: number
+    to: number
+    query: string
+    items: EmojiOption[]
+    activeIndex: number
+  }
+
+  let linkState: LinkPopoverState | null = null
+  let imageState: ImagePopoverState | null = null
+  let emojiState: EmojiPopoverState | null = null
 
   const hide = (element: HTMLElement) => {
     element.hidden = true
@@ -1970,6 +2157,450 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     element.hidden = false
   }
 
+  const closeLinkPopover = () => {
+    linkState = null
+    hide(linkPopover)
+  }
+
+  const closeImagePopover = () => {
+    imageState = null
+    hide(imagePopover)
+  }
+
+  const closeEmojiPopover = () => {
+    emojiState = null
+    hide(emojiPopover)
+  }
+
+  const createFloatingField = (
+    datasetName: string,
+    fieldName: string,
+    labelText: string,
+    value: string,
+    onInput: (value: string) => void
+  ) => {
+    const field = document.createElement('label')
+    field.className = 'cm-floating-field'
+
+    const caption = document.createElement('span')
+    caption.className = 'cm-floating-field-label'
+    caption.textContent = labelText
+
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = 'cm-floating-field-input'
+    input.value = value
+    input.dataset[datasetName] = fieldName
+    input.addEventListener('input', () => {
+      onInput(input.value)
+    })
+
+    field.append(caption, input)
+    return { field, input }
+  }
+
+  const createFloatingActionButton = (
+    label: string,
+    datasetName: string,
+    datasetValue: string,
+    onClick: () => void
+  ) => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'cm-floating-action-button'
+    button.textContent = label
+    button.dataset[datasetName] = datasetValue
+    button.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+    })
+    button.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      onClick()
+    })
+    return button
+  }
+
+  const applyEmojiPopover = (item = emojiState?.items[emojiState.activeIndex ?? 0]) => {
+    if (!emojiState || !item) {
+      return false
+    }
+
+    replaceRange(
+      view,
+      emojiState.from,
+      emojiState.to,
+      item.emoji,
+      emojiState.from + item.emoji.length
+    )
+    closeEmojiPopover()
+    view.focus()
+    return true
+  }
+
+  const renderEmojiPopover = () => {
+    if (!emojiState || emojiState.items.length === 0) {
+      hide(emojiPopover)
+      return
+    }
+
+    emojiPopover.replaceChildren()
+
+    const hint = document.createElement('div')
+    hint.className = 'cm-emoji-picker-hint'
+    hint.textContent = emojiState.query.length > 0 ? `:${emojiState.query}` : ':'
+
+    const list = document.createElement('div')
+    list.className = 'cm-emoji-picker-list'
+
+    emojiState.items.forEach((item, index) => {
+      const button = document.createElement('button')
+      const alias = item.aliases[0] ?? item.description
+      const active = index === emojiState?.activeIndex
+
+      button.type = 'button'
+      button.className = `cm-emoji-picker-item${active ? ' is-active' : ''}`
+      button.dataset.emojiAlias = alias
+      button.addEventListener('mousedown', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      })
+      button.addEventListener('mouseenter', () => {
+        if (!emojiState || emojiState.activeIndex === index) {
+          return
+        }
+
+        emojiState.activeIndex = index
+        renderEmojiPopover()
+      })
+      button.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        applyEmojiPopover(item)
+      })
+
+      const symbol = document.createElement('span')
+      symbol.className = 'cm-emoji-picker-symbol'
+      symbol.textContent = item.emoji
+
+      const aliasLabel = document.createElement('span')
+      aliasLabel.className = 'cm-emoji-picker-alias'
+      aliasLabel.textContent = `:${alias}`
+
+      const description = document.createElement('span')
+      description.className = 'cm-emoji-picker-description'
+      description.textContent = item.description
+
+      button.append(symbol, aliasLabel, description)
+      list.append(button)
+    })
+
+    emojiPopover.append(hint, list)
+    positionFloatingElement(emojiPopover, rootElement, view, emojiState.from, emojiState.to, {
+      above: false,
+      offsetY: 6
+    })
+    show(emojiPopover)
+  }
+
+  const moveEmojiSelection = (direction: 1 | -1) => {
+    if (!emojiState || emojiState.items.length === 0) {
+      return false
+    }
+
+    emojiState.activeIndex =
+      (emojiState.activeIndex + direction + emojiState.items.length) % emojiState.items.length
+    renderEmojiPopover()
+    return true
+  }
+
+  const renderLinkPopover = () => {
+    if (!linkState) {
+      hide(linkPopover)
+      return
+    }
+
+    linkPopover.replaceChildren()
+    const form = document.createElement('form')
+    form.className = 'cm-floating-form'
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      applyLinkPopover()
+    })
+
+    const textField = createFloatingField(
+      'linkField',
+      'text',
+      '文本',
+      linkState.values.text,
+      (value) => {
+        if (!linkState) {
+          return
+        }
+
+        linkState.values.text = value
+      }
+    )
+    const urlField = createFloatingField(
+      'linkField',
+      'url',
+      '地址',
+      linkState.values.url,
+      (value) => {
+        if (!linkState) {
+          return
+        }
+
+        linkState.values.url = value
+      }
+    )
+    const titleField = createFloatingField(
+      'linkField',
+      'title',
+      '标题',
+      linkState.values.title,
+      (value) => {
+        if (!linkState) {
+          return
+        }
+
+        linkState.values.title = value
+      }
+    )
+
+    const actions = document.createElement('div')
+    actions.className = 'cm-floating-actions'
+    const cancelButton = createFloatingActionButton('取消', 'floatingCancel', 'link', closeLinkPopover)
+    const submitButton = createFloatingActionButton('应用', 'floatingSubmit', 'link', applyLinkPopover)
+    submitButton.type = 'submit'
+    actions.append(cancelButton, submitButton)
+
+    form.append(textField.field, urlField.field, titleField.field, actions)
+    linkPopover.append(form)
+    positionFloatingElement(linkPopover, rootElement, view, linkState.from, linkState.to)
+    show(linkPopover)
+    queueMicrotask(() => {
+      urlField.input.focus()
+      urlField.input.select()
+    })
+  }
+
+  const renderImagePopover = () => {
+    if (!imageState) {
+      hide(imagePopover)
+      return
+    }
+
+    imagePopover.replaceChildren()
+    const form = document.createElement('form')
+    form.className = 'cm-floating-form'
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      applyImagePopover()
+    })
+
+    const altField = createFloatingField(
+      'imageField',
+      'alt',
+      'Alt',
+      imageState.values.alt,
+      (value) => {
+        if (!imageState) {
+          return
+        }
+
+        imageState.values.alt = value
+      }
+    )
+    const pathField = createFloatingField(
+      'imageField',
+      'path',
+      '路径',
+      imageState.values.path,
+      (value) => {
+        if (!imageState) {
+          return
+        }
+
+        imageState.values.path = value
+      }
+    )
+    const titleField = createFloatingField(
+      'imageField',
+      'title',
+      '标题',
+      imageState.values.title,
+      (value) => {
+        if (!imageState) {
+          return
+        }
+
+        imageState.values.title = value
+      }
+    )
+
+    const actions = document.createElement('div')
+    actions.className = 'cm-floating-actions'
+    const cancelButton = createFloatingActionButton('取消', 'floatingCancel', 'image', closeImagePopover)
+    const submitButton = createFloatingActionButton('应用', 'floatingSubmit', 'image', applyImagePopover)
+    submitButton.type = 'submit'
+    actions.append(cancelButton, submitButton)
+
+    form.append(altField.field, pathField.field, titleField.field, actions)
+    imagePopover.append(form)
+    positionFloatingElement(imagePopover, rootElement, view, imageState.from, imageState.to, {
+      above: false,
+      offsetY: 4
+    })
+    show(imagePopover)
+    queueMicrotask(() => {
+      pathField.input.focus()
+      pathField.input.select()
+    })
+  }
+
+  const applyLinkPopover = () => {
+    if (!linkState) {
+      return
+    }
+
+    const text = linkState.values.text.trim() || '链接文本'
+    const url = linkState.values.url.trim()
+
+    if (url.length === 0) {
+      return
+    }
+
+    const nextMarkdown = serializeMarkdownLink({
+      text,
+      url,
+      title: linkState.values.title.trim() || null
+    })
+
+    replaceRange(
+      view,
+      linkState.from,
+      linkState.to,
+      nextMarkdown,
+      linkState.from + 1,
+      linkState.from + 1 + text.length
+    )
+    closeLinkPopover()
+    view.focus()
+  }
+
+  const applyImagePopover = () => {
+    if (!imageState) {
+      return
+    }
+
+    const alt = imageState.values.alt.trim() || '图片描述'
+    const path = imageState.values.path.trim()
+
+    if (path.length === 0) {
+      return
+    }
+
+    const nextImageBlock: StandaloneImageBlock = {
+      alt,
+      path,
+      title: imageState.values.title.trim() || null
+    }
+
+    const nextMarkdown = serializeStandaloneImageBlock(nextImageBlock)
+
+    if (imageState.from !== imageState.to) {
+      replaceRange(
+        view,
+        imageState.from,
+        imageState.to,
+        nextMarkdown,
+        imageState.from + 2,
+        imageState.from + 2 + alt.length
+      )
+    } else {
+      insertStandaloneMarkdownBlock(view, nextMarkdown, 2, 2 + alt.length)
+    }
+
+    closeImagePopover()
+    view.focus()
+  }
+
+  const openLinkPopover = () => {
+    closeImagePopover()
+    closeEmojiPopover()
+    const selection = view.state.selection.main
+    const selectedText = view.state.doc.sliceString(selection.from, selection.to)
+    const parsedLink = selectedText.length > 0 ? parseMarkdownLink(selectedText) : null
+
+    linkState = {
+      from: selection.from,
+      to: selection.to,
+      values: {
+        text: parsedLink?.text ?? (selectedText.length > 0 ? selectedText : '链接文本'),
+        url: parsedLink?.url ?? '',
+        title: parsedLink?.title ?? ''
+      }
+    }
+    renderLinkPopover()
+    return true
+  }
+
+  const openImagePopoverForRange = (
+    from: number,
+    to: number,
+    imageBlock: StandaloneImageBlock | null,
+    fallbackAlt = '图片描述'
+  ) => {
+    closeLinkPopover()
+    closeEmojiPopover()
+    imageState = {
+      from,
+      to,
+      values: {
+        alt: imageBlock?.alt ?? fallbackAlt,
+        path: imageBlock?.path ?? '',
+        title: imageBlock?.title ?? ''
+      }
+    }
+    renderImagePopover()
+    return true
+  }
+
+  const openImagePopover = () => {
+    const selection = view.state.selection.main
+    const selectedText = view.state.doc.sliceString(selection.from, selection.to)
+    const activeBlock = getActiveBlock(view)
+    const activeImageBlock = activeBlock ? parseStandaloneImageBlock(activeBlock) : null
+
+    if (activeBlock && activeImageBlock) {
+      return openImagePopoverForRange(activeBlock.from, activeBlock.to, activeImageBlock)
+    }
+
+    const selectedImage = selectedText.length > 0 ? parseStandaloneImageText(selectedText) : null
+    return openImagePopoverForRange(
+      selection.from,
+      selection.to,
+      selectedImage,
+      selectedText.trim().length > 0 ? selectedText.trim() : '图片描述'
+    )
+  }
+
+  const runCommand = (command: EditorCommand) => {
+    switch (command) {
+      case 'link':
+        return openLinkPopover()
+      case 'image':
+        return openImagePopover()
+      default:
+        closeLinkPopover()
+        closeImagePopover()
+        closeEmojiPopover()
+        return runSourceCommand(view, command)
+    }
+  }
+
   const runQuickInsertCommand = (command: EditorCommand) => {
     const selection = view.state.selection.main
     const line = view.state.doc.lineAt(selection.from)
@@ -1978,7 +2609,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       replaceRange(view, line.from, line.to, '', line.from)
     }
 
-    runSourceCommand(view, command)
+    runCommand(command)
     view.focus()
   }
 
@@ -1987,13 +2618,60 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     const activeBlock = getActiveBlock(view)
     const line = view.state.doc.lineAt(selection.from)
 
+    if (linkState) {
+      if (selection.from !== linkState.from || selection.to !== linkState.to) {
+        closeLinkPopover()
+      } else {
+        positionFloatingElement(linkPopover, rootElement, view, linkState.from, linkState.to)
+      }
+    }
+
+    if (imageState) {
+      positionFloatingElement(imagePopover, rootElement, view, imageState.from, imageState.to, {
+        above: false,
+        offsetY: 4
+      })
+    }
+
+    if (linkState || imageState) {
+      closeEmojiPopover()
+    } else {
+      const emojiTrigger = getActiveEmojiTrigger(view)
+
+      if (!emojiTrigger) {
+        closeEmojiPopover()
+      } else {
+        const items = searchEmojiOptions(emojiTrigger.query)
+        const activeAlias = emojiState?.items[emojiState.activeIndex]?.aliases[0]
+        const activeIndex = activeAlias
+          ? Math.max(
+              0,
+              items.findIndex((item) => item.aliases[0] === activeAlias)
+            )
+          : 0
+
+        if (items.length === 0) {
+          closeEmojiPopover()
+        } else {
+          emojiState = {
+            ...emojiTrigger,
+            items,
+            activeIndex: activeIndex >= 0 ? activeIndex : 0
+          }
+          renderEmojiPopover()
+        }
+      }
+    }
+
     if (!selection.empty) {
       formatToolbar.replaceChildren(
         ...formatToolbarCommands.map((command) =>
           createFloatingCommandButton(command, (nextCommand) => {
-            runSourceCommand(view, nextCommand)
+            runCommand(nextCommand)
             sync()
-            view.focus()
+            if (nextCommand !== 'link' && nextCommand !== 'image') {
+              view.focus()
+            }
           })
         )
       )
@@ -2026,7 +2704,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
           .filter((command) => ['duplicate-block', 'new-paragraph', 'delete-block'].includes(command))
           .map((command) =>
             createFloatingCommandButton(command, (nextCommand) => {
-              runSourceCommand(view, nextCommand)
+              runCommand(nextCommand)
               sync()
               view.focus()
             })
@@ -2044,13 +2722,43 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
   hide(formatToolbar)
   hide(quickInsertMenu)
   hide(blockMenu)
+  hide(linkPopover)
+  hide(imagePopover)
+  hide(emojiPopover)
 
   return {
+    runCommand,
+    openImageEditor(block: MarkdownBlock, imageBlock: StandaloneImageBlock) {
+      openImagePopoverForRange(block.from, block.to, imageBlock)
+    },
+    handleKeydown(event: KeyboardEvent) {
+      if (!emojiState || event.metaKey || event.ctrlKey || event.altKey) {
+        return false
+      }
+
+      switch (event.key) {
+        case 'ArrowDown':
+          return moveEmojiSelection(1)
+        case 'ArrowUp':
+          return moveEmojiSelection(-1)
+        case 'Enter':
+        case 'Tab':
+          return applyEmojiPopover()
+        case 'Escape':
+          closeEmojiPopover()
+          return true
+        default:
+          return false
+      }
+    },
     sync,
     destroy() {
       formatToolbar.remove()
       quickInsertMenu.remove()
       blockMenu.remove()
+      linkPopover.remove()
+      imagePopover.remove()
+      emojiPopover.remove()
     }
   }
 }
@@ -2067,6 +2775,9 @@ export const createMarkdownEditor = async ({
   let suppressNextOutboundSync = false
   let syncFloatingControls = () => undefined
   let currentPresentation: EditorPresentation = { ...defaultEditorPresentation }
+  let openImageEditor:
+    | ((block: MarkdownBlock, imageBlock: StandaloneImageBlock) => void)
+    | undefined
 
   const view = new EditorView({
     parent: rootElement,
@@ -2080,7 +2791,10 @@ export const createMarkdownEditor = async ({
         editorTheme,
         createPreviewDecorationsField({
           persistImageAsset,
-          pickImageFile
+          pickImageFile,
+          openImageEditor(block, imageBlock) {
+            openImageEditor?.(block, imageBlock)
+          }
         }),
         syntaxTokenDecorationsField,
         keymap.of([
@@ -2129,6 +2843,7 @@ export const createMarkdownEditor = async ({
   })
 
   const floatingControls = mountFloatingControls(rootElement, view)
+  openImageEditor = floatingControls.openImageEditor
   syncFloatingControls = floatingControls.sync
   syncFloatingControls()
 
@@ -2184,6 +2899,11 @@ export const createMarkdownEditor = async ({
   }
 
   const handleKeydown = (event: KeyboardEvent) => {
+    if (floatingControls.handleKeydown(event)) {
+      event.preventDefault()
+      return
+    }
+
     if (
       event.defaultPrevented ||
       event.isComposing ||
@@ -2269,7 +2989,7 @@ export const createMarkdownEditor = async ({
     },
 
     runCommand(command: EditorCommand) {
-      return runSourceCommand(view, command)
+      return floatingControls.runCommand(command)
     },
 
     revealHeading(title: string) {
@@ -2281,6 +3001,10 @@ export const createMarkdownEditor = async ({
 
       updateSelection(view, offset)
       return true
+    },
+
+    revealOffset(offset: number, length = 0) {
+      return revealOffsetRange(view, offset, length)
     },
 
     setSelectionInBlock(
