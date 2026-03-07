@@ -31,6 +31,7 @@ type CreateMarkdownEditorOptions = {
   initialMarkdown?: string
   onMarkdownChange?: (markdown: string) => void
   persistImageAsset?: (file: File) => Promise<string | null>
+  pickImageFile?: () => Promise<File | null>
 }
 
 export type EditorCommand =
@@ -88,7 +89,11 @@ export type MarkdownEditor = {
 class PreviewBlockWidget extends WidgetType {
   constructor(
     private readonly block: MarkdownBlock,
-    private readonly renderedHTML: string
+    private readonly renderedHTML: string,
+    private readonly imageTools: {
+      persistImageAsset?: (file: File) => Promise<string | null>
+      pickImageFile: () => Promise<File | null>
+    }
   ) {
     super()
   }
@@ -106,6 +111,14 @@ class PreviewBlockWidget extends WidgetType {
     const dom = document.createElement('section')
     dom.className = `cm-preview-block cm-preview-block--${this.block.type}`
     dom.innerHTML = this.renderedHTML
+
+    const standaloneImage = parseStandaloneImageBlock(this.block)
+
+    if (standaloneImage) {
+      dom.classList.add('cm-preview-block--image')
+      attachImageToolbar(dom, view, this.block, standaloneImage, this.imageTools)
+    }
+
     dom.addEventListener('mousedown', (event) => {
       event.preventDefault()
       const selectionOffset = resolvePreviewSelectionOffset(this.block, dom, event.target)
@@ -144,7 +157,13 @@ const getSelectedBlocks = (state: EditorState) => {
   )
 }
 
-const buildPreviewDecorations = (state: EditorState): DecorationSet => {
+const buildPreviewDecorationsWithImageTools = (
+  state: EditorState,
+  imageTools: {
+    persistImageAsset?: (file: File) => Promise<string | null>
+    pickImageFile: () => Promise<File | null>
+  }
+): DecorationSet => {
   const markdownText = state.doc.toString()
   const blocks = extractMarkdownBlocks(markdownText)
   const selection = state.selection.main
@@ -164,7 +183,7 @@ const buildPreviewDecorations = (state: EditorState): DecorationSet => {
       block.to,
       Decoration.replace({
         block: true,
-        widget: new PreviewBlockWidget(block, renderMarkdownBlock(block.text))
+        widget: new PreviewBlockWidget(block, renderMarkdownBlock(block.text), imageTools)
       })
     )
   }
@@ -343,21 +362,25 @@ const buildSyntaxTokenDecorations = (state: EditorState): DecorationSet => {
   return builder.finish()
 }
 
-const previewDecorationsField = StateField.define<DecorationSet>({
-  create(state) {
-    return buildPreviewDecorations(state)
-  },
-  update(decorations, transaction) {
-    if (transaction.docChanged || transaction.selection) {
-      return buildPreviewDecorations(transaction.state)
-    }
+const createPreviewDecorationsField = (imageTools: {
+  persistImageAsset?: (file: File) => Promise<string | null>
+  pickImageFile: () => Promise<File | null>
+}) =>
+  StateField.define<DecorationSet>({
+    create(state) {
+      return buildPreviewDecorationsWithImageTools(state, imageTools)
+    },
+    update(decorations, transaction) {
+      if (transaction.docChanged || transaction.selection) {
+        return buildPreviewDecorationsWithImageTools(transaction.state, imageTools)
+      }
 
-    return decorations
-  },
-  provide(field): Extension {
-    return EditorView.decorations.from(field)
-  }
-})
+      return decorations
+    },
+    provide(field): Extension {
+      return EditorView.decorations.from(field)
+    }
+  })
 
 const syntaxTokenDecorationsField = StateField.define<DecorationSet>({
   create(state) {
@@ -1069,10 +1092,15 @@ const runEditorKey = (view: EditorView, key: string) => {
       }
       return handleListEnter(view)
     case 'Backspace':
+      if (handleStandaloneImageBlockBackspace(view)) {
+        return true
+      }
       if (handleCodeBlockBackspace(view)) {
         return true
       }
       return handleListBackspace(view)
+    case 'Delete':
+      return handleStandaloneImageBlockDelete(view)
     case 'Tab':
       if (handleCodeBlockTab(view)) {
         return true
@@ -1109,9 +1137,344 @@ const transformSelectedLines = (
 }
 
 const imageFilenamePattern = /\.(apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i
+const standaloneImageBlockPattern =
+  /^\s*!\[([^\]]*)\]\((.+?)(?:\s+"([^"]*)")?\)\s*$/
 
 const isImageFile = (file: File) => {
   return file.type.startsWith('image/') || imageFilenamePattern.test(file.name)
+}
+
+type StandaloneImageBlock = {
+  alt: string
+  path: string
+  title: string | null
+}
+
+const parseStandaloneImageText = (text: string): StandaloneImageBlock | null => {
+  const match = text.match(standaloneImageBlockPattern)
+
+  if (!match) {
+    return null
+  }
+
+  return {
+    alt: match[1] ?? '',
+    path: (match[2] ?? '').trim(),
+    title: match[3] ?? null
+  }
+}
+
+const parseStandaloneImageBlock = (block: MarkdownBlock): StandaloneImageBlock | null => {
+  if (block.type !== 'paragraph') {
+    return null
+  }
+
+  return parseStandaloneImageText(block.text)
+}
+
+const serializeStandaloneImageBlock = ({
+  alt,
+  path,
+  title
+}: StandaloneImageBlock) => {
+  const normalizedTitle = title?.trim()
+  const titleSuffix =
+    normalizedTitle && normalizedTitle.length > 0 ? ` "${normalizedTitle}"` : ''
+
+  return `![${alt}](${path}${titleSuffix})`
+}
+
+const replaceStandaloneImageBlock = (
+  view: EditorView,
+  block: MarkdownBlock,
+  file: File,
+  relativePath: string
+) => {
+  const imageBlock = parseStandaloneImageBlock(block)
+
+  if (!imageBlock) {
+    return false
+  }
+
+  const nextAlt = imageBlock.alt.trim().length > 0 ? imageBlock.alt : imageAltText(file)
+  const nextMarkdown = serializeStandaloneImageBlock({
+    alt: nextAlt,
+    path: relativePath,
+    title: imageBlock.title
+  })
+
+  replaceRange(
+    view,
+    block.from,
+    block.to,
+    nextMarkdown,
+    block.from + 2,
+    block.from + 2 + nextAlt.length
+  )
+  return true
+}
+
+const removeStandaloneImageBlock = (view: EditorView, block: MarkdownBlock) => {
+  const imageBlock = parseStandaloneImageBlock(block)
+
+  if (!imageBlock) {
+    return false
+  }
+
+  const documentText = getDocumentText(view)
+  let from = block.from
+  let to = block.to
+
+  if (documentText.slice(to, to + 2) === '\n\n') {
+    to += 2
+  } else if (from >= 2 && documentText.slice(from - 2, from) === '\n\n') {
+    from -= 2
+  }
+
+  replaceRange(view, from, to, '', from)
+  return true
+}
+
+const handleStandaloneImageBlockBackspace = (view: EditorView) => {
+  const selection = view.state.selection.main
+  const block = getActiveBlock(view)
+
+  if (!selection.empty || !block || !parseStandaloneImageBlock(block)) {
+    return false
+  }
+
+  if (selection.from !== block.from) {
+    return false
+  }
+
+  return removeStandaloneImageBlock(view, block)
+}
+
+const handleStandaloneImageBlockDelete = (view: EditorView) => {
+  const selection = view.state.selection.main
+  const block = getActiveBlock(view)
+
+  if (!selection.empty || !block || !parseStandaloneImageBlock(block)) {
+    return false
+  }
+
+  if (selection.from !== block.to) {
+    return false
+  }
+
+  return removeStandaloneImageBlock(view, block)
+}
+
+const withImageReloadToken = (source: string) => {
+  try {
+    const url = new URL(source, window.location.href)
+    url.searchParams.set('editorImageReload', `${Date.now()}`)
+    return url.toString()
+  } catch {
+    const separator = source.includes('?') ? '&' : '?'
+    return `${source}${separator}editorImageReload=${Date.now()}`
+  }
+}
+
+const clearBrokenImageState = (root: HTMLElement) => {
+  root.classList.remove('is-image-broken', 'is-image-drop-target')
+  root.querySelector('.cm-image-error-badge')?.remove()
+}
+
+const markBrokenImageState = (root: HTMLElement) => {
+  if (root.classList.contains('is-image-broken')) {
+    return
+  }
+
+  root.classList.add('is-image-broken')
+
+  const badge = document.createElement('div')
+  badge.className = 'cm-image-error-badge'
+  badge.textContent = '图片加载失败'
+  root.append(badge)
+}
+
+const reloadPreviewImage = (root: HTMLElement) => {
+  const image = root.querySelector<HTMLImageElement>('img')
+
+  if (!image || image.src.length === 0) {
+    return false
+  }
+
+  clearBrokenImageState(root)
+
+  const originalSource = image.dataset.editorImageSource ?? image.getAttribute('src') ?? image.src
+  image.dataset.editorImageSource = originalSource
+  image.src = withImageReloadToken(originalSource)
+  return true
+}
+
+const pickImageFileFromSystem = () => {
+  return new Promise<File | null>((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*'
+    input.hidden = true
+
+    const finalize = (file: File | null) => {
+      input.remove()
+      resolve(file)
+    }
+
+    input.addEventListener(
+      'change',
+      () => {
+        finalize(input.files?.[0] ?? null)
+      },
+      { once: true }
+    )
+    input.addEventListener(
+      'cancel',
+      () => {
+        finalize(null)
+      },
+      { once: true }
+    )
+
+    document.body.appendChild(input)
+    input.click()
+  })
+}
+
+const createImageToolButton = (
+  label: string,
+  action: string,
+  onClick: (event: MouseEvent) => void
+) => {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'cm-image-tool-button'
+  button.dataset.imageTool = action
+  button.textContent = label
+  button.addEventListener('mousedown', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+  })
+  button.addEventListener('click', onClick)
+  return button
+}
+
+const attachImageToolbar = (
+  root: HTMLElement,
+  view: EditorView,
+  block: MarkdownBlock,
+  imageBlock: StandaloneImageBlock,
+  imageTools: {
+    persistImageAsset?: (file: File) => Promise<string | null>
+    pickImageFile: () => Promise<File | null>
+  }
+) => {
+  const toolbar = document.createElement('div')
+  toolbar.className = 'cm-image-toolbar'
+  const image = root.querySelector<HTMLImageElement>('img')
+
+  image?.addEventListener('error', () => {
+    markBrokenImageState(root)
+  })
+  image?.addEventListener('load', () => {
+    clearBrokenImageState(root)
+  })
+
+  if (image) {
+    image.dataset.editorImageSource = image.getAttribute('src') ?? image.src
+  }
+
+  const replaceButton = createImageToolButton('替换', 'replace', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (!imageTools.persistImageAsset) {
+      return
+    }
+
+    void imageTools
+      .pickImageFile()
+      .then(async (file) => {
+        if (!file) {
+          return
+        }
+
+        const relativePath = await imageTools.persistImageAsset?.(file)
+
+        if (!relativePath) {
+          return
+        }
+
+        replaceStandaloneImageBlock(view, block, file, relativePath)
+      })
+      .catch((error: unknown) => {
+        console.error('[editor-web] 图片替换失败', error)
+      })
+  })
+
+  if (!imageTools.persistImageAsset) {
+    replaceButton.disabled = true
+  }
+
+  const reloadButton = createImageToolButton('重载', 'reload', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    reloadPreviewImage(root)
+  })
+
+  const deleteButton = createImageToolButton('删除', 'delete', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    removeStandaloneImageBlock(view, block)
+  })
+
+  toolbar.append(replaceButton, reloadButton, deleteButton)
+  root.append(toolbar)
+
+  root.dataset.imageAlt = imageBlock.alt
+  root.dataset.imagePath = imageBlock.path
+
+  root.addEventListener('dragover', (event) => {
+    const dragEvent = event as Event & { dataTransfer?: FileTransferLike }
+    const imageFile = firstImageFileFromTransfer(dragEvent.dataTransfer)
+
+    if (!imageFile || !imageTools.persistImageAsset) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    root.classList.add('is-image-drop-target')
+  })
+
+  root.addEventListener('dragleave', () => {
+    root.classList.remove('is-image-drop-target')
+  })
+
+  root.addEventListener('drop', (event) => {
+    const dragEvent = event as Event & { dataTransfer?: FileTransferLike }
+    const imageFile = firstImageFileFromTransfer(dragEvent.dataTransfer)
+
+    if (!imageFile || !imageTools.persistImageAsset) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    root.classList.remove('is-image-drop-target')
+
+    void imageTools.persistImageAsset(imageFile)
+      .then((relativePath) => {
+        if (!relativePath) {
+          return
+        }
+
+        replaceStandaloneImageBlock(view, block, imageFile, relativePath)
+      })
+      .catch((error: unknown) => {
+        console.error('[editor-web] 图片拖拽替换失败', error)
+      })
+  })
 }
 
 const firstImageFileFromTransfer = (transfer: FileTransferLike | null | undefined): File | null => {
@@ -1293,7 +1656,8 @@ export const createMarkdownEditor = async ({
   root,
   initialMarkdown = '',
   onMarkdownChange,
-  persistImageAsset
+  persistImageAsset,
+  pickImageFile = pickImageFileFromSystem
 }: CreateMarkdownEditorOptions): Promise<MarkdownEditor> => {
   const rootElement = resolveRoot(root)
   let lastSyncedMarkdown = initialMarkdown
@@ -1309,7 +1673,10 @@ export const createMarkdownEditor = async ({
         EditorView.lineWrapping,
         syntaxHighlighting(defaultHighlightStyle),
         editorTheme,
-        previewDecorationsField,
+        createPreviewDecorationsField({
+          persistImageAsset,
+          pickImageFile
+        }),
         syntaxTokenDecorationsField,
         keymap.of([
           {
@@ -1319,6 +1686,10 @@ export const createMarkdownEditor = async ({
           {
             key: 'Backspace',
             run: (view) => runEditorKey(view, 'Backspace')
+          },
+          {
+            key: 'Delete',
+            run: (view) => runEditorKey(view, 'Delete')
           },
           {
             key: 'Tab',
@@ -1371,6 +1742,10 @@ export const createMarkdownEditor = async ({
   }
 
   const handleDrop = (event: Event) => {
+    if (event.defaultPrevented) {
+      return
+    }
+
     const imageFile = firstImageFileFromTransfer(
       (event as Event & { dataTransfer?: FileTransferLike }).dataTransfer
     )
@@ -1387,6 +1762,10 @@ export const createMarkdownEditor = async ({
   }
 
   const handleDragOver = (event: Event) => {
+    if (event.defaultPrevented) {
+      return
+    }
+
     const imageFile = firstImageFileFromTransfer(
       (event as Event & { dataTransfer?: FileTransferLike }).dataTransfer
     )

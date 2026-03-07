@@ -305,6 +305,10 @@ final class EditorDocumentController: ObservableObject {
         if let fileURL = activeTab.fileURL {
             do {
                 try MarkdownFileService.write(activeTab.markdown, to: fileURL)
+                try MarkdownFileService.removeUnusedSiblingImageAssets(
+                    for: activeTab.markdown,
+                    alongsideMarkdownFile: fileURL
+                )
                 updateActiveTab {
                     $0.lastSavedMarkdown = $0.markdown
                 }
@@ -337,11 +341,28 @@ final class EditorDocumentController: ObservableObject {
         let destinationURL = MarkdownFileService.normalizedMarkdownURL(from: selectedURL)
 
         do {
-            try MarkdownFileService.write(activeTab.markdown, to: destinationURL)
+            let markdownToSave: String
+
+            if let sourceURL = activeTab.fileURL {
+                markdownToSave = try MarkdownFileService.relocateSiblingImageAssetsForSaveAs(
+                    activeTab.markdown,
+                    from: sourceURL,
+                    to: destinationURL
+                )
+            } else {
+                markdownToSave = activeTab.markdown
+            }
+
+            try MarkdownFileService.write(markdownToSave, to: destinationURL)
+            try MarkdownFileService.removeUnusedSiblingImageAssets(
+                for: markdownToSave,
+                alongsideMarkdownFile: destinationURL
+            )
             updateActiveTab {
                 $0.fileURL = destinationURL
                 $0.title = destinationURL.lastPathComponent
-                $0.lastSavedMarkdown = $0.markdown
+                $0.markdown = markdownToSave
+                $0.lastSavedMarkdown = markdownToSave
             }
             addRecentFile(destinationURL)
             refreshWorkspace()

@@ -203,6 +203,228 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
+  test('replaces a preview image block through the image toolbar', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image replace test.')
+    }
+
+    const pickImageFile = async () => {
+      return new File(['png'], 'updated.png', { type: 'image/png' })
+    }
+
+    const persistImageAsset = async (file: File) => {
+      expect(file.name).toBe('updated.png')
+      return 'note.assets/updated.png'
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n![示意图](note.assets/diagram.png)',
+      persistImageAsset,
+      pickImageFile
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const replaceButton = root.querySelector<HTMLButtonElement>(
+      '[data-image-tool="replace"]'
+    )
+
+    replaceButton?.click()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(editor.getMarkdown()).toBe('# 标题\n\n![示意图](note.assets/updated.png)')
+
+    await editor.destroy()
+  })
+
+  test('dropping an image file onto a preview image block replaces that image', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image drop replace test.')
+    }
+
+    const persistImageAsset = async (file: File) => {
+      expect(file.name).toBe('drop-replace.png')
+      return 'note.assets/drop-replace.png'
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n![示意图](note.assets/diagram.png)',
+      persistImageAsset
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const imageBlock = root.querySelector<HTMLElement>('.cm-preview-block--image')
+    const imageFile = new File(['png'], 'drop-replace.png', { type: 'image/png' })
+    const dropEvent = new Event('drop', { bubbles: true, cancelable: true }) as Event & {
+      dataTransfer?: {
+        files: File[]
+      }
+    }
+
+    Object.defineProperty(dropEvent, 'dataTransfer', {
+      value: {
+        files: [imageFile]
+      }
+    })
+
+    imageBlock?.dispatchEvent(dropEvent)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(editor.getMarkdown()).toBe('# 标题\n\n![示意图](note.assets/drop-replace.png)')
+
+    await editor.destroy()
+  })
+
+  test('deletes a preview image block through the image toolbar', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image delete test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n![示意图](note.assets/diagram.png)'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const deleteButton = root.querySelector<HTMLButtonElement>(
+      '[data-image-tool="delete"]'
+    )
+
+    deleteButton?.click()
+
+    expect(editor.getMarkdown()).toBe('# 标题')
+
+    await editor.destroy()
+  })
+
+  test('reloads a preview image block without mutating markdown text', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image reload test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n![示意图](note.assets/diagram.png)'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const image = root.querySelector<HTMLImageElement>('.cm-preview-block--image img')
+    const reloadButton = root.querySelector<HTMLButtonElement>(
+      '[data-image-tool="reload"]'
+    )
+    const initialSource = image?.src ?? ''
+
+    reloadButton?.click()
+
+    expect(editor.getMarkdown()).toBe('# 标题\n\n![示意图](note.assets/diagram.png)')
+    expect(image?.src).not.toBe(initialSource)
+    expect(image?.src).toContain('editorImageReload=')
+
+    await editor.destroy()
+  })
+
+  test('reload clears a broken image state and retries from the original source', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for broken image reload test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n![示意图](note.assets/diagram.png)'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const imageBlock = root.querySelector<HTMLElement>('.cm-preview-block--image')
+    const image = root.querySelector<HTMLImageElement>('.cm-preview-block--image img')
+    const reloadButton = root.querySelector<HTMLButtonElement>(
+      '[data-image-tool="reload"]'
+    )
+
+    image?.dispatchEvent(new Event('error'))
+
+    expect(imageBlock?.classList.contains('is-image-broken')).toBe(true)
+    expect(root.querySelector('.cm-image-error-badge')).not.toBeNull()
+
+    reloadButton?.click()
+
+    expect(imageBlock?.classList.contains('is-image-broken')).toBe(false)
+    expect(root.querySelector('.cm-image-error-badge')).toBeNull()
+    expect(image?.src).toContain('editorImageReload=')
+
+    await editor.destroy()
+  })
+
+  test('backspace removes a standalone image block when the caret is at the block start', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image backspace removal test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n![示意图](note.assets/diagram.png)\n\n正文'
+    })
+
+    editor.setSelectionInParagraph(0, 0)
+
+    expect(editor.pressKey('Backspace')).toBe(true)
+    expect(editor.getMarkdown()).toBe('# 标题\n\n正文')
+
+    await editor.destroy()
+  })
+
+  test('delete removes a standalone image block when the caret is at the block end', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image delete removal test.')
+    }
+
+    const initialMarkdown = '# 标题\n\n![示意图](note.assets/diagram.png)\n\n正文'
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown
+    })
+
+    editor.setSelectionInParagraph(0, '![示意图](note.assets/diagram.png)'.length)
+
+    expect(editor.pressKey('Delete')).toBe(true)
+    expect(editor.getMarkdown()).toBe('# 标题\n\n正文')
+
+    await editor.destroy()
+  })
+
   test('dims markdown syntax markers inside the active heading and list blocks', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 

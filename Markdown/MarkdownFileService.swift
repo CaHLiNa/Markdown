@@ -13,6 +13,9 @@ enum MarkdownFileService {
     static let htmlContentType = UTType.html
     static let pdfContentType = UTType.pdf
     static let supportedPathExtensions = ["md", "markdown", "mdown", "mkd"]
+    private static let markdownImageReferenceRegex = try! NSRegularExpression(
+        pattern: #"!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)"#
+    )
 
     static func readMarkdown(from fileURL: URL) throws -> String {
         try String(contentsOf: fileURL, encoding: .utf8)
@@ -29,9 +32,7 @@ enum MarkdownFileService {
         mimeType: String,
         alongsideMarkdownFile markdownFileURL: URL
     ) throws -> String {
-        let assetDirectoryURL = markdownFileURL
-            .deletingPathExtension()
-            .appendingPathExtension("assets")
+        let assetDirectoryURL = siblingAssetDirectoryURL(for: markdownFileURL)
 
         try FileManager.default.createDirectory(
             at: assetDirectoryURL,
@@ -52,6 +53,139 @@ enum MarkdownFileService {
         try data.write(to: destinationURL, options: .atomic)
 
         return "\(assetDirectoryURL.lastPathComponent)/\(destinationURL.lastPathComponent)"
+    }
+
+    static func relocateSiblingImageAssetsForSaveAs(
+        _ markdown: String,
+        from originalMarkdownFileURL: URL,
+        to destinationMarkdownFileURL: URL
+    ) throws -> String {
+        guard originalMarkdownFileURL.standardizedFileURL != destinationMarkdownFileURL.standardizedFileURL else {
+            return markdown
+        }
+
+        let originalAssetDirectoryURL = siblingAssetDirectoryURL(for: originalMarkdownFileURL)
+        let destinationAssetDirectoryURL = siblingAssetDirectoryURL(for: destinationMarkdownFileURL)
+        let originalAssetDirectoryName = originalAssetDirectoryURL.lastPathComponent
+        let destinationAssetDirectoryName = destinationAssetDirectoryURL.lastPathComponent
+        let sourceRootURL = originalMarkdownFileURL.deletingLastPathComponent()
+        let destinationRootURL = destinationMarkdownFileURL.deletingLastPathComponent()
+        let fileManager = FileManager.default
+        let markdownNSString = markdown as NSString
+        let matches = markdownImageReferenceRegex.matches(
+            in: markdown,
+            range: NSRange(location: 0, length: markdownNSString.length)
+        )
+        var relocatedMarkdown = markdown
+        var copiedRelativePaths = Set<String>()
+
+        for match in matches.reversed() {
+            guard match.numberOfRanges > 1,
+                  let referencedPathRange = Range(match.range(at: 1), in: relocatedMarkdown)
+            else {
+                continue
+            }
+
+            let referencedPath = String(relocatedMarkdown[referencedPathRange])
+
+            guard referencedPath.hasPrefix("\(originalAssetDirectoryName)/") else {
+                continue
+            }
+
+            let relativeAssetPath = String(referencedPath.dropFirst(originalAssetDirectoryName.count + 1))
+            guard !relativeAssetPath.isEmpty else {
+                continue
+            }
+
+            let sourceAssetURL = sourceRootURL.appendingPathComponent(referencedPath)
+            let destinationRelativePath = "\(destinationAssetDirectoryName)/\(relativeAssetPath)"
+            let destinationAssetURL = destinationRootURL.appendingPathComponent(destinationRelativePath)
+
+            if !copiedRelativePaths.contains(referencedPath) {
+                try fileManager.createDirectory(
+                    at: destinationAssetURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+
+                if fileManager.fileExists(atPath: destinationAssetURL.path) {
+                    try fileManager.removeItem(at: destinationAssetURL)
+                }
+
+                try fileManager.copyItem(at: sourceAssetURL, to: destinationAssetURL)
+                copiedRelativePaths.insert(referencedPath)
+            }
+
+            relocatedMarkdown.replaceSubrange(referencedPathRange, with: destinationRelativePath)
+        }
+
+        return relocatedMarkdown
+    }
+
+    static func removeUnusedSiblingImageAssets(
+        for markdown: String,
+        alongsideMarkdownFile markdownFileURL: URL
+    ) throws {
+        let assetDirectoryURL = siblingAssetDirectoryURL(for: markdownFileURL)
+        let fileManager = FileManager.default
+
+        guard fileManager.fileExists(atPath: assetDirectoryURL.path) else {
+            return
+        }
+
+        let referencedRelativePaths = referencedSiblingAssetRelativePaths(
+            in: markdown,
+            siblingAssetDirectoryName: assetDirectoryURL.lastPathComponent
+        )
+
+        guard let enumerator = fileManager.enumerator(
+            at: assetDirectoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        var directoryURLs: [URL] = []
+
+        for case let fileURL as URL in enumerator {
+            let resourceValues = try fileURL.resourceValues(forKeys: [.isDirectoryKey])
+
+            if resourceValues.isDirectory == true {
+                directoryURLs.append(fileURL)
+                continue
+            }
+
+            guard let relativePath = relativePath(
+                of: fileURL,
+                relativeToDirectory: assetDirectoryURL
+            ) else {
+                continue
+            }
+
+            if !referencedRelativePaths.contains(relativePath) {
+                try fileManager.removeItem(at: fileURL)
+            }
+        }
+
+        for directoryURL in directoryURLs.sorted(by: { $0.path.count > $1.path.count }) {
+            let contents = try fileManager.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: nil
+            )
+
+            if contents.isEmpty {
+                try fileManager.removeItem(at: directoryURL)
+            }
+        }
+
+        let rootContents = try fileManager.contentsOfDirectory(
+            at: assetDirectoryURL,
+            includingPropertiesForKeys: nil
+        )
+
+        if rootContents.isEmpty {
+            try fileManager.removeItem(at: assetDirectoryURL)
+        }
     }
 
     static func renameMarkdownFile(at fileURL: URL, to proposedName: String) throws -> URL {
@@ -242,6 +376,64 @@ enum MarkdownFileService {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
+    private static func siblingAssetDirectoryURL(for markdownFileURL: URL) -> URL {
+        markdownFileURL
+            .deletingPathExtension()
+            .appendingPathExtension("assets")
+    }
+
+    private static func referencedSiblingAssetRelativePaths(
+        in markdown: String,
+        siblingAssetDirectoryName: String
+    ) -> Set<String> {
+        let markdownNSString = markdown as NSString
+        let matches = markdownImageReferenceRegex.matches(
+            in: markdown,
+            range: NSRange(location: 0, length: markdownNSString.length)
+        )
+
+        return matches.reduce(into: Set<String>()) { result, match in
+            guard match.numberOfRanges > 1,
+                  let referencedPathRange = Range(match.range(at: 1), in: markdown)
+            else {
+                return
+            }
+
+            let referencedPath = String(markdown[referencedPathRange])
+            guard referencedPath.hasPrefix("\(siblingAssetDirectoryName)/") else {
+                return
+            }
+
+            let relativePath = String(referencedPath.dropFirst(siblingAssetDirectoryName.count + 1))
+            guard !relativePath.isEmpty else {
+                return
+            }
+
+            result.insert(relativePath)
+        }
+    }
+
+    private static func relativePath(
+        of fileURL: URL,
+        relativeToDirectory directoryURL: URL
+    ) -> String? {
+        let resolvedDirectoryPath = directoryURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        let resolvedFilePath = fileURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+        let directoryPrefix = resolvedDirectoryPath + "/"
+
+        guard resolvedFilePath.hasPrefix(directoryPrefix) else {
+            return nil
+        }
+
+        return String(resolvedFilePath.dropFirst(directoryPrefix.count))
     }
 
     private static func imagePathExtension(originalFilename: String, mimeType: String) -> String {
