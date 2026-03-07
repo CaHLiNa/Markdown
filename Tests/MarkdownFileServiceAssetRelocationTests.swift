@@ -1,13 +1,8 @@
-import Foundation
+import XCTest
+@testable import Markdown
 
-@main
-struct MarkdownFileServiceAssetRelocationTests {
-    static func main() throws {
-        try testRelocatesSiblingImageAssetsDuringSaveAs()
-        try testLeavesNonSiblingAssetReferencesUntouched()
-    }
-
-    private static func testRelocatesSiblingImageAssetsDuringSaveAs() throws {
+final class MarkdownFileServiceAssetRelocationTests: XCTestCase {
+    func testRelocatesSiblingImageAssetsDuringSaveAs() throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
             UUID().uuidString,
@@ -41,16 +36,17 @@ struct MarkdownFileServiceAssetRelocationTests {
             .appendingPathComponent("renamed.assets", isDirectory: true)
             .appendingPathComponent("diagram.png")
 
-        guard relocatedMarkdown.contains("![示意图](renamed.assets/diagram.png)") else {
-            fatalError("Expected markdown asset reference to be rewritten for Save As.")
-        }
-
-        guard fileManager.fileExists(atPath: relocatedAssetURL.path) else {
-            fatalError("Expected Save As to copy sibling image assets into the new .assets directory.")
-        }
+        XCTAssertTrue(
+            relocatedMarkdown.contains("![示意图](renamed.assets/diagram.png)"),
+            "Expected markdown asset reference to be rewritten for Save As."
+        )
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: relocatedAssetURL.path),
+            "Expected Save As to copy sibling image assets into the new .assets directory."
+        )
     }
 
-    private static func testLeavesNonSiblingAssetReferencesUntouched() throws {
+    func testLeavesNonSiblingAssetReferencesUntouched() throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
             UUID().uuidString,
@@ -84,12 +80,13 @@ struct MarkdownFileServiceAssetRelocationTests {
             .appendingPathComponent("renamed.assets", isDirectory: true)
             .appendingPathComponent("diagram.png")
 
-        guard relocatedMarkdown.contains("![示意图](images/diagram.png)") else {
-            fatalError("Expected non-sibling asset references to remain unchanged.")
-        }
-
-        guard !fileManager.fileExists(atPath: unexpectedAssetURL.path) else {
-            fatalError("Did not expect Save As to copy images outside the sibling .assets directory.")
-        }
+        XCTAssertTrue(
+            relocatedMarkdown.contains("![示意图](images/diagram.png)"),
+            "Expected non-sibling asset references to remain unchanged."
+        )
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: unexpectedAssetURL.path),
+            "Did not expect Save As to copy images outside the sibling .assets directory."
+        )
     }
 }

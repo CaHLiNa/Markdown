@@ -1,8 +1,8 @@
-import Foundation
+import XCTest
+@testable import Markdown
 
-@main
-struct MarkdownFileServiceTests {
-    static func main() throws {
+final class MarkdownFileServiceTests: XCTestCase {
+    func testMarkdownRoundTripsThroughDisk() throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
             UUID().uuidString,
@@ -24,8 +24,6 @@ struct MarkdownFileServiceTests {
 
         let loadedMarkdown = try MarkdownFileService.readMarkdown(from: fileURL)
 
-        guard loadedMarkdown == markdown else {
-            fatalError("Round-trip markdown content mismatch")
-        }
+        XCTAssertEqual(loadedMarkdown, markdown, "Round-trip markdown content mismatch")
     }
 }

@@ -10,15 +10,23 @@ import SwiftUI
 
 @main
 struct MarkdownApp: App {
+    private static let isRunningUnitTests =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     @StateObject private var documentController = EditorDocumentController()
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(documentController)
-                .background {
-                    WindowAccessor(configure: configureMainWindow)
-                }
+            if Self.isRunningUnitTests {
+                Color.clear
+                    .frame(width: 1, height: 1)
+            } else {
+                ContentView()
+                    .environmentObject(documentController)
+                    .background {
+                        WindowAccessor(configure: configureMainWindow)
+                    }
+            }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 760)
@@ -27,10 +35,15 @@ struct MarkdownApp: App {
         }
 
         Settings {
-            EditorSettingsView()
-                .environmentObject(documentController)
-                .frame(width: 420)
-                .padding(24)
+            if Self.isRunningUnitTests {
+                Color.clear
+                    .frame(width: 1, height: 1)
+            } else {
+                EditorSettingsView()
+                    .environmentObject(documentController)
+                    .frame(width: 420)
+                    .padding(24)
+            }
         }
     }
 

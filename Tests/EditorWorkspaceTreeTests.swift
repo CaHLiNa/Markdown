@@ -1,14 +1,8 @@
-import Foundation
+import XCTest
+@testable import Markdown
 
-@main
-struct EditorWorkspaceTreeTests {
-    static func main() {
-        testBuildsHierarchicalWorkspaceTree()
-        testFiltersTreeByQueryWhileKeepingAncestors()
-        testCollectsOnlyFolderIDs()
-    }
-
-    private static func testBuildsHierarchicalWorkspaceTree() {
+final class EditorWorkspaceTreeTests: HostedXCTestCase {
+    func testBuildsHierarchicalWorkspaceTree() {
         let files = [
             makeFile("README.md"),
             makeFile("notes/math/algebra.md"),
@@ -18,38 +12,24 @@ struct EditorWorkspaceTreeTests {
 
         let tree = EditorWorkspaceTreeBuilder.build(from: files)
 
-        guard tree.count == 2 else {
-            fatalError("Expected two top-level nodes, got \(tree.count)")
-        }
-
-        guard tree[0].isFolder, tree[0].name == "notes" else {
-            fatalError("Expected top-level folder 'notes'")
-        }
-
-        guard tree[1].isFile, tree[1].name == "README.md" else {
-            fatalError("Expected top-level file 'README.md'")
-        }
+        XCTAssertEqual(tree.count, 2, "Expected two top-level nodes, got \(tree.count)")
+        XCTAssertTrue(tree[0].isFolder, "Expected top-level folder 'notes'")
+        XCTAssertEqual(tree[0].name, "notes", "Expected top-level folder 'notes'")
+        XCTAssertTrue(tree[1].isFile, "Expected top-level file 'README.md'")
+        XCTAssertEqual(tree[1].name, "README.md", "Expected top-level file 'README.md'")
 
         let notesChildren = tree[0].children
-        guard notesChildren.count == 2 else {
-            fatalError("Expected two children under notes, got \(notesChildren.count)")
-        }
-
-        guard notesChildren[0].isFolder, notesChildren[0].name == "math" else {
-            fatalError("Expected nested folder 'math'")
-        }
-
-        guard notesChildren[1].isFile, notesChildren[1].name == "todo.md" else {
-            fatalError("Expected file 'todo.md' under notes")
-        }
+        XCTAssertEqual(notesChildren.count, 2, "Expected two children under notes, got \(notesChildren.count)")
+        XCTAssertTrue(notesChildren[0].isFolder, "Expected nested folder 'math'")
+        XCTAssertEqual(notesChildren[0].name, "math", "Expected nested folder 'math'")
+        XCTAssertTrue(notesChildren[1].isFile, "Expected file 'todo.md' under notes")
+        XCTAssertEqual(notesChildren[1].name, "todo.md", "Expected file 'todo.md' under notes")
 
         let mathChildren = notesChildren[0].children.map(\.name)
-        guard mathChildren == ["algebra.md", "geometry.md"] else {
-            fatalError("Unexpected math folder contents: \(mathChildren)")
-        }
+        XCTAssertEqual(mathChildren, ["algebra.md", "geometry.md"], "Unexpected math folder contents: \(mathChildren)")
     }
 
-    private static func testFiltersTreeByQueryWhileKeepingAncestors() {
+    func testFiltersTreeByQueryWhileKeepingAncestors() {
         let files = [
             makeFile("notes/math/algebra.md"),
             makeFile("notes/math/geometry.md"),
@@ -59,26 +39,19 @@ struct EditorWorkspaceTreeTests {
         let tree = EditorWorkspaceTreeBuilder.build(from: files)
         let filtered = EditorWorkspaceTreeBuilder.filter(nodes: tree, query: "geo")
 
-        guard filtered.count == 1 else {
-            fatalError("Expected one top-level match branch, got \(filtered.count)")
-        }
+        XCTAssertEqual(filtered.count, 1, "Expected one top-level match branch, got \(filtered.count)")
 
         let notes = filtered[0]
-        guard notes.name == "notes", notes.children.count == 1 else {
-            fatalError("Expected filtered notes branch to keep one child")
-        }
+        XCTAssertEqual(notes.name, "notes", "Expected filtered notes branch to keep one child")
+        XCTAssertEqual(notes.children.count, 1, "Expected filtered notes branch to keep one child")
 
         let math = notes.children[0]
-        guard math.name == "math", math.children.count == 1 else {
-            fatalError("Expected filtered math branch to keep one child")
-        }
-
-        guard math.children[0].name == "geometry.md" else {
-            fatalError("Expected geometry.md to match search")
-        }
+        XCTAssertEqual(math.name, "math", "Expected filtered math branch to keep one child")
+        XCTAssertEqual(math.children.count, 1, "Expected filtered math branch to keep one child")
+        XCTAssertEqual(math.children[0].name, "geometry.md", "Expected geometry.md to match search")
     }
 
-    private static func testCollectsOnlyFolderIDs() {
+    func testCollectsOnlyFolderIDs() {
         let files = [
             makeFile("README.md"),
             makeFile("notes/math/algebra.md"),
@@ -89,12 +62,10 @@ struct EditorWorkspaceTreeTests {
         let folderIDs = EditorWorkspaceTreeBuilder.folderIDs(in: tree)
 
         let expected: Set<String> = ["notes", "notes/math"]
-        guard folderIDs == expected else {
-            fatalError("Expected folder IDs \(expected), got \(folderIDs)")
-        }
+        XCTAssertEqual(folderIDs, expected, "Expected folder IDs \(expected), got \(folderIDs)")
     }
 
-    private static func makeFile(_ relativePath: String) -> EditorWorkspaceFile {
+    private func makeFile(_ relativePath: String) -> EditorWorkspaceFile {
         EditorWorkspaceFile(
             url: URL(fileURLWithPath: "/tmp/\(relativePath)"),
             relativePath: relativePath

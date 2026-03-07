@@ -6,14 +6,41 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		6D2AAE34D57F2801129E9FEC /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8A076FE1CAA8D67B6D86F7CE /* XCTest.framework */; };
+		C5F9E2C2C07EF9DF0BC999AD /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 355DC587A292442D5564AD79 /* Cocoa.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C575A16CCAB857FF04EBA673 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8CF485922F5C458400A74B00 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8CF485992F5C458500A74B00;
+			remoteInfo = Markdown;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		355DC587A292442D5564AD79 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		8A076FE1CAA8D67B6D86F7CE /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
 		8CF4859A2F5C458500A74B00 /* Markdown.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Markdown.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A87DAC553996A7F8FAEB36C0 /* MarkdownTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MarkdownTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8CF4859C2F5C458500A74B00 /* Markdown */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = Markdown;
+			sourceTree = "<group>";
+		};
+		A322C46DF1816E0EA2CD345F /* Tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
+			path = Tests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -26,6 +53,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D31EC28D19E7FEEFD3E0B8E6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C5F9E2C2C07EF9DF0BC999AD /* Cocoa.framework in Frameworks */,
+				6D2AAE34D57F2801129E9FEC /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -34,6 +70,8 @@
 			children = (
 				8CF4859C2F5C458500A74B00 /* Markdown */,
 				8CF4859B2F5C458500A74B00 /* Products */,
+				A322C46DF1816E0EA2CD345F /* Tests */,
+				93738B6E0C0082B2FCE6C364 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -41,8 +79,26 @@
 			isa = PBXGroup;
 			children = (
 				8CF4859A2F5C458500A74B00 /* Markdown.app */,
+				A87DAC553996A7F8FAEB36C0 /* MarkdownTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		93738B6E0C0082B2FCE6C364 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				C55B7BC0D53E33120AD44266 /* OS X */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		C55B7BC0D53E33120AD44266 /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				355DC587A292442D5564AD79 /* Cocoa.framework */,
+				8A076FE1CAA8D67B6D86F7CE /* XCTest.framework */,
+			);
+			name = "OS X";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -64,11 +120,30 @@
 				8CF4859C2F5C458500A74B00 /* Markdown */,
 			);
 			name = Markdown;
-			packageProductDependencies = (
-			);
 			productName = Markdown;
 			productReference = 8CF4859A2F5C458500A74B00 /* Markdown.app */;
 			productType = "com.apple.product-type.application";
+		};
+		BF163B6C5D22CC28E368A76C /* MarkdownTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4CE464E05CB1AB2F840731FA /* Build configuration list for PBXNativeTarget "MarkdownTests" */;
+			buildPhases = (
+				D999F73D3DA6D89C9E75F12F /* Sources */,
+				D31EC28D19E7FEEFD3E0B8E6 /* Frameworks */,
+				BAFF8AC6C91F88B71A1578CA /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6CFF015ECC90E804EF70087A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A322C46DF1816E0EA2CD345F /* Tests */,
+			);
+			name = MarkdownTests;
+			productName = MarkdownTests;
+			productReference = A87DAC553996A7F8FAEB36C0 /* MarkdownTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -82,6 +157,10 @@
 				TargetAttributes = {
 					8CF485992F5C458500A74B00 = {
 						CreatedOnToolsVersion = 26.3;
+					};
+					BF163B6C5D22CC28E368A76C = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 8CF485992F5C458500A74B00;
 					};
 				};
 			};
@@ -101,12 +180,20 @@
 			projectRoot = "";
 			targets = (
 				8CF485992F5C458500A74B00 /* Markdown */,
+				BF163B6C5D22CC28E368A76C /* MarkdownTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		8CF485982F5C458500A74B00 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BAFF8AC6C91F88B71A1578CA /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -123,9 +210,67 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D999F73D3DA6D89C9E75F12F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		6CFF015ECC90E804EF70087A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Markdown;
+			target = 8CF485992F5C458500A74B00 /* Markdown */;
+			targetProxy = C575A16CCAB857FF04EBA673 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		16CB414E0B8867AF6F3033C4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = NC5MXQKZ5X;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MarkdownTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Markdown.app/Contents/MacOS/Markdown";
+			};
+			name = Debug;
+		};
+		5643F16274CF8082C2AD815B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = NC5MXQKZ5X;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				PRODUCT_BUNDLE_IDENTIFIER = com.MarkdownTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Markdown.app/Contents/MacOS/Markdown";
+			};
+			name = Release;
+		};
 		8CF485A32F5C458500A74B00 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -313,6 +458,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		4CE464E05CB1AB2F840731FA /* Build configuration list for PBXNativeTarget "MarkdownTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5643F16274CF8082C2AD815B /* Release */,
+				16CB414E0B8867AF6F3033C4 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		8CF485952F5C458400A74B00 /* Build configuration list for PBXProject "Markdown" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

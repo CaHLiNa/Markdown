@@ -1,15 +1,8 @@
-import Foundation
+import XCTest
+@testable import Markdown
 
-@main
-struct EditorDocumentSearchTests {
-    static func main() {
-        testSearchFindsAllMatchesAcrossDocument()
-        testSearchReportsRegularExpressionErrors()
-        testReplaceCurrentAdvancesToNextMatch()
-        testReplaceAllSupportsRegularExpressionTemplates()
-    }
-
-    private static func testSearchFindsAllMatchesAcrossDocument() {
+final class EditorDocumentSearchTests: XCTestCase {
+    func testSearchFindsAllMatchesAcrossDocument() {
         let result = EditorDocumentSearch.search(
             query: "beta",
             in: """
@@ -20,24 +13,13 @@ struct EditorDocumentSearchTests {
             useRegularExpression: false
         )
 
-        guard result.errorDescription == nil else {
-            fatalError("Expected plain-text document search to compile without errors.")
-        }
-
-        guard result.matches.count == 3 else {
-            fatalError("Expected all document matches to be returned, got \(result.matches.count).")
-        }
-
-        guard result.matches.map(\.offset) == [6, 11, 22] else {
-            fatalError("Expected document search offsets to preserve every match location.")
-        }
-
-        guard result.matches.map(\.columnNumber) == [7, 1, 12] else {
-            fatalError("Expected document search columns to align with each match.")
-        }
+        XCTAssertNil(result.errorDescription, "Expected plain-text document search to compile without errors.")
+        XCTAssertEqual(result.matches.count, 3, "Expected all document matches to be returned, got \(result.matches.count).")
+        XCTAssertEqual(result.matches.map(\.offset), [6, 11, 22], "Expected document search offsets to preserve every match location.")
+        XCTAssertEqual(result.matches.map(\.columnNumber), [7, 1, 12], "Expected document search columns to align with each match.")
     }
 
-    private static func testSearchReportsRegularExpressionErrors() {
+    func testSearchReportsRegularExpressionErrors() {
         let result = EditorDocumentSearch.search(
             query: "(",
             in: "alpha beta",
@@ -45,16 +27,11 @@ struct EditorDocumentSearchTests {
             useRegularExpression: true
         )
 
-        guard result.matches.isEmpty else {
-            fatalError("Expected invalid regular expressions to produce no matches.")
-        }
-
-        guard result.errorDescription != nil else {
-            fatalError("Expected invalid regular expressions to surface an error message.")
-        }
+        XCTAssertTrue(result.matches.isEmpty, "Expected invalid regular expressions to produce no matches.")
+        XCTAssertNotNil(result.errorDescription, "Expected invalid regular expressions to surface an error message.")
     }
 
-    private static func testReplaceCurrentAdvancesToNextMatch() {
+    func testReplaceCurrentAdvancesToNextMatch() {
         let result = EditorDocumentSearch.replaceCurrentMatch(
             query: "beta",
             replacement: "delta",
@@ -64,20 +41,12 @@ struct EditorDocumentSearchTests {
             useRegularExpression: false
         )
 
-        guard result.updatedText == "beta delta beta" else {
-            fatalError("Expected only the active match to be replaced.")
-        }
-
-        guard result.replacedCount == 1 else {
-            fatalError("Expected single-match replacement to report one replacement.")
-        }
-
-        guard result.nextMatchIndex == 1 else {
-            fatalError("Expected replacement to advance to the next remaining match.")
-        }
+        XCTAssertEqual(result.updatedText, "beta delta beta", "Expected only the active match to be replaced.")
+        XCTAssertEqual(result.replacedCount, 1, "Expected single-match replacement to report one replacement.")
+        XCTAssertEqual(result.nextMatchIndex, 1, "Expected replacement to advance to the next remaining match.")
     }
 
-    private static func testReplaceAllSupportsRegularExpressionTemplates() {
+    func testReplaceAllSupportsRegularExpressionTemplates() {
         let result = EditorDocumentSearch.replaceAllMatches(
             query: "a(\\d)",
             replacement: "b$1",
@@ -86,12 +55,7 @@ struct EditorDocumentSearchTests {
             useRegularExpression: true
         )
 
-        guard result.updatedText == "b1 b2 b3" else {
-            fatalError("Expected regex replacement templates to be applied to all matches.")
-        }
-
-        guard result.replacedCount == 3 else {
-            fatalError("Expected replace-all to report the total number of replacements.")
-        }
+        XCTAssertEqual(result.updatedText, "b1 b2 b3", "Expected regex replacement templates to be applied to all matches.")
+        XCTAssertEqual(result.replacedCount, 3, "Expected replace-all to report the total number of replacements.")
     }
 }

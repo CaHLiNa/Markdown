@@ -1,70 +1,31 @@
-import Foundation
+import XCTest
+@testable import Markdown
 
-@main
-struct EditorCommandPaletteTests {
-    static func main() {
-        testCatalogIncludesCoreWorkspaceCommands()
-        testCatalogIncludesRichEditorCommands()
-        testCatalogIncludesExtendedWorkspaceAndTransformCommands()
-    }
-
-    private static func testCatalogIncludesCoreWorkspaceCommands() {
+final class EditorCommandPaletteTests: XCTestCase {
+    func testCatalogIncludesCoreWorkspaceCommands() {
         let ids = Set(EditorCommandPaletteCatalog.allItems.map(\.id))
 
-        guard ids.contains("file.quick-open") else {
-            fatalError("Expected command palette catalog to include quick open.")
-        }
-
-        guard ids.contains("view.command-palette") else {
-            fatalError("Expected command palette catalog to include command palette.")
-        }
-
-        guard ids.contains("view.source-code-mode") else {
-            fatalError("Expected command palette catalog to include source mode toggle.")
-        }
+        XCTAssertTrue(ids.contains("file.quick-open"), "Expected command palette catalog to include quick open.")
+        XCTAssertTrue(ids.contains("view.command-palette"), "Expected command palette catalog to include command palette.")
+        XCTAssertTrue(ids.contains("view.source-code-mode"), "Expected command palette catalog to include source mode toggle.")
     }
 
-    private static func testCatalogIncludesRichEditorCommands() {
+    func testCatalogIncludesRichEditorCommands() {
         let ids = Set(EditorCommandPaletteCatalog.allItems.map(\.id))
 
-        guard ids.contains(EditorCommand.table.rawValue) else {
-            fatalError("Expected command palette catalog to include table insertion.")
-        }
-
-        guard ids.contains(EditorCommand.bold.rawValue) else {
-            fatalError("Expected command palette catalog to include bold formatting.")
-        }
-
-        guard ids.contains(EditorCommand.mathBlock.rawValue) else {
-            fatalError("Expected command palette catalog to include math block insertion.")
-        }
+        XCTAssertTrue(ids.contains(EditorCommand.table.rawValue), "Expected command palette catalog to include table insertion.")
+        XCTAssertTrue(ids.contains(EditorCommand.bold.rawValue), "Expected command palette catalog to include bold formatting.")
+        XCTAssertTrue(ids.contains(EditorCommand.mathBlock.rawValue), "Expected command palette catalog to include math block insertion.")
     }
 
-    private static func testCatalogIncludesExtendedWorkspaceAndTransformCommands() {
+    func testCatalogIncludesExtendedWorkspaceAndTransformCommands() {
         let ids = Set(EditorCommandPaletteCatalog.allItems.map(\.id))
 
-        guard ids.contains("file.save") else {
-            fatalError("Expected command palette catalog to include save.")
-        }
-
-        guard ids.contains("view.search") else {
-            fatalError("Expected command palette catalog to include workspace search.")
-        }
-
-        guard ids.contains("edit.find") else {
-            fatalError("Expected command palette catalog to include in-document find.")
-        }
-
-        guard ids.contains("edit.replace") else {
-            fatalError("Expected command palette catalog to include in-document replace.")
-        }
-
-        guard ids.contains(EditorCommand.upgradeHeading.rawValue) else {
-            fatalError("Expected command palette catalog to include heading promotion.")
-        }
-
-        guard ids.contains(EditorCommand.clearFormat.rawValue) else {
-            fatalError("Expected command palette catalog to include clear format.")
-        }
+        XCTAssertTrue(ids.contains("file.save"), "Expected command palette catalog to include save.")
+        XCTAssertTrue(ids.contains("view.search"), "Expected command palette catalog to include workspace search.")
+        XCTAssertTrue(ids.contains("edit.find"), "Expected command palette catalog to include in-document find.")
+        XCTAssertTrue(ids.contains("edit.replace"), "Expected command palette catalog to include in-document replace.")
+        XCTAssertTrue(ids.contains(EditorCommand.upgradeHeading.rawValue), "Expected command palette catalog to include heading promotion.")
+        XCTAssertTrue(ids.contains(EditorCommand.clearFormat.rawValue), "Expected command palette catalog to include clear format.")
     }
 }

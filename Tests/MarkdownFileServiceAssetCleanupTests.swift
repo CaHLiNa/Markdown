@@ -1,13 +1,8 @@
-import Foundation
+import XCTest
+@testable import Markdown
 
-@main
-struct MarkdownFileServiceAssetCleanupTests {
-    static func main() throws {
-        try testRemovesUnreferencedSiblingAssets()
-        try testPreservesReferencedSiblingAssets()
-    }
-
-    private static func testRemovesUnreferencedSiblingAssets() throws {
+final class MarkdownFileServiceAssetCleanupTests: XCTestCase {
+    func testRemovesUnreferencedSiblingAssets() throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
             UUID().uuidString,
@@ -37,16 +32,11 @@ struct MarkdownFileServiceAssetCleanupTests {
             alongsideMarkdownFile: markdownFileURL
         )
 
-        guard fileManager.fileExists(atPath: keptAssetURL.path) else {
-            fatalError("Expected referenced sibling image asset to be preserved.")
-        }
-
-        guard !fileManager.fileExists(atPath: removedAssetURL.path) else {
-            fatalError("Expected unreferenced sibling image asset to be removed during save cleanup.")
-        }
+        XCTAssertTrue(fileManager.fileExists(atPath: keptAssetURL.path), "Expected referenced sibling image asset to be preserved.")
+        XCTAssertFalse(fileManager.fileExists(atPath: removedAssetURL.path), "Expected unreferenced sibling image asset to be removed during save cleanup.")
     }
 
-    private static func testPreservesReferencedSiblingAssets() throws {
+    func testPreservesReferencedSiblingAssets() throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
             UUID().uuidString,
@@ -75,8 +65,6 @@ struct MarkdownFileServiceAssetCleanupTests {
             alongsideMarkdownFile: markdownFileURL
         )
 
-        guard fileManager.fileExists(atPath: nestedAssetURL.path) else {
-            fatalError("Expected referenced nested asset to be preserved.")
-        }
+        XCTAssertTrue(fileManager.fileExists(atPath: nestedAssetURL.path), "Expected referenced nested asset to be preserved.")
     }
 }
