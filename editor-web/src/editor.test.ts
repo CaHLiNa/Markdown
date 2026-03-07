@@ -238,7 +238,7 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
-  test('inserts a table template and exposes rendered HTML for the native layer', async () => {
+  test('opens a table picker and inserts a configured table from the table command', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 
     const root = document.querySelector<HTMLElement>('#app')
@@ -249,16 +249,30 @@ describe('createMarkdownEditor', () => {
 
     const editor = await createMarkdownEditor({
       root,
-      initialMarkdown: 'Alpha'
+      initialMarkdown: ''
     })
 
     expect(editor.runCommand('table')).toBe(true)
 
+    const panel = root.querySelector<HTMLElement>('[data-floating-panel="table"]')
+    const targetCell = root.querySelector<HTMLElement>(
+      '[data-table-picker-row="1"][data-table-picker-column="2"]'
+    )
+    const submitButton = root.querySelector<HTMLButtonElement>('[data-floating-submit="table"]')
+
+    expect(panel?.hidden).toBe(false)
+
+    targetCell?.dispatchEvent(new Event('mouseenter', { bubbles: true }))
+    submitButton?.click()
+
     const markdown = editor.getMarkdown()
     const renderedHTML = editor.getRenderedHTML()
 
-    expect(markdown).toContain('| 列 1 | 列 2 |')
+    expect(markdown).toBe(
+      '| 列 1 | 列 2 | 列 3 |\n| --- | --- | --- |\n| 内容 | 内容 | 内容 |\n| 内容 | 内容 | 内容 |'
+    )
     expect(renderedHTML).toContain('<table>')
+    expect(panel?.hidden).toBe(true)
 
     await editor.destroy()
   })
@@ -326,7 +340,7 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
-  test('shows a quick insert menu for @ triggers and inserts the selected structure', async () => {
+  test('shows a quick insert menu for @ triggers and opens the table picker for table insertion', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 
     const root = document.querySelector<HTMLElement>('#app')
@@ -346,13 +360,57 @@ describe('createMarkdownEditor', () => {
     const tableButton = root.querySelector<HTMLButtonElement>(
       '.cm-quick-insert [data-editor-command="table"]'
     )
+    const tablePanel = root.querySelector<HTMLElement>('[data-floating-panel="table"]')
 
     expect(quickInsert).not.toBeNull()
 
     tableButton?.click()
+    expect(tablePanel?.hidden).toBe(false)
 
-    expect(editor.getMarkdown()).toContain('| 列 1 | 列 2 |')
-    expect(editor.getMarkdown()).not.toContain('@')
+    const rowInput = root.querySelector<HTMLInputElement>('[data-table-field="rows"]')
+    const columnInput = root.querySelector<HTMLInputElement>('[data-table-field="columns"]')
+    const submitButton = root.querySelector<HTMLButtonElement>('[data-floating-submit="table"]')
+
+    if (!rowInput || !columnInput || !submitButton) {
+      throw new Error('Missing table picker controls for quick insert test.')
+    }
+
+    rowInput.value = '1'
+    rowInput.dispatchEvent(new Event('input', { bubbles: true }))
+    columnInput.value = '4'
+    columnInput.dispatchEvent(new Event('input', { bubbles: true }))
+    submitButton.click()
+
+    expect(editor.getMarkdown()).toBe(
+      '| 列 1 | 列 2 | 列 3 | 列 4 |\n| --- | --- | --- | --- |\n| 内容 | 内容 | 内容 | 内容 |'
+    )
+
+    await editor.destroy()
+  })
+
+  test('closes the table picker without mutating markdown when cancelled', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for table picker cancel test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'Alpha'
+    })
+
+    editor.runCommand('table')
+
+    const panel = root.querySelector<HTMLElement>('[data-floating-panel="table"]')
+    const cancelButton = root.querySelector<HTMLButtonElement>('[data-floating-cancel="table"]')
+
+    cancelButton?.click()
+
+    expect(panel?.hidden).toBe(true)
+    expect(editor.getMarkdown()).toBe('Alpha')
 
     await editor.destroy()
   })
@@ -544,6 +602,76 @@ describe('createMarkdownEditor', () => {
 
     expect(editor.getMarkdown()).toBe(
       '# 标题\n\n| 姓名 | 城市 |\n| --- | :---: |\n| Alice | 上海 |'
+    )
+
+    await editor.destroy()
+  })
+
+  test('reorders a table column by dragging its handle onto another header', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for table column drag test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown:
+        '# 标题\n\n| 姓名 | 城市 | 国家 |\n| :--- | :---: | ---: |\n| Alice | 上海 | 中国 |'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const sourceHandle = root.querySelector<HTMLElement>(
+      '[data-table-drag-axis="column"][data-table-drag-index="0"]'
+    )
+    const targetHeader = root.querySelector<HTMLElement>(
+      '.cm-preview-block--table thead th:nth-child(3)'
+    )
+
+    sourceHandle?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    targetHeader?.dispatchEvent(new Event('mouseenter'))
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+
+    expect(editor.getMarkdown()).toBe(
+      '# 标题\n\n| 城市 | 国家 | 姓名 |\n| :---: | ---: | :--- |\n| 上海 | 中国 | Alice |'
+    )
+
+    await editor.destroy()
+  })
+
+  test('reorders a table row by dragging its handle onto another row', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for table row drag test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown:
+        '# 标题\n\n| 姓名 | 城市 |\n| --- | --- |\n| Alice | 上海 |\n| Bob | 北京 |\n| Carol | 深圳 |'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const sourceHandle = root.querySelector<HTMLElement>(
+      '[data-table-drag-axis="row"][data-table-drag-index="0"]'
+    )
+    const targetCell = root.querySelector<HTMLElement>(
+      '.cm-preview-block--table tbody tr:nth-child(3) td:first-child'
+    )
+
+    sourceHandle?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    targetCell?.dispatchEvent(new Event('mouseenter'))
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+
+    expect(editor.getMarkdown()).toBe(
+      '# 标题\n\n| 姓名 | 城市 |\n| --- | --- |\n| Bob | 北京 |\n| Carol | 深圳 |\n| Alice | 上海 |'
     )
 
     await editor.destroy()

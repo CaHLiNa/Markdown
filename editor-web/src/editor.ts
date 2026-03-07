@@ -1343,6 +1343,11 @@ type MarkdownTable = {
   rows: string[][]
 }
 
+type TablePickerSize = {
+  rows: number
+  columns: number
+}
+
 const parseMarkdownLink = (text: string): MarkdownLink | null => {
   const match = text.trim().match(markdownLinkPattern)
 
@@ -1388,6 +1393,22 @@ const parseStandaloneImageBlock = (block: MarkdownBlock): StandaloneImageBlock |
 }
 
 const defaultTableHeader = (index: number) => `列 ${index + 1}`
+const defaultTablePickerSize: TablePickerSize = {
+  rows: 1,
+  columns: 2
+}
+const minimumTablePickerGridSize: TablePickerSize = {
+  rows: 6,
+  columns: 8
+}
+
+const clampTableSize = (value: number, fallback: number, max = 12) => {
+  if (!Number.isFinite(value)) {
+    return fallback
+  }
+
+  return Math.max(1, Math.min(max, Math.floor(value)))
+}
 
 const createMarkdownTableRow = (columnCount: number) => {
   return Array.from({ length: columnCount }, () => '内容')
@@ -1492,6 +1513,51 @@ const serializeMarkdownTable = (table: MarkdownTable) => {
   return lines.join('\n')
 }
 
+const createMarkdownTable = (rows: number, columns: number) => {
+  const safeColumns = clampTableSize(columns, defaultTablePickerSize.columns)
+  const safeRows = clampTableSize(rows, defaultTablePickerSize.rows)
+
+  return normalizeMarkdownTable({
+    headers: Array.from({ length: safeColumns }, (_, index) => defaultTableHeader(index)),
+    aligns: Array.from({ length: safeColumns }, () => ''),
+    rows: Array.from({ length: safeRows }, () => createMarkdownTableRow(safeColumns))
+  })
+}
+
+const moveArrayItem = <Value>(values: Value[], from: number, to: number) => {
+  if (from === to) {
+    return [...values]
+  }
+
+  const nextValues = [...values]
+  const safeFrom = Math.max(0, Math.min(from, nextValues.length - 1))
+  const [item] = nextValues.splice(safeFrom, 1)
+
+  if (typeof item === 'undefined') {
+    return nextValues
+  }
+
+  const safeTo = Math.max(0, Math.min(to, nextValues.length))
+  nextValues.splice(safeTo, 0, item)
+  return nextValues
+}
+
+const moveMarkdownTableColumn = (table: MarkdownTable, from: number, to: number) => {
+  return normalizeMarkdownTable({
+    headers: moveArrayItem(table.headers, from, to),
+    aligns: moveArrayItem(table.aligns, from, to),
+    rows: table.rows.map((row) => moveArrayItem(row, from, to))
+  })
+}
+
+const moveMarkdownTableRow = (table: MarkdownTable, from: number, to: number) => {
+  return normalizeMarkdownTable({
+    headers: table.headers,
+    aligns: table.aligns,
+    rows: moveArrayItem(table.rows, from, to)
+  })
+}
+
 const updateMarkdownTableBlock = (
   view: EditorView,
   block: MarkdownBlock,
@@ -1499,6 +1565,27 @@ const updateMarkdownTableBlock = (
 ) => {
   const nextMarkdown = serializeMarkdownTable(table)
   replaceRange(view, block.from, block.to, nextMarkdown, block.from)
+  return true
+}
+
+const replaceWithStandaloneMarkdownBlock = (
+  view: EditorView,
+  from: number,
+  to: number,
+  markdownText: string,
+  selectionAnchorOffset: number,
+  selectionHeadOffset = selectionAnchorOffset
+) => {
+  const currentText = getDocumentText(view)
+  const previousCharacter = from > 0 ? currentText.slice(from - 1, from) : ''
+  const nextCharacter = to < currentText.length ? currentText.slice(to, to + 1) : ''
+  const leadingBreak = currentText.length > 0 && previousCharacter !== '\n' ? '\n\n' : ''
+  const trailingBreak = currentText.length > 0 && nextCharacter !== '\n' ? '\n\n' : ''
+  const replacement = `${leadingBreak}${markdownText}${trailingBreak}`
+  const anchor = from + leadingBreak.length + selectionAnchorOffset
+  const head = from + leadingBreak.length + selectionHeadOffset
+
+  replaceRange(view, from, to, replacement, anchor, head)
   return true
 }
 
@@ -1521,19 +1608,14 @@ const insertStandaloneMarkdownBlock = (
   selectionHeadOffset = selectionAnchorOffset
 ) => {
   const selection = view.state.selection.main
-  const currentText = getDocumentText(view)
-  const previousCharacter =
-    selection.from > 0 ? currentText.slice(selection.from - 1, selection.from) : ''
-  const nextCharacter =
-    selection.to < currentText.length ? currentText.slice(selection.to, selection.to + 1) : ''
-  const leadingBreak = currentText.length > 0 && previousCharacter !== '\n' ? '\n\n' : ''
-  const trailingBreak = currentText.length > 0 && nextCharacter !== '\n' ? '\n\n' : ''
-  const replacement = `${leadingBreak}${markdownText}${trailingBreak}`
-  const anchor = selection.from + leadingBreak.length + selectionAnchorOffset
-  const head = selection.from + leadingBreak.length + selectionHeadOffset
-
-  replaceRange(view, selection.from, selection.to, replacement, anchor, head)
-  return true
+  return replaceWithStandaloneMarkdownBlock(
+    view,
+    selection.from,
+    selection.to,
+    markdownText,
+    selectionAnchorOffset,
+    selectionHeadOffset
+  )
 }
 
 const updateStandaloneImageBlock = (
@@ -1861,6 +1943,26 @@ const createTableToolButton = (
   return button
 }
 
+const createTableDragHandle = (
+  label: string,
+  axis: 'column' | 'row',
+  index: number,
+  onMouseDown: (event: MouseEvent) => void
+) => {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'cm-table-drag-handle'
+  button.dataset.tableDragAxis = axis
+  button.dataset.tableDragIndex = `${index}`
+  button.textContent = label
+  button.addEventListener('mousedown', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    onMouseDown(event)
+  })
+  return button
+}
+
 const formatTableToolbarContext = (
   row: number,
   column: number,
@@ -1901,6 +2003,88 @@ const attachTableToolbar = (
   const hoverState = {
     row: table.rows.length > 0 ? 1 : 0,
     column: 0
+  }
+  let dragState: {
+    axis: 'column' | 'row'
+    sourceIndex: number
+    targetIndex: number
+  } | null = null
+
+  const clearDragDecorations = () => {
+    root.classList.remove('is-table-dragging')
+    tableElement
+      .querySelectorAll<HTMLElement>('.is-table-drag-source, .is-table-drag-target')
+      .forEach((cell) => {
+        cell.classList.remove('is-table-drag-source', 'is-table-drag-target')
+      })
+  }
+
+  const updateDragDecorations = () => {
+    clearDragDecorations()
+
+    if (!dragState) {
+      return
+    }
+
+    root.classList.add('is-table-dragging')
+
+    const axisKey = dragState.axis === 'column' ? 'column' : 'row'
+    const sourceSelector = `[data-table-${axisKey}="${dragState.sourceIndex + (dragState.axis === 'row' ? 1 : 0)}"]`
+    const targetSelector = `[data-table-${axisKey}="${dragState.targetIndex + (dragState.axis === 'row' ? 1 : 0)}"]`
+
+    tableElement.querySelectorAll<HTMLElement>(sourceSelector).forEach((cell) => {
+      cell.classList.add('is-table-drag-source')
+    })
+    tableElement.querySelectorAll<HTMLElement>(targetSelector).forEach((cell) => {
+      cell.classList.add('is-table-drag-target')
+    })
+  }
+
+  const stopDrag = (shouldApply: boolean) => {
+    const activeDrag = dragState
+
+    if (!activeDrag) {
+      return
+    }
+
+    document.removeEventListener('mouseup', handleDragMouseUp)
+    dragState = null
+    clearDragDecorations()
+
+    if (shouldApply && activeDrag.sourceIndex !== activeDrag.targetIndex) {
+      const nextTable =
+        activeDrag.axis === 'column'
+          ? moveMarkdownTableColumn(table, activeDrag.sourceIndex, activeDrag.targetIndex)
+          : moveMarkdownTableRow(table, activeDrag.sourceIndex, activeDrag.targetIndex)
+
+      updateMarkdownTableBlock(view, block, nextTable)
+    }
+  }
+
+  function handleDragMouseUp() {
+    stopDrag(true)
+  }
+
+  const beginColumnDrag = (columnIndex: number) => {
+    stopDrag(false)
+    dragState = {
+      axis: 'column',
+      sourceIndex: columnIndex,
+      targetIndex: columnIndex
+    }
+    updateDragDecorations()
+    document.addEventListener('mouseup', handleDragMouseUp)
+  }
+
+  const beginRowDrag = (rowIndex: number) => {
+    stopDrag(false)
+    dragState = {
+      axis: 'row',
+      sourceIndex: rowIndex,
+      targetIndex: rowIndex
+    }
+    updateDragDecorations()
+    document.addEventListener('mouseup', handleDragMouseUp)
   }
 
   const highlightHoveredCell = () => {
@@ -2049,8 +2233,18 @@ const attachTableToolbar = (
   headerCells.forEach((cell, columnIndex) => {
     cell.dataset.tableRow = '0'
     cell.dataset.tableColumn = `${columnIndex}`
+    cell.append(
+      createTableDragHandle('拖列', 'column', columnIndex, () => {
+        setHoveredCell(0, columnIndex)
+        beginColumnDrag(columnIndex)
+      })
+    )
     cell.addEventListener('mouseenter', () => {
       setHoveredCell(0, columnIndex)
+      if (dragState?.axis === 'column') {
+        dragState.targetIndex = columnIndex
+        updateDragDecorations()
+      }
     })
   })
 
@@ -2058,8 +2252,20 @@ const attachTableToolbar = (
     Array.from(row.querySelectorAll<HTMLElement>('td')).forEach((cell, columnIndex) => {
       cell.dataset.tableRow = `${rowIndex + 1}`
       cell.dataset.tableColumn = `${columnIndex}`
+      if (columnIndex === 0) {
+        cell.append(
+          createTableDragHandle('拖行', 'row', rowIndex, () => {
+            setHoveredCell(rowIndex + 1, columnIndex)
+            beginRowDrag(rowIndex)
+          })
+        )
+      }
       cell.addEventListener('mouseenter', () => {
         setHoveredCell(rowIndex + 1, columnIndex)
+        if (dragState?.axis === 'row') {
+          dragState.targetIndex = rowIndex
+          updateDragDecorations()
+        }
       })
     })
   })
@@ -2469,11 +2675,23 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
   imagePopover.className = 'cm-floating-ui cm-image-popover'
   imagePopover.dataset.floatingPanel = 'image'
 
+  const tablePopover = document.createElement('div')
+  tablePopover.className = 'cm-floating-ui cm-table-popover'
+  tablePopover.dataset.floatingPanel = 'table'
+
   const emojiPopover = document.createElement('div')
   emojiPopover.className = 'cm-floating-ui cm-emoji-popover'
   emojiPopover.dataset.floatingPanel = 'emoji'
 
-  rootElement.append(formatToolbar, quickInsertMenu, blockMenu, linkPopover, imagePopover, emojiPopover)
+  rootElement.append(
+    formatToolbar,
+    quickInsertMenu,
+    blockMenu,
+    linkPopover,
+    imagePopover,
+    tablePopover,
+    emojiPopover
+  )
 
   type LinkPopoverState = {
     from: number
@@ -2495,6 +2713,12 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     }
   }
 
+  type TablePopoverState = {
+    from: number
+    to: number
+    values: TablePickerSize
+  }
+
   type EmojiPopoverState = {
     from: number
     to: number
@@ -2505,6 +2729,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
 
   let linkState: LinkPopoverState | null = null
   let imageState: ImagePopoverState | null = null
+  let tableState: TablePopoverState | null = null
   let emojiState: EmojiPopoverState | null = null
 
   const hide = (element: HTMLElement) => {
@@ -2524,6 +2749,11 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
   const closeImagePopover = () => {
     imageState = null
     hide(imagePopover)
+  }
+
+  const closeTablePopover = () => {
+    tableState = null
+    hide(tablePopover)
   }
 
   const closeEmojiPopover = () => {
@@ -2581,6 +2811,44 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     return button
   }
 
+  const createTablePickerField = (
+    fieldName: keyof TablePickerSize,
+    labelText: string,
+    value: number,
+    onInput: (value: number) => void
+  ) => {
+    const field = document.createElement('label')
+    field.className = 'cm-floating-field'
+
+    const caption = document.createElement('span')
+    caption.className = 'cm-floating-field-label'
+    caption.textContent = labelText
+
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.inputMode = 'numeric'
+    input.className = 'cm-floating-field-input'
+    input.value = `${value}`
+    input.dataset.tableField = fieldName
+    input.addEventListener('input', () => {
+      onInput(Number.parseInt(input.value, 10))
+    })
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeTablePopover()
+      }
+
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        applyTablePopover()
+      }
+    })
+
+    field.append(caption, input)
+    return { field, input }
+  }
+
   const applyEmojiPopover = (item?: EmojiOption) => {
     const selectedItem = item ?? (emojiState ? emojiState.items[emojiState.activeIndex] : null)
 
@@ -2596,6 +2864,28 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       emojiState.from + selectedItem.emoji.length
     )
     closeEmojiPopover()
+    view.focus()
+    return true
+  }
+
+  const applyTablePopover = () => {
+    if (!tableState) {
+      return false
+    }
+
+    const nextTable = createMarkdownTable(tableState.values.rows, tableState.values.columns)
+    const nextMarkdown = serializeMarkdownTable(nextTable)
+    const firstHeader = nextTable.headers[0] ?? defaultTableHeader(0)
+
+    replaceWithStandaloneMarkdownBlock(
+      view,
+      tableState.from,
+      tableState.to,
+      nextMarkdown,
+      2,
+      2 + firstHeader.length
+    )
+    closeTablePopover()
     view.focus()
     return true
   }
@@ -2663,6 +2953,131 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       offsetY: 6
     })
     show(emojiPopover)
+  }
+
+  const renderTablePopover = () => {
+    if (!tableState) {
+      hide(tablePopover)
+      return
+    }
+
+    tablePopover.replaceChildren()
+
+    const form = document.createElement('form')
+    form.className = 'cm-floating-form'
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      applyTablePopover()
+    })
+
+    const summary = document.createElement('div')
+    summary.className = 'cm-table-picker-summary'
+    summary.textContent = `${tableState.values.rows} x ${tableState.values.columns}`
+
+    const grid = document.createElement('div')
+    grid.className = 'cm-table-picker-grid'
+
+    const visibleRows = Math.max(
+      minimumTablePickerGridSize.rows,
+      Math.min(tableState.values.rows, 10)
+    )
+    const visibleColumns = Math.max(
+      minimumTablePickerGridSize.columns,
+      Math.min(tableState.values.columns, 10)
+    )
+
+    grid.style.setProperty('--table-picker-columns', `${visibleColumns}`)
+
+    for (let row = 0; row < visibleRows; row += 1) {
+      for (let column = 0; column < visibleColumns; column += 1) {
+        const cell = document.createElement('button')
+        cell.type = 'button'
+        cell.className = 'cm-table-picker-cell'
+        cell.dataset.tablePickerRow = `${row}`
+        cell.dataset.tablePickerColumn = `${column}`
+
+        if (row < tableState.values.rows && column < tableState.values.columns) {
+          cell.classList.add('is-selected')
+        }
+
+        cell.addEventListener('mousedown', (event) => {
+          event.preventDefault()
+          event.stopPropagation()
+        })
+        cell.addEventListener('mouseenter', () => {
+          if (!tableState) {
+            return
+          }
+
+          tableState.values.rows = row + 1
+          tableState.values.columns = column + 1
+          renderTablePopover()
+        })
+        cell.addEventListener('click', (event) => {
+          event.preventDefault()
+          event.stopPropagation()
+
+          if (!tableState) {
+            return
+          }
+
+          tableState.values.rows = row + 1
+          tableState.values.columns = column + 1
+          applyTablePopover()
+        })
+
+        grid.append(cell)
+      }
+    }
+
+    const footer = document.createElement('div')
+    footer.className = 'cm-table-picker-footer'
+
+    const rowsField = createTablePickerField(
+      'rows',
+      '行',
+      tableState.values.rows,
+      (value) => {
+        if (!tableState) {
+          return
+        }
+
+        tableState.values.rows = clampTableSize(value, tableState.values.rows)
+        renderTablePopover()
+      }
+    )
+    const columnsField = createTablePickerField(
+      'columns',
+      '列',
+      tableState.values.columns,
+      (value) => {
+        if (!tableState) {
+          return
+        }
+
+        tableState.values.columns = clampTableSize(value, tableState.values.columns)
+        renderTablePopover()
+      }
+    )
+
+    const actions = document.createElement('div')
+    actions.className = 'cm-floating-actions'
+    const cancelButton = createFloatingActionButton('取消', 'floatingCancel', 'table', closeTablePopover)
+    const submitButton = createFloatingActionButton('插入', 'floatingSubmit', 'table', applyTablePopover)
+    submitButton.type = 'submit'
+    actions.append(cancelButton, submitButton)
+
+    footer.append(rowsField.field, columnsField.field)
+    form.append(summary, grid, footer, actions)
+    tablePopover.append(form)
+    positionFloatingElement(tablePopover, rootElement, view, tableState.from, tableState.to, {
+      above: false,
+      offsetY: 8
+    })
+    show(tablePopover)
+    queueMicrotask(() => {
+      columnsField.input.select()
+    })
   }
 
   const moveEmojiSelection = (direction: 1 | -1) => {
@@ -2890,6 +3305,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
 
   const openLinkPopover = () => {
     closeImagePopover()
+    closeTablePopover()
     closeEmojiPopover()
     const selection = view.state.selection.main
     const selectedText = view.state.doc.sliceString(selection.from, selection.to)
@@ -2915,6 +3331,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     fallbackAlt = '图片描述'
   ) => {
     closeLinkPopover()
+    closeTablePopover()
     closeEmojiPopover()
     imageState = {
       from,
@@ -2926,6 +3343,24 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       }
     }
     renderImagePopover()
+    return true
+  }
+
+  const openTablePopover = () => {
+    closeLinkPopover()
+    closeImagePopover()
+    closeEmojiPopover()
+
+    const selection = view.state.selection.main
+    tableState = {
+      from: selection.from,
+      to: selection.to,
+      values: {
+        rows: defaultTablePickerSize.rows,
+        columns: defaultTablePickerSize.columns
+      }
+    }
+    renderTablePopover()
     return true
   }
 
@@ -2954,9 +3389,12 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
         return openLinkPopover()
       case 'image':
         return openImagePopover()
+      case 'table':
+        return openTablePopover()
       default:
         closeLinkPopover()
         closeImagePopover()
+        closeTablePopover()
         closeEmojiPopover()
         return runSourceCommand(view, command)
     }
@@ -2994,7 +3432,18 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       })
     }
 
-    if (linkState || imageState) {
+    if (tableState) {
+      if (selection.from !== tableState.from || selection.to !== tableState.to) {
+        closeTablePopover()
+      } else {
+        positionFloatingElement(tablePopover, rootElement, view, tableState.from, tableState.to, {
+          above: false,
+          offsetY: 8
+        })
+      }
+    }
+
+    if (linkState || imageState || tableState) {
       closeEmojiPopover()
     } else {
       const emojiTrigger = getActiveEmojiTrigger(view)
@@ -3059,7 +3508,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       hide(quickInsertMenu)
     }
 
-    if (activeBlock && selection.empty && !emojiState) {
+    if (activeBlock && selection.empty && !emojiState && !tableState) {
       blockMenu.replaceChildren(
         ...blockMenuCommands
           .filter((command) => ['duplicate-block', 'new-paragraph', 'delete-block'].includes(command))
@@ -3085,6 +3534,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
   hide(blockMenu)
   hide(linkPopover)
   hide(imagePopover)
+  hide(tablePopover)
   hide(emojiPopover)
 
   return {
@@ -3093,6 +3543,13 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       openImagePopoverForRange(block.from, block.to, imageBlock)
     },
     handleKeydown(event: KeyboardEvent) {
+      if (tableState && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        if (event.key === 'Escape') {
+          closeTablePopover()
+          return true
+        }
+      }
+
       if (!emojiState || event.metaKey || event.ctrlKey || event.altKey) {
         return false
       }
@@ -3119,6 +3576,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       blockMenu.remove()
       linkPopover.remove()
       imagePopover.remove()
+      tablePopover.remove()
       emojiPopover.remove()
     }
   }
