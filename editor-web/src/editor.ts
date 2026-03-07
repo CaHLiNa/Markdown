@@ -122,10 +122,16 @@ class PreviewBlockWidget extends WidgetType {
     dom.innerHTML = this.renderedHTML
 
     const standaloneImage = parseStandaloneImageBlock(this.block)
+    const markdownTable = parseMarkdownTableBlock(this.block)
 
     if (standaloneImage) {
       dom.classList.add('cm-preview-block--image')
       attachImageToolbar(dom, view, this.block, standaloneImage, this.imageTools)
+    }
+
+    if (markdownTable) {
+      dom.classList.add('cm-preview-block--table')
+      attachTableToolbar(dom, view, this.block, markdownTable)
     }
 
     dom.addEventListener('mousedown', (event) => {
@@ -150,6 +156,7 @@ const blockquotePrefixPattern = /^\s{0,3}>\s?/
 const listPrefixPattern = /^\s{0,3}(?:[-+*]\s+(?:\[[ xX]\]\s+)?|\d+\.\s+)/
 const fencedCodeDelimiterPattern = /^\s*(?:```|~~~).*$/
 const mathDelimiterPattern = /^\s*\$\$\s*$/
+const tableDividerPattern = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/
 const leadingWhitespacePattern = /^\s*/
 const emojiAliasCharacterPattern = /[a-z0-9_+-]/i
 const syntaxTokenDecoration = Decoration.mark({ class: 'cm-markdown-syntax-token' })
@@ -1328,6 +1335,14 @@ type StandaloneImageBlock = {
   title: string | null
 }
 
+type MarkdownTableAlignment = '' | 'left' | 'center' | 'right'
+
+type MarkdownTable = {
+  headers: string[]
+  aligns: MarkdownTableAlignment[]
+  rows: string[][]
+}
+
 const parseMarkdownLink = (text: string): MarkdownLink | null => {
   const match = text.trim().match(markdownLinkPattern)
 
@@ -1370,6 +1385,121 @@ const parseStandaloneImageBlock = (block: MarkdownBlock): StandaloneImageBlock |
   }
 
   return parseStandaloneImageText(block.text)
+}
+
+const defaultTableHeader = (index: number) => `列 ${index + 1}`
+
+const createMarkdownTableRow = (columnCount: number) => {
+  return Array.from({ length: columnCount }, () => '内容')
+}
+
+const splitMarkdownTableRow = (line: string) => {
+  const trimmedLine = line.trim()
+  const normalized = trimmedLine
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+
+  return normalized.split('|').map((cell) => cell.trim())
+}
+
+const parseMarkdownTableAlignment = (cell: string): MarkdownTableAlignment => {
+  const normalized = cell.trim()
+
+  if (/^:-{3,}:$/.test(normalized)) {
+    return 'center'
+  }
+
+  if (/^:-{3,}$/.test(normalized)) {
+    return 'left'
+  }
+
+  if (/^-{3,}:$/.test(normalized)) {
+    return 'right'
+  }
+
+  return ''
+}
+
+const serializeMarkdownTableAlignment = (alignment: MarkdownTableAlignment) => {
+  switch (alignment) {
+    case 'left':
+      return ':---'
+    case 'center':
+      return ':---:'
+    case 'right':
+      return '---:'
+    default:
+      return '---'
+  }
+}
+
+const normalizeMarkdownTable = (table: MarkdownTable): MarkdownTable => {
+  const columnCount = Math.max(
+    table.headers.length,
+    table.aligns.length,
+    ...table.rows.map((row) => row.length),
+    1
+  )
+
+  const headers = Array.from({ length: columnCount }, (_, index) => {
+    const value = table.headers[index]?.trim()
+    return value && value.length > 0 ? value : defaultTableHeader(index)
+  })
+
+  const aligns = Array.from({ length: columnCount }, (_, index) => table.aligns[index] ?? '')
+
+  const rows = table.rows.map((row) =>
+    Array.from({ length: columnCount }, (_, index) => row[index]?.trim() ?? '')
+  )
+
+  return {
+    headers,
+    aligns,
+    rows
+  }
+}
+
+const parseMarkdownTableBlock = (block: MarkdownBlock): MarkdownTable | null => {
+  if (block.type !== 'table') {
+    return null
+  }
+
+  const lines = block.text.split('\n')
+
+  if (lines.length < 2 || !tableDividerPattern.test(lines[1] ?? '')) {
+    return null
+  }
+
+  return normalizeMarkdownTable({
+    headers: splitMarkdownTableRow(lines[0] ?? ''),
+    aligns: splitMarkdownTableRow(lines[1] ?? '').map(parseMarkdownTableAlignment),
+    rows: lines.slice(2).map(splitMarkdownTableRow)
+  })
+}
+
+const serializeMarkdownTableRow = (cells: string[]) => {
+  return `| ${cells.map((cell) => cell.trim()).join(' | ')} |`
+}
+
+const serializeMarkdownTable = (table: MarkdownTable) => {
+  const normalized = normalizeMarkdownTable(table)
+  const lines = [
+    serializeMarkdownTableRow(normalized.headers),
+    serializeMarkdownTableRow(normalized.aligns.map(serializeMarkdownTableAlignment)),
+    ...normalized.rows.map(serializeMarkdownTableRow)
+  ]
+
+  return lines.join('\n')
+}
+
+const updateMarkdownTableBlock = (
+  view: EditorView,
+  block: MarkdownBlock,
+  table: MarkdownTable
+) => {
+  const nextMarkdown = serializeMarkdownTable(table)
+  replaceRange(view, block.from, block.to, nextMarkdown, block.from)
+  return true
 }
 
 const serializeStandaloneImageBlock = ({
@@ -1711,6 +1841,235 @@ const attachImageToolbar = (
         console.error('[editor-web] 图片拖拽替换失败', error)
       })
   })
+}
+
+const createTableToolButton = (
+  label: string,
+  action: string,
+  onClick: (event: MouseEvent) => void
+) => {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'cm-table-tool-button'
+  button.dataset.tableTool = action
+  button.textContent = label
+  button.addEventListener('mousedown', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+  })
+  button.addEventListener('click', onClick)
+  return button
+}
+
+const formatTableToolbarContext = (
+  row: number,
+  column: number,
+  table: MarkdownTable
+) => {
+  const rowLabel =
+    row === 0
+      ? '标题行'
+      : `第 ${Math.min(row, table.rows.length)} 行`
+
+  return `${rowLabel} · 第 ${column + 1} 列`
+}
+
+const attachTableToolbar = (
+  root: HTMLElement,
+  view: EditorView,
+  block: MarkdownBlock,
+  table: MarkdownTable
+) => {
+  const tableElement = root.querySelector<HTMLTableElement>('table')
+
+  if (!tableElement) {
+    return
+  }
+
+  const toolbar = document.createElement('div')
+  toolbar.className = 'cm-table-toolbar'
+
+  const contextLabel = document.createElement('div')
+  contextLabel.className = 'cm-table-toolbar-context'
+
+  const structureGroup = document.createElement('div')
+  structureGroup.className = 'cm-table-toolbar-group'
+
+  const alignGroup = document.createElement('div')
+  alignGroup.className = 'cm-table-toolbar-group'
+
+  const hoverState = {
+    row: table.rows.length > 0 ? 1 : 0,
+    column: 0
+  }
+
+  const highlightHoveredCell = () => {
+    tableElement
+      .querySelectorAll<HTMLElement>('.is-table-cell-hovered')
+      .forEach((cell) => cell.classList.remove('is-table-cell-hovered'))
+
+    tableElement
+      .querySelector<HTMLElement>(
+        `[data-table-row="${hoverState.row}"][data-table-column="${hoverState.column}"]`
+      )
+      ?.classList.add('is-table-cell-hovered')
+  }
+
+  const setHoveredCell = (row: number, column: number) => {
+    hoverState.row = Math.max(0, row)
+    hoverState.column = Math.max(0, Math.min(column, table.headers.length - 1))
+    highlightHoveredCell()
+    updateToolbarState()
+  }
+
+  const addColumnButton = createTableToolButton('列+', 'add-column', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const insertIndex = Math.min(table.headers.length, hoverState.column + 1)
+    const nextHeaders = [...table.headers]
+    const nextAligns = [...table.aligns]
+    nextHeaders.splice(insertIndex, 0, defaultTableHeader(insertIndex))
+    nextAligns.splice(insertIndex, 0, '')
+    const nextTable = normalizeMarkdownTable({
+      headers: nextHeaders,
+      aligns: nextAligns,
+      rows: table.rows.map((row) => {
+        const nextRow = [...row]
+        nextRow.splice(insertIndex, 0, '内容')
+        return nextRow
+      })
+    })
+
+    updateMarkdownTableBlock(view, block, nextTable)
+  })
+
+  const deleteColumnButton = createTableToolButton('删列', 'delete-column', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (table.headers.length <= 1) {
+      return
+    }
+
+    const deleteIndex = Math.min(hoverState.column, table.headers.length - 1)
+    const nextTable = normalizeMarkdownTable({
+      headers: table.headers.filter((_, index) => index !== deleteIndex),
+      aligns: table.aligns.filter((_, index) => index !== deleteIndex),
+      rows: table.rows.map((row) => row.filter((_, index) => index !== deleteIndex))
+    })
+
+    updateMarkdownTableBlock(view, block, nextTable)
+  })
+
+  const addRowButton = createTableToolButton('行+', 'add-row', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const insertIndex = hoverState.row === 0 ? 0 : Math.min(hoverState.row, table.rows.length)
+    const nextRows = [...table.rows]
+    nextRows.splice(insertIndex, 0, createMarkdownTableRow(table.headers.length))
+
+    updateMarkdownTableBlock(
+      view,
+      block,
+      normalizeMarkdownTable({
+        headers: table.headers,
+        aligns: table.aligns,
+        rows: nextRows
+      })
+    )
+  })
+
+  const deleteRowButton = createTableToolButton('删行', 'delete-row', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (hoverState.row === 0 || table.rows.length === 0) {
+      return
+    }
+
+    const deleteIndex = Math.min(hoverState.row - 1, table.rows.length - 1)
+    const nextRows = table.rows.filter((_, index) => index !== deleteIndex)
+
+    updateMarkdownTableBlock(
+      view,
+      block,
+      normalizeMarkdownTable({
+        headers: table.headers,
+        aligns: table.aligns,
+        rows: nextRows
+      })
+    )
+  })
+
+  const createAlignButton = (
+    label: string,
+    alignment: MarkdownTableAlignment
+  ) => {
+    return createTableToolButton(label, `align-${alignment || 'default'}`, (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+
+      const nextAlignments = [...table.aligns]
+      const currentAlignment = nextAlignments[hoverState.column] ?? ''
+      nextAlignments[hoverState.column] = currentAlignment === alignment ? '' : alignment
+
+      updateMarkdownTableBlock(
+        view,
+        block,
+        normalizeMarkdownTable({
+          headers: table.headers,
+          aligns: nextAlignments,
+          rows: table.rows
+        })
+      )
+    })
+  }
+
+  const alignLeftButton = createAlignButton('左', 'left')
+  const alignCenterButton = createAlignButton('中', 'center')
+  const alignRightButton = createAlignButton('右', 'right')
+
+  const updateToolbarState = () => {
+    contextLabel.textContent = formatTableToolbarContext(hoverState.row, hoverState.column, table)
+
+    deleteRowButton.disabled = hoverState.row === 0 || table.rows.length === 0
+    deleteColumnButton.disabled = table.headers.length <= 1
+
+    const activeAlignment = table.aligns[hoverState.column] ?? ''
+    alignLeftButton.classList.toggle('is-active', activeAlignment === 'left')
+    alignCenterButton.classList.toggle('is-active', activeAlignment === 'center')
+    alignRightButton.classList.toggle('is-active', activeAlignment === 'right')
+  }
+
+  const headerCells = Array.from(tableElement.querySelectorAll<HTMLElement>('thead th'))
+  const bodyRows = Array.from(tableElement.querySelectorAll<HTMLTableRowElement>('tbody tr'))
+
+  headerCells.forEach((cell, columnIndex) => {
+    cell.dataset.tableRow = '0'
+    cell.dataset.tableColumn = `${columnIndex}`
+    cell.addEventListener('mouseenter', () => {
+      setHoveredCell(0, columnIndex)
+    })
+  })
+
+  bodyRows.forEach((row, rowIndex) => {
+    Array.from(row.querySelectorAll<HTMLElement>('td')).forEach((cell, columnIndex) => {
+      cell.dataset.tableRow = `${rowIndex + 1}`
+      cell.dataset.tableColumn = `${columnIndex}`
+      cell.addEventListener('mouseenter', () => {
+        setHoveredCell(rowIndex + 1, columnIndex)
+      })
+    })
+  })
+
+  structureGroup.append(addRowButton, deleteRowButton, addColumnButton, deleteColumnButton)
+  alignGroup.append(alignLeftButton, alignCenterButton, alignRightButton)
+  toolbar.append(contextLabel, structureGroup, alignGroup)
+  root.append(toolbar)
+
+  setHoveredCell(hoverState.row, hoverState.column)
 }
 
 const firstImageFileFromTransfer = (transfer: FileTransferLike | null | undefined): File | null => {

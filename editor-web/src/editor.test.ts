@@ -387,6 +387,168 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
+  test('adds a column to the right of the hovered table column from the preview toolbar', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for table add column test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n| 姓名 | 城市 |\n| --- | --- |\n| Alice | 上海 |'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const firstHeader = root.querySelector<HTMLElement>('.cm-preview-block--table th')
+    firstHeader?.dispatchEvent(new Event('mouseenter', { bubbles: true }))
+
+    const addColumnButton = root.querySelector<HTMLButtonElement>(
+      '[data-table-tool="add-column"]'
+    )
+
+    addColumnButton?.click()
+
+    expect(editor.getMarkdown()).toBe(
+      '# 标题\n\n| 姓名 | 列 2 | 城市 |\n| --- | --- | --- |\n| Alice | 内容 | 上海 |'
+    )
+
+    await editor.destroy()
+  })
+
+  test('adds a row below the hovered table row from the preview toolbar', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for table add row test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n| 姓名 | 城市 |\n| --- | --- |\n| Alice | 上海 |\n| Bob | 北京 |'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const secondBodyCell = root.querySelector<HTMLElement>(
+      '.cm-preview-block--table tbody tr:first-child td:last-child'
+    )
+    secondBodyCell?.dispatchEvent(new Event('mouseenter', { bubbles: true }))
+
+    const addRowButton = root.querySelector<HTMLButtonElement>('[data-table-tool="add-row"]')
+    addRowButton?.click()
+
+    expect(editor.getMarkdown()).toBe(
+      '# 标题\n\n| 姓名 | 城市 |\n| --- | --- |\n| Alice | 上海 |\n| 内容 | 内容 |\n| Bob | 北京 |'
+    )
+
+    await editor.destroy()
+  })
+
+  test('deletes the hovered table row from the preview toolbar', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for table delete row test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n| 姓名 | 城市 |\n| --- | --- |\n| Alice | 上海 |\n| Bob | 北京 |'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const targetCell = root.querySelector<HTMLElement>(
+      '.cm-preview-block--table tbody tr:last-child td:first-child'
+    )
+    targetCell?.dispatchEvent(new Event('mouseenter', { bubbles: true }))
+
+    const deleteRowButton = root.querySelector<HTMLButtonElement>(
+      '[data-table-tool="delete-row"]'
+    )
+    deleteRowButton?.click()
+
+    expect(editor.getMarkdown()).toBe(
+      '# 标题\n\n| 姓名 | 城市 |\n| --- | --- |\n| Alice | 上海 |'
+    )
+
+    await editor.destroy()
+  })
+
+  test('deletes the hovered table column from the preview toolbar', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for table delete column test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n| 姓名 | 城市 | 国家 |\n| --- | --- | --- |\n| Alice | 上海 | 中国 |'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const targetHeader = root.querySelector<HTMLElement>(
+      '.cm-preview-block--table thead th:nth-child(2)'
+    )
+    targetHeader?.dispatchEvent(new Event('mouseenter', { bubbles: true }))
+
+    const deleteColumnButton = root.querySelector<HTMLButtonElement>(
+      '[data-table-tool="delete-column"]'
+    )
+    deleteColumnButton?.click()
+
+    expect(editor.getMarkdown()).toBe(
+      '# 标题\n\n| 姓名 | 国家 |\n| --- | --- |\n| Alice | 中国 |'
+    )
+
+    await editor.destroy()
+  })
+
+  test('updates the hovered table column alignment from the preview toolbar', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for table alignment test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n| 姓名 | 城市 |\n| --- | --- |\n| Alice | 上海 |'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const targetHeader = root.querySelector<HTMLElement>(
+      '.cm-preview-block--table thead th:last-child'
+    )
+    targetHeader?.dispatchEvent(new Event('mouseenter', { bubbles: true }))
+
+    const centerAlignButton = root.querySelector<HTMLButtonElement>(
+      '[data-table-tool="align-center"]'
+    )
+    centerAlignButton?.click()
+
+    expect(editor.getMarkdown()).toBe(
+      '# 标题\n\n| 姓名 | 城市 |\n| --- | :---: |\n| Alice | 上海 |'
+    )
+
+    await editor.destroy()
+  })
+
   test('pasting an image file persists it through the asset handler and inserts image markdown', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 
