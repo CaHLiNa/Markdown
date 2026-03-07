@@ -31,7 +31,7 @@ enum MarkdownFileService {
     ) throws -> String {
         let assetDirectoryURL = markdownFileURL
             .deletingPathExtension()
-            .appendingPathExtension("assets", conformingTo: .folder)
+            .appendingPathExtension("assets")
 
         try FileManager.default.createDirectory(
             at: assetDirectoryURL,

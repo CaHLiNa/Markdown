@@ -62,6 +62,10 @@ describe('native bridge', () => {
       new File(['image'], 'chart.png', { type: 'image/png' })
     )
 
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledTimes(1)
+    })
+
     expect(postMessage).toHaveBeenCalledTimes(1)
 
     const payload = postMessage.mock.calls[0]?.[0] as {
@@ -96,6 +100,10 @@ describe('native bridge', () => {
     const promise = persistImageAssetInNative(
       new File(['image'], 'chart.png', { type: 'image/png' })
     )
+
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledTimes(1)
+    })
 
     const payload = postMessage.mock.calls[0]?.[0] as {
       requestID: string
