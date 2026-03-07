@@ -2222,8 +2222,10 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     return button
   }
 
-  const applyEmojiPopover = (item = emojiState?.items[emojiState.activeIndex ?? 0]) => {
-    if (!emojiState || !item) {
+  const applyEmojiPopover = (item?: EmojiOption) => {
+    const selectedItem = item ?? (emojiState ? emojiState.items[emojiState.activeIndex] : null)
+
+    if (!emojiState || !selectedItem) {
       return false
     }
 
@@ -2231,8 +2233,8 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       view,
       emojiState.from,
       emojiState.to,
-      item.emoji,
-      emojiState.from + item.emoji.length
+      selectedItem.emoji,
+      emojiState.from + selectedItem.emoji.length
     )
     closeEmojiPopover()
     view.focus()
@@ -2642,7 +2644,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
         closeEmojiPopover()
       } else {
         const items = searchEmojiOptions(emojiTrigger.query)
-        const activeAlias = emojiState?.items[emojiState.activeIndex]?.aliases[0]
+        const activeAlias = emojiState ? emojiState.items[emojiState.activeIndex]?.aliases[0] : null
         const activeIndex = activeAlias
           ? Math.max(
               0,
@@ -2698,7 +2700,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       hide(quickInsertMenu)
     }
 
-    if (activeBlock && selection.empty) {
+    if (activeBlock && selection.empty && !emojiState) {
       blockMenu.replaceChildren(
         ...blockMenuCommands
           .filter((command) => ['duplicate-block', 'new-paragraph', 'delete-block'].includes(command))

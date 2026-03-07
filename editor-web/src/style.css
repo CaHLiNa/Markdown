@@ -99,6 +99,67 @@ body {
   max-width: min(360px, calc(100% - 24px));
 }
 
+.cm-emoji-popover {
+  min-width: 248px;
+  max-width: min(300px, calc(100% - 24px));
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.cm-emoji-picker-hint {
+  color: var(--editor-muted);
+  font: 600 11px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cm-emoji-picker-list {
+  display: grid;
+  gap: 0.3rem;
+  width: 100%;
+}
+
+.cm-emoji-picker-item {
+  display: grid;
+  grid-template-columns: 1.4rem minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--editor-heading);
+  padding: 0.5rem 0.58rem;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+.cm-emoji-picker-item:hover,
+.cm-emoji-picker-item.is-active {
+  border-color: color-mix(in srgb, var(--editor-quote) 20%, transparent);
+  background: var(--editor-selection);
+  transform: translateY(-1px);
+}
+
+.cm-emoji-picker-symbol {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.cm-emoji-picker-alias {
+  font: 600 12px/1.1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+}
+
+.cm-emoji-picker-description {
+  min-width: 0;
+  color: var(--editor-muted);
+  font: 500 11px/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+}
+
 .cm-floating-form {
   display: grid;
   gap: 0.55rem;
