@@ -24,22 +24,26 @@ enum EditorWebViewControllerError: LocalizedError {
 
 struct EditorWebView: NSViewRepresentable {
     static let contentChangedMessageName = "editorContentChanged"
+    static let imageAssetRequestMessageName = "editorImageAssetRequest"
 
     @Binding var markdown: String
     let controller: Controller
     var presentation: Presentation
     var onContentChanged: ((String) -> Void)?
+    var onImageAssetRequest: ((ImageAssetRequest, @escaping (Result<String, Error>) -> Void) -> Void)?
 
     init(
         markdown: Binding<String>,
         controller: Controller,
         presentation: Presentation = .default,
-        onContentChanged: ((String) -> Void)? = nil
+        onContentChanged: ((String) -> Void)? = nil,
+        onImageAssetRequest: ((ImageAssetRequest, @escaping (Result<String, Error>) -> Void) -> Void)? = nil
     ) {
         _markdown = markdown
         self.controller = controller
         self.presentation = presentation
         self.onContentChanged = onContentChanged
+        self.onImageAssetRequest = onImageAssetRequest
     }
 
     func makeCoordinator() -> Coordinator {
@@ -53,6 +57,7 @@ struct EditorWebView: NSViewRepresentable {
             configuration.writingToolsBehavior = .none
         }
         configuration.userContentController.add(context.coordinator, name: Self.contentChangedMessageName)
+        configuration.userContentController.add(context.coordinator, name: Self.imageAssetRequestMessageName)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -72,6 +77,7 @@ struct EditorWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: contentChangedMessageName)
+        nsView.configuration.userContentController.removeScriptMessageHandler(forName: imageAssetRequestMessageName)
         nsView.navigationDelegate = nil
         coordinator.parent.controller.detach(webView: nsView)
         nsView.stopLoading()
@@ -114,6 +120,12 @@ struct EditorWebView: NSViewRepresentable {
         var isTypewriterModeEnabled: Bool
 
         static let `default` = Presentation(theme: "light", isTypewriterModeEnabled: false)
+    }
+
+    struct ImageAssetRequest {
+        let filename: String
+        let mimeType: String
+        let data: Data
     }
 
     @MainActor
@@ -347,20 +359,90 @@ struct EditorWebView: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            guard
+            if
                 message.name == EditorWebView.contentChangedMessageName,
                 let content = message.body as? String
-            else {
+            {
+                lastSyncedMarkdown = content
+
+                if parent.markdown != content {
+                    parent.markdown = content
+                }
+
+                parent.onContentChanged?(content)
                 return
             }
 
-            lastSyncedMarkdown = content
+            if message.name == EditorWebView.imageAssetRequestMessageName {
+                handleImageAssetRequest(message)
+            }
+        }
 
-            if parent.markdown != content {
-                parent.markdown = content
+        private func handleImageAssetRequest(_ message: WKScriptMessage) {
+            guard
+                let body = message.body as? [String: Any],
+                let requestID = body["requestID"] as? String,
+                let filename = body["filename"] as? String,
+                let mimeType = body["mimeType"] as? String,
+                let base64Data = body["base64Data"] as? String,
+                let data = Data(base64Encoded: base64Data)
+            else {
+                resolveImageAssetRequest(
+                    id: (message.body as? [String: Any])?["requestID"] as? String ?? "",
+                    result: .failure(
+                        NSError(
+                            domain: "Markdown",
+                            code: 21,
+                            userInfo: [NSLocalizedDescriptionKey: "图片数据无效。"]
+                        )
+                    )
+                )
+                return
             }
 
-            parent.onContentChanged?(content)
+            guard let onImageAssetRequest = parent.onImageAssetRequest else {
+                resolveImageAssetRequest(
+                    id: requestID,
+                    result: .failure(
+                        NSError(
+                            domain: "Markdown",
+                            code: 22,
+                            userInfo: [NSLocalizedDescriptionKey: "当前无法处理图片资源请求。"]
+                        )
+                    )
+                )
+                return
+            }
+
+            onImageAssetRequest(
+                ImageAssetRequest(filename: filename, mimeType: mimeType, data: data)
+            ) { [weak self] result in
+                self?.resolveImageAssetRequest(id: requestID, result: result)
+            }
+        }
+
+        private func resolveImageAssetRequest(id: String, result: Result<String, Error>) {
+            let requestLiteral = EditorWebView.javaScriptStringLiteral(for: id)
+
+            let script: String
+            switch result {
+            case .success(let relativePath):
+                let pathLiteral = EditorWebView.javaScriptStringLiteral(for: relativePath)
+                script = """
+                if (typeof window.__resolveEditorAssetRequest === 'function') {
+                    window.__resolveEditorAssetRequest(\(requestLiteral), { path: \(pathLiteral) });
+                }
+                """
+            case .failure(let error):
+                let errorLiteral = EditorWebView.javaScriptStringLiteral(for: error.localizedDescription)
+                script = """
+                if (typeof window.__resolveEditorAssetRequest === 'function') {
+                    window.__resolveEditorAssetRequest(\(requestLiteral), { error: \(errorLiteral) });
+                }
+                """
+            }
+
+            parent.controller.evaluateJavaScript(script)
         }
 
         func webView(

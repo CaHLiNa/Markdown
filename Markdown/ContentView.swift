@@ -576,7 +576,8 @@ struct ContentView: View {
             EditorWebView(
                 markdown: markdownBinding,
                 controller: documentController.editorController,
-                presentation: documentController.currentPresentation
+                presentation: documentController.currentPresentation,
+                onImageAssetRequest: documentController.persistImageAsset
             )
             .opacity(documentController.editorMode == .wysiwyg ? 1 : 0.0001)
             .allowsHitTesting(documentController.editorMode == .wysiwyg)

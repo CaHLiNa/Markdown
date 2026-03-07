@@ -30,6 +30,7 @@ type CreateMarkdownEditorOptions = {
   root: Root
   initialMarkdown?: string
   onMarkdownChange?: (markdown: string) => void
+  persistImageAsset?: (file: File) => Promise<string | null>
 }
 
 export type EditorCommand =
@@ -54,11 +55,24 @@ export type EditorCommand =
 
 type JSONNode = Record<string, unknown>
 
+type FileTransferItem = {
+  kind?: string
+  type?: string
+  getAsFile?: () => File | null
+}
+
+type FileTransferLike = {
+  items?: ArrayLike<FileTransferItem>
+  files?: ArrayLike<File>
+}
+
 export type MarkdownEditor = {
   loadMarkdown: (markdown: string) => void
   getMarkdown: () => string
   getRenderedHTML: () => string
   getDocumentJSON: () => JSONNode
+  getSelectionOffsets: () => { anchor: number; head: number }
+  pressKey: (key: string) => boolean
   runCommand: (command: EditorCommand) => boolean
   revealHeading: (title: string) => boolean
   setSelectionInBlock: (
@@ -94,8 +108,9 @@ class PreviewBlockWidget extends WidgetType {
     dom.innerHTML = this.renderedHTML
     dom.addEventListener('mousedown', (event) => {
       event.preventDefault()
+      const selectionOffset = resolvePreviewSelectionOffset(this.block, dom, event.target)
       view.dispatch({
-        selection: EditorSelection.single(this.block.from),
+        selection: EditorSelection.single(selectionOffset),
         scrollIntoView: true
       })
       view.focus()
@@ -113,6 +128,7 @@ const blockquotePrefixPattern = /^\s{0,3}>\s?/
 const listPrefixPattern = /^\s{0,3}(?:[-+*]\s+(?:\[[ xX]\]\s+)?|\d+\.\s+)/
 const fencedCodeDelimiterPattern = /^\s*(?:```|~~~).*$/
 const mathDelimiterPattern = /^\s*\$\$\s*$/
+const leadingWhitespacePattern = /^\s*/
 const syntaxTokenDecoration = Decoration.mark({ class: 'cm-markdown-syntax-token' })
 
 const selectionTouchesBlock = (from: number, to: number, block: MarkdownBlock) => {
@@ -175,6 +191,94 @@ const addSyntaxTokenDecoration = (
   )
 }
 
+type RelativeRange = {
+  from: number
+  to: number
+}
+
+const collectWrappedTokenRanges = (
+  lineText: string,
+  pattern: RegExp,
+  openingLength: number,
+  closingLength: number
+) => {
+  const ranges: RelativeRange[] = []
+
+  for (const match of lineText.matchAll(pattern)) {
+    const start = match.index
+
+    if (start == null) {
+      continue
+    }
+
+    const fullMatch = match[0]
+    if (fullMatch.length <= openingLength + closingLength) {
+      continue
+    }
+
+    ranges.push({ from: start, to: start + openingLength })
+    ranges.push({
+      from: start + fullMatch.length - closingLength,
+      to: start + fullMatch.length
+    })
+  }
+
+  return ranges
+}
+
+const collectLinkTokenRanges = (lineText: string) => {
+  const ranges: RelativeRange[] = []
+
+  for (const match of lineText.matchAll(/\[[^\]\n]+\]\([^)]+\)/g)) {
+    const start = match.index
+
+    if (start == null) {
+      continue
+    }
+
+    const fullMatch = match[0]
+    const delimiterOffset = fullMatch.indexOf('](')
+
+    if (delimiterOffset === -1) {
+      continue
+    }
+
+    ranges.push({ from: start, to: start + 1 })
+    ranges.push({
+      from: start + delimiterOffset,
+      to: start + delimiterOffset + 2
+    })
+    ranges.push({
+      from: start + fullMatch.length - 1,
+      to: start + fullMatch.length
+    })
+  }
+
+  return ranges
+}
+
+const addInlineSyntaxTokenDecorations = (
+  builder: RangeSetBuilder<Decoration>,
+  lineText: string,
+  lineFrom: number
+) => {
+  const ranges = [
+    ...collectWrappedTokenRanges(lineText, /\*\*.+?\*\*/g, 2, 2),
+    ...collectWrappedTokenRanges(lineText, /~~.+?~~/g, 2, 2),
+    ...collectWrappedTokenRanges(lineText, /`[^`\n]+`/g, 1, 1),
+    ...collectWrappedTokenRanges(lineText, /(?<!\*)\*(?!\*)[^*\n]+(?<!\*)\*(?!\*)/g, 1, 1),
+    ...collectLinkTokenRanges(lineText)
+  ].sort((left, right) => left.from - right.from || left.to - right.to)
+
+  for (const range of ranges) {
+    builder.add(
+      lineFrom + range.from,
+      lineFrom + range.to,
+      syntaxTokenDecoration
+    )
+  }
+}
+
 const buildSyntaxTokenDecorations = (state: EditorState): DecorationSet => {
   const blocks = getSelectedBlocks(state)
   const builder = new RangeSetBuilder<Decoration>()
@@ -186,16 +290,19 @@ const buildSyntaxTokenDecorations = (state: EditorState): DecorationSet => {
     switch (block.type) {
       case 'heading':
         addSyntaxTokenDecoration(builder, lines[0] ?? '', offset, headingPrefixPattern)
+        addInlineSyntaxTokenDecorations(builder, lines[0] ?? '', offset)
         break
       case 'blockquote':
         for (const line of lines) {
           addSyntaxTokenDecoration(builder, line, offset, blockquotePrefixPattern)
+          addInlineSyntaxTokenDecorations(builder, line, offset)
           offset += line.length + 1
         }
         break
       case 'list':
         for (const line of lines) {
           addSyntaxTokenDecoration(builder, line, offset, listPrefixPattern)
+          addInlineSyntaxTokenDecorations(builder, line, offset)
           offset += line.length + 1
         }
         break
@@ -222,6 +329,11 @@ const buildSyntaxTokenDecorations = (state: EditorState): DecorationSet => {
         break
       }
       case 'paragraph':
+        for (const line of lines) {
+          addInlineSyntaxTokenDecorations(builder, line, offset)
+          offset += line.length + 1
+        }
+        break
       case 'table':
       case 'hr':
         break
@@ -315,6 +427,77 @@ const resolveRoot = (root: Root) => {
 
 const getDocumentText = (view: EditorView) => view.state.doc.toString()
 
+const splitBlockLines = (block: MarkdownBlock) => {
+  const lines = block.text.split('\n')
+  let offset = block.from
+
+  return lines.map((line) => {
+    const lineFrom = offset
+    offset += line.length + 1
+    return { text: line, from: lineFrom }
+  })
+}
+
+const firstEditableOffsetForLine = (
+  type: MarkdownBlock['type'],
+  line: { text: string; from: number }
+) => {
+  switch (type) {
+    case 'heading':
+      return line.from + (line.text.match(headingPrefixPattern)?.[0].length ?? 0)
+    case 'blockquote':
+      return line.from + (line.text.match(blockquotePrefixPattern)?.[0].length ?? 0)
+    case 'list':
+      return line.from + (line.text.match(listPrefixPattern)?.[0].length ?? 0)
+    case 'code':
+    case 'math':
+    case 'paragraph':
+    case 'table':
+    case 'hr':
+      return line.from
+  }
+}
+
+const resolvePreviewSelectionOffset = (
+  block: MarkdownBlock,
+  previewRoot: HTMLElement,
+  eventTarget: EventTarget | null
+) => {
+  const lineInfos = splitBlockLines(block)
+  const targetNode = eventTarget instanceof Node ? eventTarget : null
+  const targetElement =
+    targetNode instanceof Element ? targetNode : targetNode?.parentElement ?? null
+
+  switch (block.type) {
+    case 'heading':
+      return firstEditableOffsetForLine(block.type, lineInfos[0] ?? { text: '', from: block.from })
+    case 'blockquote':
+      return firstEditableOffsetForLine(block.type, lineInfos[0] ?? { text: '', from: block.from })
+    case 'list': {
+      const clickedListItem = targetElement?.closest('li')
+      const itemLines = lineInfos.filter((line) => listPrefixPattern.test(line.text))
+
+      if (!clickedListItem || itemLines.length === 0) {
+        return firstEditableOffsetForLine(block.type, lineInfos[0] ?? { text: '', from: block.from })
+      }
+
+      const listItems = Array.from(previewRoot.querySelectorAll('li'))
+      const itemIndex = listItems.indexOf(clickedListItem)
+      const selectedLine = itemLines[itemIndex] ?? itemLines[0]
+      return firstEditableOffsetForLine(block.type, selectedLine)
+    }
+    case 'code':
+    case 'math': {
+      const firstContentLine = lineInfos.length >= 3 ? lineInfos[1] : lineInfos[0]
+      return firstEditableOffsetForLine(block.type, firstContentLine ?? { text: '', from: block.from })
+    }
+    case 'paragraph':
+    case 'table':
+    case 'hr':
+      return firstEditableOffsetForLine(block.type, lineInfos[0] ?? { text: '', from: block.from })
+  }
+}
+
 const setSelectionInBlock = (
   view: EditorView,
   type: MarkdownBlock['type'],
@@ -390,6 +573,521 @@ const getSelectedLineRange = (view: EditorView) => {
   }
 }
 
+const taskListLinePattern = /^(\s{0,3})[-+*]\s+\[[ xX]\]\s+/
+const bulletListLinePattern = /^(\s{0,3})([-+*])\s+/
+const orderedListLinePattern = /^(\s{0,3})(\d+)\.\s+/
+
+const nextListPrefix = (lineText: string) => {
+  const taskMatch = lineText.match(taskListLinePattern)
+  if (taskMatch) {
+    return `${taskMatch[1]}- [ ] `
+  }
+
+  const orderedMatch = lineText.match(orderedListLinePattern)
+  if (orderedMatch) {
+    return `${orderedMatch[1]}${Number(orderedMatch[2]) + 1}. `
+  }
+
+  const bulletMatch = lineText.match(bulletListLinePattern)
+  if (bulletMatch) {
+    return `${bulletMatch[1]}${bulletMatch[2]} `
+  }
+
+  return null
+}
+
+const currentListPrefix = (lineText: string) => {
+  const taskMatch = lineText.match(taskListLinePattern)
+  if (taskMatch) {
+    return taskMatch[0]
+  }
+
+  const orderedMatch = lineText.match(orderedListLinePattern)
+  if (orderedMatch) {
+    return orderedMatch[0]
+  }
+
+  const bulletMatch = lineText.match(bulletListLinePattern)
+  if (bulletMatch) {
+    return bulletMatch[0]
+  }
+
+  return null
+}
+
+const renumberOrderedSiblingLines = (
+  lines: string[],
+  fromIndex: number,
+  indent: string,
+  startNumber: number
+) => {
+  let nextNumber = startNumber
+
+  for (let index = fromIndex; index < lines.length; index += 1) {
+    const match = lines[index].match(orderedListLinePattern)
+
+    if (!match || match[1] !== indent) {
+      continue
+    }
+
+    lines[index] = `${indent}${nextNumber}. ${lines[index].slice(match[0].length)}`
+    nextNumber += 1
+  }
+}
+
+const normalizeOrderedListLines = (lines: string[]) => {
+  const counters = new Map<number, number>()
+
+  return lines.map((line) => {
+    const match = line.match(orderedListLinePattern)
+
+    if (!match) {
+      return line
+    }
+
+    const indentLength = match[1].length
+
+    Array.from(counters.keys()).forEach((depth) => {
+      if (depth > indentLength) {
+        counters.delete(depth)
+      }
+    })
+
+    const nextNumber = (counters.get(indentLength) ?? 0) + 1
+    counters.set(indentLength, nextNumber)
+
+    return `${match[1]}${nextNumber}. ${line.slice(match[0].length)}`
+  })
+}
+
+const removeListLineFromBlock = (block: MarkdownBlock, line: { text: string; from: number }) => {
+  const blockLines = block.text.split('\n')
+  const lineInfos = splitBlockLines(block)
+  const lineIndex = lineInfos.findIndex((info) => info.from === line.from)
+
+  if (lineIndex === -1) {
+    return null
+  }
+
+  const nextTextLines = [...blockLines]
+  nextTextLines.splice(lineIndex, 1)
+
+  // Removing the last list item should still leave the caret on a blank line
+  // so the user can continue typing outside the list.
+  if (lineIndex === blockLines.length - 1 && nextTextLines.length > 0) {
+    nextTextLines.push('')
+  }
+
+  return { nextTextLines, lineIndex }
+}
+
+const replaceListBlockLines = (
+  view: EditorView,
+  block: MarkdownBlock,
+  nextTextLines: string[],
+  lineIndex: number,
+  lineSelectionOffset = 0
+) => {
+  const normalizedLines = normalizeOrderedListLines(nextTextLines)
+  const nextText = normalizedLines.join('\n')
+  const selectionOffset =
+    normalizedLines
+    .slice(0, lineIndex)
+    .reduce((sum, text) => sum + text.length + 1, 0) + lineSelectionOffset
+
+  replaceRange(
+    view,
+    block.from,
+    block.to,
+    nextText,
+    Math.min(block.from + selectionOffset, block.from + nextText.length)
+  )
+  return true
+}
+
+const removeOrderedListLineAndRenumber = (
+  view: EditorView,
+  block: MarkdownBlock,
+  line: { text: string; from: number }
+) => {
+  const removedMatch = line.text.match(orderedListLinePattern)
+
+  if (!removedMatch) {
+    return false
+  }
+
+  const removal = removeListLineFromBlock(block, line)
+
+  if (!removal) {
+    return false
+  }
+
+  const { nextTextLines, lineIndex } = removal
+  let startNumber = Number(removedMatch[2])
+
+  for (let index = lineIndex - 1; index >= 0; index -= 1) {
+    const previousMatch = nextTextLines[index].match(orderedListLinePattern)
+
+    if (!previousMatch || previousMatch[1] !== removedMatch[1]) {
+      continue
+    }
+
+    startNumber = Number(previousMatch[2]) + 1
+    break
+  }
+
+  renumberOrderedSiblingLines(nextTextLines, lineIndex, removedMatch[1], startNumber)
+  return replaceListBlockLines(view, block, nextTextLines, lineIndex)
+}
+
+const handleListEnter = (view: EditorView) => {
+  const selection = view.state.selection.main
+
+  if (!selection.empty) {
+    return false
+  }
+
+  const block = getActiveBlock(view)
+  if (!block || block.type !== 'list') {
+    return false
+  }
+
+  const line = view.state.doc.lineAt(selection.from)
+  const nextPrefix = nextListPrefix(line.text)
+  const activePrefix = currentListPrefix(line.text)
+  if (!nextPrefix || !activePrefix) {
+    return false
+  }
+
+  const lineContent = line.text.slice(activePrefix.length)
+  const orderedMatch = line.text.match(orderedListLinePattern)
+
+  if (lineContent.trim().length === 0) {
+    if (orderedMatch) {
+      return removeOrderedListLineAndRenumber(view, block, line)
+    }
+
+    const removal = removeListLineFromBlock(block, line)
+    if (!removal) {
+      return false
+    }
+
+    return replaceListBlockLines(view, block, removal.nextTextLines, removal.lineIndex)
+  }
+
+  if (orderedMatch && block.type === 'list') {
+    const blockLines = block.text.split('\n')
+    const lineInfos = splitBlockLines(block)
+    const lineIndex = lineInfos.findIndex((info) => info.from === line.from)
+
+    if (lineIndex !== -1) {
+      const nextTextLines = [...blockLines]
+      nextTextLines.splice(lineIndex + 1, 0, nextPrefix)
+
+      let nextNumber = Number(orderedMatch[2]) + 2
+      const indent = orderedMatch[1]
+      renumberOrderedSiblingLines(nextTextLines, lineIndex + 2, indent, nextNumber)
+
+      const nextText = nextTextLines.join('\n')
+      const selectionOffset =
+        nextTextLines
+          .slice(0, lineIndex + 1)
+          .reduce((sum, text) => sum + text.length + 1, 0) +
+        nextPrefix.length
+
+      replaceRange(view, block.from, block.to, nextText, block.from + selectionOffset)
+      return true
+    }
+  }
+
+  replaceRange(
+    view,
+    selection.from,
+    selection.to,
+    `\n${nextPrefix}`,
+    selection.from + nextPrefix.length + 1
+  )
+  return true
+}
+
+const handleListBackspace = (view: EditorView) => {
+  const selection = view.state.selection.main
+
+  if (!selection.empty) {
+    return false
+  }
+
+  const block = getActiveBlock(view)
+  if (!block || block.type !== 'list') {
+    return false
+  }
+
+  const line = view.state.doc.lineAt(selection.from)
+  const prefix = currentListPrefix(line.text)
+  if (!prefix) {
+    return false
+  }
+
+  const lineIndent = line.text.match(leadingWhitespacePattern)?.[0] ?? ''
+  const contentStart = line.from + prefix.length
+
+  if (lineIndent.length > 0 && selection.from === contentStart) {
+    const removedCount = Math.min(codeIndentUnit.length, lineIndent.length)
+    replaceRange(
+      view,
+      line.from,
+      line.from + removedCount,
+      '',
+      Math.max(line.from, selection.from - removedCount)
+    )
+    return true
+  }
+
+  const lineContent = line.text.slice(prefix.length)
+  if (lineIndent.length === 0 && lineContent.trim().length !== 0 && selection.from === contentStart) {
+    replaceRange(view, line.from, line.from + prefix.length, "", line.from)
+    return true
+  }
+
+  if (lineContent.trim().length !== 0 || selection.from != line.to) {
+    return false
+  }
+
+  if (orderedListLinePattern.test(line.text)) {
+    return removeOrderedListLineAndRenumber(view, block, line)
+  }
+
+  const removal = removeListLineFromBlock(block, line)
+  if (!removal) {
+    return false
+  }
+
+  return replaceListBlockLines(view, block, removal.nextTextLines, removal.lineIndex)
+}
+
+const handleListIndent = (view: EditorView) => {
+  const selection = view.state.selection.main
+
+  if (!selection.empty) {
+    return false
+  }
+
+  const block = getActiveBlock(view)
+  if (!block || block.type !== 'list') {
+    return false
+  }
+
+  const line = view.state.doc.lineAt(selection.from)
+  if (!nextListPrefix(line.text) || line.from === block.from) {
+    return false
+  }
+
+  if (orderedListLinePattern.test(line.text)) {
+    const blockLines = block.text.split('\n')
+    const lineInfos = splitBlockLines(block)
+    const lineIndex = lineInfos.findIndex((info) => info.from === line.from)
+
+    if (lineIndex === -1) {
+      return false
+    }
+
+    const nextTextLines = [...blockLines]
+    nextTextLines[lineIndex] = `  ${nextTextLines[lineIndex]}`
+    const nextPrefixLength = currentListPrefix(normalizeOrderedListLines(nextTextLines)[lineIndex] ?? '')?.length ?? 0
+
+    return replaceListBlockLines(view, block, nextTextLines, lineIndex, nextPrefixLength)
+  }
+
+  replaceRange(view, line.from, line.from, '  ', selection.from + 2)
+  return true
+}
+
+const handleListOutdent = (view: EditorView) => {
+  const selection = view.state.selection.main
+
+  if (!selection.empty) {
+    return false
+  }
+
+  const block = getActiveBlock(view)
+  if (!block || block.type !== 'list') {
+    return false
+  }
+
+  const line = view.state.doc.lineAt(selection.from)
+  if (!line.text.startsWith('  ') || !nextListPrefix(line.text.trimStart())) {
+    return false
+  }
+
+  if (orderedListLinePattern.test(line.text.trimStart())) {
+    const blockLines = block.text.split('\n')
+    const lineInfos = splitBlockLines(block)
+    const lineIndex = lineInfos.findIndex((info) => info.from === line.from)
+
+    if (lineIndex === -1) {
+      return false
+    }
+
+    const nextTextLines = [...blockLines]
+    nextTextLines[lineIndex] = nextTextLines[lineIndex].slice(2)
+    const nextPrefixLength = currentListPrefix(normalizeOrderedListLines(nextTextLines)[lineIndex] ?? '')?.length ?? 0
+
+    return replaceListBlockLines(view, block, nextTextLines, lineIndex, nextPrefixLength)
+  }
+
+  replaceRange(view, line.from, line.from + 2, '', Math.max(line.from, selection.from - 2))
+  return true
+}
+
+const codeIndentUnit = '  '
+
+const handleCodeBlockEnter = (view: EditorView) => {
+  const selection = view.state.selection.main
+  const block = getActiveBlock(view)
+
+  if (!selection.empty || !block || block.type !== 'code') {
+    return false
+  }
+
+  const line = view.state.doc.lineAt(selection.from)
+
+  if (fencedCodeDelimiterPattern.test(line.text)) {
+    return false
+  }
+
+  const lineIndent = line.text.match(leadingWhitespacePattern)?.[0] ?? ''
+  const insertion = `\n${lineIndent}`
+  const nextSelectionOffset = selection.from + insertion.length
+
+  replaceRange(view, selection.from, selection.to, insertion, nextSelectionOffset)
+  return true
+}
+
+const handleCodeBlockBackspace = (view: EditorView) => {
+  const selection = view.state.selection.main
+  const block = getActiveBlock(view)
+
+  if (!selection.empty || !block || block.type !== 'code') {
+    return false
+  }
+
+  const line = view.state.doc.lineAt(selection.from)
+
+  if (fencedCodeDelimiterPattern.test(line.text)) {
+    return false
+  }
+
+  const lineIndent = line.text.match(leadingWhitespacePattern)?.[0] ?? ''
+  const offsetInLine = selection.from - line.from
+
+  if (lineIndent.length === 0 || offsetInLine === 0 || offsetInLine > lineIndent.length) {
+    return false
+  }
+
+  const indentBeforeCursor = line.text.slice(0, offsetInLine)
+  const removedCount = indentBeforeCursor.endsWith(codeIndentUnit) ? codeIndentUnit.length : 1
+
+  replaceRange(
+    view,
+    selection.from - removedCount,
+    selection.from,
+    '',
+    selection.from - removedCount
+  )
+  return true
+}
+
+const handleCodeBlockTab = (view: EditorView) => {
+  const selection = view.state.selection.main
+  const block = getActiveBlock(view)
+
+  if (!block || block.type !== 'code') {
+    return false
+  }
+
+  if (selection.empty) {
+    replaceRange(
+      view,
+      selection.from,
+      selection.to,
+      codeIndentUnit,
+      selection.from + codeIndentUnit.length
+    )
+    return true
+  }
+
+  return transformSelectedLines(view, (line) => `${codeIndentUnit}${line}`)
+}
+
+const outdentLine = (line: string) => {
+  if (line.startsWith(codeIndentUnit)) {
+    return line.slice(codeIndentUnit.length)
+  }
+
+  if (line.startsWith(' ')) {
+    return line.slice(1)
+  }
+
+  return line
+}
+
+const handleCodeBlockShiftTab = (view: EditorView) => {
+  const selection = view.state.selection.main
+  const block = getActiveBlock(view)
+
+  if (!block || block.type !== 'code') {
+    return false
+  }
+
+  if (selection.empty) {
+    const line = view.state.doc.lineAt(selection.from)
+    const nextLine = outdentLine(line.text)
+
+    if (nextLine == line.text) {
+      return false
+    }
+
+    const removedCount = line.text.length - nextLine.length
+    replaceRange(
+      view,
+      line.from,
+      line.to,
+      nextLine,
+      Math.max(line.from, selection.from - removedCount)
+    )
+    return true
+  }
+
+  return transformSelectedLines(view, outdentLine)
+}
+
+const runEditorKey = (view: EditorView, key: string) => {
+  switch (key) {
+    case 'Enter':
+      if (handleCodeBlockEnter(view)) {
+        return true
+      }
+      return handleListEnter(view)
+    case 'Backspace':
+      if (handleCodeBlockBackspace(view)) {
+        return true
+      }
+      return handleListBackspace(view)
+    case 'Tab':
+      if (handleCodeBlockTab(view)) {
+        return true
+      }
+      return handleListIndent(view)
+    case 'Shift-Tab':
+      if (handleCodeBlockShiftTab(view)) {
+        return true
+      }
+      return handleListOutdent(view)
+    default:
+      return false
+  }
+}
+
 const transformSelectedLines = (
   view: EditorView,
   transform: (line: string, index: number) => string
@@ -407,6 +1105,71 @@ const transformSelectedLines = (
     .join('\n')
 
   replaceRange(view, range.from, range.to, nextText, range.from, range.from + nextText.length)
+  return true
+}
+
+const imageFilenamePattern = /\.(apng|avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i
+
+const isImageFile = (file: File) => {
+  return file.type.startsWith('image/') || imageFilenamePattern.test(file.name)
+}
+
+const firstImageFileFromTransfer = (transfer: FileTransferLike | null | undefined): File | null => {
+  const items = Array.from(transfer?.items ?? [])
+
+  for (const item of items) {
+    if (item.kind !== 'file') {
+      continue
+    }
+
+    const file = item.getAsFile?.()
+
+    if (file && isImageFile(file)) {
+      return file
+    }
+  }
+
+  const files = Array.from(transfer?.files ?? [])
+  return files.find(isImageFile) ?? null
+}
+
+const imageAltText = (file: File) => {
+  const baseName = file.name.replace(/\.[^.]+$/, '').trim()
+  return baseName.length > 0 ? baseName : '图片'
+}
+
+const insertImageMarkdown = (view: EditorView, file: File, relativePath: string) => {
+  const selection = view.state.selection.main
+  const currentText = getDocumentText(view)
+  const previousCharacter =
+    selection.from > 0 ? currentText.slice(selection.from - 1, selection.from) : ''
+  const nextCharacter =
+    selection.to < currentText.length ? currentText.slice(selection.to, selection.to + 1) : ''
+  const imageMarkdown = `![${imageAltText(file)}](${relativePath})`
+  const leadingBreak = currentText.length > 0 && previousCharacter !== '\n' ? '\n\n' : ''
+  const trailingBreak = currentText.length > 0 && nextCharacter !== '\n' ? '\n\n' : ''
+  const replacement = `${leadingBreak}${imageMarkdown}${trailingBreak}`
+  const nextSelectionOffset = selection.from + leadingBreak.length + imageMarkdown.length
+
+  replaceRange(view, selection.from, selection.to, replacement, nextSelectionOffset)
+}
+
+const persistAndInsertImage = async (
+  view: EditorView,
+  file: File,
+  persistImageAsset?: (file: File) => Promise<string | null>
+) => {
+  if (!persistImageAsset) {
+    return false
+  }
+
+  const relativePath = await persistImageAsset(file)
+
+  if (!relativePath) {
+    return false
+  }
+
+  insertImageMarkdown(view, file, relativePath)
   return true
 }
 
@@ -529,7 +1292,8 @@ const runSourceCommand = (view: EditorView, command: EditorCommand) => {
 export const createMarkdownEditor = async ({
   root,
   initialMarkdown = '',
-  onMarkdownChange
+  onMarkdownChange,
+  persistImageAsset
 }: CreateMarkdownEditorOptions): Promise<MarkdownEditor> => {
   const rootElement = resolveRoot(root)
   let lastSyncedMarkdown = initialMarkdown
@@ -547,7 +1311,26 @@ export const createMarkdownEditor = async ({
         editorTheme,
         previewDecorationsField,
         syntaxTokenDecorationsField,
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        keymap.of([
+          {
+            key: 'Enter',
+            run: (view) => runEditorKey(view, 'Enter')
+          },
+          {
+            key: 'Backspace',
+            run: (view) => runEditorKey(view, 'Backspace')
+          },
+          {
+            key: 'Tab',
+            run: (view) => runEditorKey(view, 'Tab')
+          },
+          {
+            key: 'Shift-Tab',
+            run: (view) => runEditorKey(view, 'Shift-Tab')
+          },
+          ...defaultKeymap,
+          ...historyKeymap
+        ]),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) {
             return
@@ -571,6 +1354,53 @@ export const createMarkdownEditor = async ({
       ]
     })
   })
+
+  const handlePaste = (event: Event) => {
+    const imageFile = firstImageFileFromTransfer(
+      (event as Event & { clipboardData?: FileTransferLike }).clipboardData
+    )
+
+    if (!imageFile) {
+      return
+    }
+
+    event.preventDefault()
+    void persistAndInsertImage(view, imageFile, persistImageAsset).catch((error: unknown) => {
+      console.error('[editor-web] 图片粘贴失败', error)
+    })
+  }
+
+  const handleDrop = (event: Event) => {
+    const imageFile = firstImageFileFromTransfer(
+      (event as Event & { dataTransfer?: FileTransferLike }).dataTransfer
+    )
+
+    if (!imageFile) {
+      return
+    }
+
+    event.preventDefault()
+    view.focus()
+    void persistAndInsertImage(view, imageFile, persistImageAsset).catch((error: unknown) => {
+      console.error('[editor-web] 图片拖拽插入失败', error)
+    })
+  }
+
+  const handleDragOver = (event: Event) => {
+    const imageFile = firstImageFileFromTransfer(
+      (event as Event & { dataTransfer?: FileTransferLike }).dataTransfer
+    )
+
+    if (!imageFile) {
+      return
+    }
+
+    event.preventDefault()
+  }
+
+  view.dom.addEventListener('paste', handlePaste)
+  view.dom.addEventListener('drop', handleDrop)
+  view.dom.addEventListener('dragover', handleDragOver)
 
   return {
     loadMarkdown(markdownText: string) {
@@ -596,6 +1426,17 @@ export const createMarkdownEditor = async ({
         text: getDocumentText(view),
         blocks: extractMarkdownBlocks(getDocumentText(view))
       }
+    },
+
+    getSelectionOffsets() {
+      return {
+        anchor: view.state.selection.main.anchor,
+        head: view.state.selection.main.head
+      }
+    },
+
+    pressKey(key: string) {
+      return runEditorKey(view, key)
     },
 
     runCommand(command: EditorCommand) {
@@ -627,6 +1468,9 @@ export const createMarkdownEditor = async ({
     },
 
     async destroy() {
+      view.dom.removeEventListener('paste', handlePaste)
+      view.dom.removeEventListener('drop', handleDrop)
+      view.dom.removeEventListener('dragover', handleDragOver)
       view.destroy()
     }
   }

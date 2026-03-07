@@ -1,7 +1,11 @@
 import './style.css'
 import 'katex/dist/katex.min.css'
 
-import { installNativeBridge, postMarkdownToNative } from './bridge'
+import {
+  installNativeBridge,
+  persistImageAssetInNative,
+  postMarkdownToNative
+} from './bridge'
 import {
   createMarkdownEditor,
   type EditorCommand,
@@ -103,6 +107,7 @@ const bootEditor = async () => {
   editor = await createMarkdownEditor({
     root: app,
     initialMarkdown: pendingMarkdown,
+    persistImageAsset: persistImageAssetInNative,
     onMarkdownChange(markdown) {
       pendingMarkdown = markdown
       postMarkdownToNative(markdown)

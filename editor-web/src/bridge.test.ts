@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { installNativeBridge, postMarkdownToNative } from './bridge'
+import {
+  installNativeBridge,
+  persistImageAssetInNative,
+  postMarkdownToNative
+} from './bridge'
 
 describe('native bridge', () => {
   it('posts markdown updates to the WKWebView bridge when available', () => {
@@ -41,5 +45,66 @@ describe('native bridge', () => {
 
     expect(runCommand).toHaveBeenNthCalledWith(1, 'bold')
     expect(runCommand).toHaveBeenNthCalledWith(2, '')
+  })
+
+  it('posts image persistence requests to native and resolves the returned relative path', async () => {
+    const postMessage = vi.fn()
+
+    window.webkit = {
+      messageHandlers: {
+        editorImageAssetRequest: {
+          postMessage
+        }
+      }
+    }
+
+    const promise = persistImageAssetInNative(
+      new File(['image'], 'chart.png', { type: 'image/png' })
+    )
+
+    expect(postMessage).toHaveBeenCalledTimes(1)
+
+    const payload = postMessage.mock.calls[0]?.[0] as {
+      requestID: string
+      filename: string
+      mimeType: string
+      base64Data: string
+    }
+
+    expect(payload.filename).toBe('chart.png')
+    expect(payload.mimeType).toBe('image/png')
+    expect(payload.base64Data.length).toBeGreaterThan(0)
+
+    window.__resolveEditorAssetRequest?.(payload.requestID, {
+      path: 'note.assets/chart.png'
+    })
+
+    await expect(promise).resolves.toBe('note.assets/chart.png')
+  })
+
+  it('rejects image persistence requests when native responds with an error', async () => {
+    const postMessage = vi.fn()
+
+    window.webkit = {
+      messageHandlers: {
+        editorImageAssetRequest: {
+          postMessage
+        }
+      }
+    }
+
+    const promise = persistImageAssetInNative(
+      new File(['image'], 'chart.png', { type: 'image/png' })
+    )
+
+    const payload = postMessage.mock.calls[0]?.[0] as {
+      requestID: string
+    }
+
+    window.__resolveEditorAssetRequest?.(payload.requestID, {
+      error: '无法保存图片'
+    })
+
+    await expect(promise).rejects.toThrow('无法保存图片')
   })
 })
