@@ -1517,6 +1517,21 @@ const insertImageMarkdown = (view: EditorView, file: File, relativePath: string)
   replaceRange(view, selection.from, selection.to, replacement, nextSelectionOffset)
 }
 
+const applyImageAtSelection = (
+  view: EditorView,
+  file: File,
+  relativePath: string
+) => {
+  const activeBlock = getActiveBlock(view)
+
+  if (activeBlock && parseStandaloneImageBlock(activeBlock)) {
+    return replaceStandaloneImageBlock(view, activeBlock, file, relativePath)
+  }
+
+  insertImageMarkdown(view, file, relativePath)
+  return true
+}
+
 const persistAndInsertImage = async (
   view: EditorView,
   file: File,
@@ -1532,8 +1547,7 @@ const persistAndInsertImage = async (
     return false
   }
 
-  insertImageMarkdown(view, file, relativePath)
-  return true
+  return applyImageAtSelection(view, file, relativePath)
 }
 
 const wrapSelection = (

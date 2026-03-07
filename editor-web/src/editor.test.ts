@@ -380,6 +380,98 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
+  test('pasting an image file while editing a standalone image block replaces that image', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image paste replace test.')
+    }
+
+    const persistImageAsset = async (file: File) => {
+      expect(file.name).toBe('replacement.png')
+      return 'note.assets/replacement.png'
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '![示意图](note.assets/diagram.png)',
+      persistImageAsset
+    })
+
+    editor.setSelectionInParagraph(0, 4)
+
+    const imageFile = new File(['png'], 'replacement.png', { type: 'image/png' })
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true }) as Event & {
+      clipboardData?: {
+        items: Array<{ kind: string; type: string; getAsFile: () => File | null }>
+      }
+    }
+
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: {
+        items: [
+          {
+            kind: 'file',
+            type: imageFile.type,
+            getAsFile: () => imageFile
+          }
+        ]
+      }
+    })
+
+    root.querySelector('.cm-editor')?.dispatchEvent(pasteEvent)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(editor.getMarkdown()).toBe('![示意图](note.assets/replacement.png)')
+
+    await editor.destroy()
+  })
+
+  test('dropping an image file while editing a standalone image block replaces that image', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for image source drop replace test.')
+    }
+
+    const persistImageAsset = async (file: File) => {
+      expect(file.name).toBe('drop-source-replace.png')
+      return 'note.assets/drop-source-replace.png'
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '![示意图](note.assets/diagram.png)',
+      persistImageAsset
+    })
+
+    editor.setSelectionInParagraph(0, 4)
+
+    const imageFile = new File(['png'], 'drop-source-replace.png', { type: 'image/png' })
+    const dropEvent = new Event('drop', { bubbles: true, cancelable: true }) as Event & {
+      dataTransfer?: {
+        files: File[]
+      }
+    }
+
+    Object.defineProperty(dropEvent, 'dataTransfer', {
+      value: {
+        files: [imageFile]
+      }
+    })
+
+    root.querySelector('.cm-editor')?.dispatchEvent(dropEvent)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(editor.getMarkdown()).toBe('![示意图](note.assets/drop-source-replace.png)')
+
+    await editor.destroy()
+  })
+
   test('backspace removes a standalone image block when the caret is at the block start', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 
