@@ -127,6 +127,11 @@ private struct EditorFileCommands: Commands {
                 }
             }
 
+            Button("快速打开...") {
+                documentController.showQuickOpen()
+            }
+            .keyboardShortcut("p", modifiers: [.command])
+
             Button("关闭标签页") {
                 documentController.closeCurrentTab()
             }
@@ -161,7 +166,7 @@ private struct EditorFileCommands: Commands {
             Button("打印") {
                 documentController.printDocument()
             }
-            .keyboardShortcut("p", modifiers: [.command])
+            .keyboardShortcut("p", modifiers: [.command, .option])
             .disabled(!documentController.canExportRenderedDocument)
         }
     }
@@ -173,6 +178,11 @@ private struct EditorEditCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
+
+            Button("命令面板") {
+                documentController.showCommandPalette()
+            }
+            .keyboardShortcut("p", modifiers: [.command, .shift])
 
             Button("在文件夹中查找") {
                 documentController.showSearchPane()
@@ -297,9 +307,17 @@ private struct EditorFormatCommands: Commands {
             .keyboardShortcut("i", modifiers: [.command])
             .disabled(!documentController.canRunRichTextCommands)
 
-            Button("下划线") {}
+            Button("下划线") {
+                documentController.executeEditorCommand(.underline)
+            }
                 .keyboardShortcut("u", modifiers: [.command])
-                .disabled(true)
+                .disabled(!documentController.canRunRichTextCommands)
+
+            Button("高亮") {
+                documentController.executeEditorCommand(.highlight)
+            }
+            .keyboardShortcut("h", modifiers: [.command, .shift])
+            .disabled(!documentController.canRunRichTextCommands)
 
             Divider()
 
@@ -315,13 +333,28 @@ private struct EditorFormatCommands: Commands {
             .keyboardShortcut("d", modifiers: [.command])
             .disabled(!documentController.canRunRichTextCommands)
 
-            Button("超链接") {}
-                .keyboardShortcut("l", modifiers: [.command])
-                .disabled(true)
+            Button("行内公式") {
+                documentController.executeEditorCommand(.inlineMath)
+            }
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+            .disabled(!documentController.canRunRichTextCommands)
 
-            Button("图片") {}
+            Button("超链接") {
+                documentController.executeEditorCommand(.link)
+            }
+                .keyboardShortcut("l", modifiers: [.command])
+                .disabled(!documentController.canRunRichTextCommands)
+
+            Button("图片") {
+                documentController.executeEditorCommand(.image)
+            }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
-                .disabled(true)
+                .disabled(!documentController.canRunRichTextCommands)
+
+            Button("清除格式") {
+                documentController.executeEditorCommand(.clearFormat)
+            }
+            .disabled(!documentController.canRunRichTextCommands)
         }
     }
 }
@@ -432,6 +465,33 @@ private struct EditorSettingsView: View {
 
                 Toggle("默认显示标签栏", isOn: $documentController.isTabStripVisible)
                 Toggle("开启打字机模式", isOn: $documentController.isTypewriterModeEnabled)
+                Toggle("开启专注模式", isOn: $documentController.isFocusModeEnabled)
+                Toggle("隐藏快速插入提示", isOn: $documentController.hideQuickInsertHint)
+            }
+
+            Section("排版") {
+                TextField("正文字体", text: $documentController.editorFontFamily)
+                TextField("正文宽度", text: $documentController.editorPageWidth)
+
+                Stepper(value: $documentController.editorFontSize, in: 12...32, step: 1) {
+                    Text("正文字号 \(Int(documentController.editorFontSize))")
+                }
+
+                Stepper(value: $documentController.editorLineHeight, in: 1.2...2.4, step: 0.05) {
+                    Text("正文行高 \(documentController.editorLineHeight, specifier: "%.2f")")
+                }
+
+                TextField("代码字体", text: $documentController.codeFontFamily)
+
+                Stepper(value: $documentController.codeFontSize, in: 12...28, step: 1) {
+                    Text("代码字号 \(Int(documentController.codeFontSize))")
+                }
+            }
+
+            Section("自动配对") {
+                Toggle("括号自动配对", isOn: $documentController.autoPairBracket)
+                Toggle("Markdown 语法自动配对", isOn: $documentController.autoPairMarkdownSyntax)
+                Toggle("引号自动配对", isOn: $documentController.autoPairQuote)
             }
         }
         .formStyle(.grouped)

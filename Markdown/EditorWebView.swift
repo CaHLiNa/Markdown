@@ -117,9 +117,34 @@ struct EditorWebView: NSViewRepresentable {
 
     struct Presentation: Equatable {
         var theme: String
-        var isTypewriterModeEnabled: Bool
+        var focusMode: Bool
+        var typewriterMode: Bool
+        var fontFamily: String
+        var fontSize: Double
+        var lineHeight: Double
+        var pageWidth: String
+        var codeFontFamily: String
+        var codeFontSize: Double
+        var hideQuickInsertHint: Bool
+        var autoPairBracket: Bool
+        var autoPairMarkdownSyntax: Bool
+        var autoPairQuote: Bool
 
-        static let `default` = Presentation(theme: "light", isTypewriterModeEnabled: false)
+        static let `default` = Presentation(
+            theme: "light",
+            focusMode: false,
+            typewriterMode: false,
+            fontFamily: "\"Iowan Old Style\", \"Palatino Linotype\", \"PingFang SC\", \"SF Pro Text\", serif",
+            fontSize: 17,
+            lineHeight: 1.86,
+            pageWidth: "860px",
+            codeFontFamily: "\"SF Mono\", \"JetBrains Mono\", ui-monospace, monospace",
+            codeFontSize: 14,
+            hideQuickInsertHint: false,
+            autoPairBracket: true,
+            autoPairMarkdownSyntax: true,
+            autoPairQuote: true
+        )
     }
 
     struct ImageAssetRequest {
@@ -336,12 +361,34 @@ struct EditorWebView: NSViewRepresentable {
             lastSyncedPresentation = parent.presentation
 
             let theme = EditorWebView.javaScriptStringLiteral(for: parent.presentation.theme)
-            let isTypewriterModeEnabled = parent.presentation.isTypewriterModeEnabled ? "true" : "false"
+            let focusMode = parent.presentation.focusMode ? "true" : "false"
+            let typewriterMode = parent.presentation.typewriterMode ? "true" : "false"
+            let fontFamily = EditorWebView.javaScriptStringLiteral(for: parent.presentation.fontFamily)
+            let fontSize = String(parent.presentation.fontSize)
+            let lineHeight = String(parent.presentation.lineHeight)
+            let pageWidth = EditorWebView.javaScriptStringLiteral(for: parent.presentation.pageWidth)
+            let codeFontFamily = EditorWebView.javaScriptStringLiteral(for: parent.presentation.codeFontFamily)
+            let codeFontSize = String(parent.presentation.codeFontSize)
+            let hideQuickInsertHint = parent.presentation.hideQuickInsertHint ? "true" : "false"
+            let autoPairBracket = parent.presentation.autoPairBracket ? "true" : "false"
+            let autoPairMarkdownSyntax = parent.presentation.autoPairMarkdownSyntax ? "true" : "false"
+            let autoPairQuote = parent.presentation.autoPairQuote ? "true" : "false"
             let script = """
             if (typeof window.setEditorAppearance === 'function') {
                 window.setEditorAppearance({
                     theme: \(theme),
-                    typewriterMode: \(isTypewriterModeEnabled)
+                    focusMode: \(focusMode),
+                    typewriterMode: \(typewriterMode),
+                    fontFamily: \(fontFamily),
+                    fontSize: \(fontSize),
+                    lineHeight: \(lineHeight),
+                    pageWidth: \(pageWidth),
+                    codeFontFamily: \(codeFontFamily),
+                    codeFontSize: \(codeFontSize),
+                    hideQuickInsertHint: \(hideQuickInsertHint),
+                    autoPairBracket: \(autoPairBracket),
+                    autoPairMarkdownSyntax: \(autoPairMarkdownSyntax),
+                    autoPairQuote: \(autoPairQuote)
                 });
             }
             """

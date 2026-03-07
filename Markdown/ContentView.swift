@@ -72,6 +72,8 @@ struct ContentView: View {
                 chromeBar
                 contentArea
             }
+
+            overlayLayer
         }
         .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(preferredColorScheme)
@@ -108,6 +110,33 @@ struct ContentView: View {
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
+        }
+    }
+
+    @ViewBuilder
+    private var overlayLayer: some View {
+        if documentController.isCommandPalettePresented {
+            CommandOverlayBackdrop {
+                documentController.hideCommandPalette()
+            } content: {
+                CommandPaletteOverlay(
+                    query: $documentController.commandPaletteQuery,
+                    items: documentController.filteredCommandPaletteItems,
+                    palette: palette,
+                    onSelect: documentController.performCommandPaletteItem(_:)
+                )
+            }
+        } else if documentController.isQuickOpenPresented {
+            CommandOverlayBackdrop {
+                documentController.hideQuickOpen()
+            } content: {
+                QuickOpenOverlay(
+                    query: $documentController.quickOpenQuery,
+                    files: documentController.filteredQuickOpenFiles,
+                    palette: palette,
+                    onSelect: documentController.openQuickOpenFile(_:)
+                )
+            }
         }
     }
 
@@ -385,10 +414,13 @@ struct ContentView: View {
 
     private var searchPanel: some View {
         VStack(spacing: 0) {
-            searchField
-                .padding(.horizontal, 10)
-                .padding(.top, 10)
-                .padding(.bottom, 8)
+            VStack(spacing: 8) {
+                searchField
+                searchOptionsRow
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
 
             Rectangle()
                 .fill(palette.separator)
@@ -399,17 +431,17 @@ struct ContentView: View {
                     SidebarEmptyStateView(
                         icon: nil,
                         title: "未打开文件夹",
-                        subtitle: "先打开目录，再搜索文件。",
+                        subtitle: "先打开目录，再搜索内容。",
                         palette: palette
                     )
                 } else if documentController.workspaceSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     SidebarEmptyStateView(
                         icon: "magnifyingglass",
-                        title: "输入关键词搜索",
+                        title: "输入关键词搜索内容",
                         subtitle: nil,
                         palette: palette
                     )
-                } else if documentController.filteredWorkspaceTree.isEmpty {
+                } else if documentController.workspaceSearchResults.isEmpty {
                     SidebarEmptyStateView(
                         icon: "magnifyingglass",
                         title: "没有匹配结果",
@@ -418,15 +450,40 @@ struct ContentView: View {
                     )
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
-                        WorkspaceTreeView(
-                            nodes: documentController.filteredWorkspaceTree,
-                            depth: 0,
-                            selectedFileURL: documentController.currentFileURL,
-                            palette: palette,
-                            isFolderExpanded: documentController.isFolderExpanded(_:),
-                            onToggleFolder: documentController.toggleFolderExpansion(_:),
-                            onOpenFile: documentController.openWorkspaceFile(_:)
-                        )
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(documentController.workspaceSearchResults) { result in
+                                Button {
+                                    documentController.openWorkspaceSearchResult(result)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 8) {
+                                            Text(result.relativePath)
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundStyle(palette.primaryText)
+                                                .lineLimit(1)
+
+                                            Spacer(minLength: 0)
+
+                                            Text("第 \(result.lineNumber) 行")
+                                                .font(.system(size: 11, weight: .medium))
+                                                .foregroundStyle(palette.mutedText)
+                                        }
+
+                                        Text(result.lineText)
+                                            .font(.system(size: 12, weight: .regular))
+                                            .foregroundStyle(palette.secondaryText)
+                                            .lineLimit(2)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(palette.rowHover)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                         .padding(.horizontal, 6)
                         .padding(.vertical, 6)
                     }
@@ -487,7 +544,7 @@ struct ContentView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(palette.mutedText)
 
-            TextField("搜索文件", text: $documentController.workspaceSearchQuery)
+            TextField("搜索内容", text: $documentController.workspaceSearchQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(palette.primaryText)
@@ -513,6 +570,20 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(palette.controlBorder, lineWidth: 1)
         )
+    }
+
+    private var searchOptionsRow: some View {
+        HStack(spacing: 8) {
+            Toggle("区分大小写", isOn: $documentController.workspaceSearchCaseSensitive)
+                .toggleStyle(.button)
+
+            Toggle("正则", isOn: $documentController.workspaceSearchUseRegularExpression)
+                .toggleStyle(.button)
+
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 11, weight: .medium))
+        .tint(palette.accentText)
     }
 
     private var tabStrip: some View {
@@ -759,7 +830,162 @@ private struct EmptyEditorHintView: View {
     let palette: EditorPalette
 
     var body: some View {
-        
+        VStack(alignment: .leading, spacing: 8) {
+            Text("开始写作")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(palette.primaryText)
+
+            Text("输入内容，或在新行输入 @ 快速插入表格、代码块、任务列表等结构。")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(palette.secondaryText)
+                .frame(maxWidth: 320, alignment: .leading)
+        }
+    }
+}
+
+private struct CommandOverlayBackdrop<Content: View>: View {
+    let onDismiss: () -> Void
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.16)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onDismiss)
+
+            content
+        }
+    }
+}
+
+private struct CommandPaletteOverlay: View {
+    @Binding var query: String
+    let items: [EditorCommandPaletteItem]
+    let palette: EditorPalette
+    let onSelect: (EditorCommandPaletteItem) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("搜索命令", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, weight: .regular))
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.controlSurface)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(palette.controlBorder, lineWidth: 1)
+                )
+
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(items) { item in
+                        Button {
+                            onSelect(item)
+                        } label: {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.title)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(palette.primaryText)
+
+                                    Text(item.category)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(palette.mutedText)
+                                }
+
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(palette.rowHover)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(maxHeight: 320)
+        }
+        .padding(14)
+        .frame(width: 480)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(palette.panelSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(palette.controlBorder, lineWidth: 1)
+        )
+    }
+}
+
+private struct QuickOpenOverlay: View {
+    @Binding var query: String
+    let files: [EditorWorkspaceFile]
+    let palette: EditorPalette
+    let onSelect: (EditorWorkspaceFile) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("快速打开", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, weight: .regular))
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.controlSurface)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(palette.controlBorder, lineWidth: 1)
+                )
+
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(files.prefix(40)) { file in
+                        Button {
+                            onSelect(file)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(file.displayName)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(palette.primaryText)
+
+                                Text(file.relativePath)
+                                    .font(.system(size: 11, weight: .regular))
+                                    .foregroundStyle(palette.mutedText)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(palette.rowHover)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(maxHeight: 320)
+        }
+        .padding(14)
+        .frame(width: 520)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(palette.panelSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(palette.controlBorder, lineWidth: 1)
+        )
     }
 }
 

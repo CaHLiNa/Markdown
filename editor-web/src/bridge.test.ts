@@ -47,6 +47,35 @@ describe('native bridge', () => {
     expect(runCommand).toHaveBeenNthCalledWith(2, '')
   })
 
+  it('registers window.getEditorState and returns the provided editor snapshot', () => {
+    const getEditorState = vi.fn(() => ({
+      markdown: '# 标题',
+      activeBlock: {
+        type: 'heading',
+        text: '# 标题'
+      },
+      selection: {
+        anchor: 0,
+        head: 1
+      }
+    }))
+
+    installNativeBridge(() => undefined, () => false, getEditorState)
+
+    expect(window.getEditorState?.()).toEqual({
+      markdown: '# 标题',
+      activeBlock: {
+        type: 'heading',
+        text: '# 标题'
+      },
+      selection: {
+        anchor: 0,
+        head: 1
+      }
+    })
+    expect(getEditorState).toHaveBeenCalledTimes(1)
+  })
+
   it('posts image persistence requests to native and resolves the returned relative path', async () => {
     const postMessage = vi.fn()
 

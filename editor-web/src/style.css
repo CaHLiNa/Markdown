@@ -1,5 +1,10 @@
 :root {
   --editor-page-width: 860px;
+  --editor-font-family: "Iowan Old Style", "Palatino Linotype", "PingFang SC", "SF Pro Text", serif;
+  --editor-font-size: 17px;
+  --editor-line-height: 1.86;
+  --editor-code-font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+  --editor-code-font-size: 14px;
   --editor-text: #2e241b;
   --editor-muted: #796d60;
   --editor-heading: #17120d;
@@ -60,6 +65,54 @@ body {
   background: transparent;
 }
 
+.cm-floating-ui {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-width: min(420px, calc(100% - 24px));
+  padding: 0.35rem;
+  border: 1px solid var(--editor-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--editor-panel-strong) 94%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14);
+}
+
+.cm-floating-ui[hidden] {
+  display: none;
+}
+
+.cm-format-toolbar {
+  min-width: 260px;
+}
+
+.cm-quick-insert,
+.cm-block-menu {
+  min-width: 220px;
+}
+
+.cm-floating-command-button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--editor-heading);
+  padding: 0.42rem 0.78rem;
+  font: 500 12px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.cm-floating-command-button:hover {
+  background: var(--editor-selection);
+  transform: translateY(-1px);
+}
+
 :root[data-typewriter-mode='true'] .cm-content {
   padding-top: 24vh;
   padding-bottom: 36vh;
@@ -71,6 +124,22 @@ body {
   margin: 0;
   color: var(--editor-text);
   cursor: text;
+  transition:
+    opacity 140ms ease,
+    filter 140ms ease;
+}
+
+:root[data-focus-mode='true'] .cm-preview-block {
+  opacity: 0.34;
+  filter: saturate(0.75);
+}
+
+:root[data-focus-mode='true'] .cm-editor .cm-content .cm-line {
+  opacity: 0.6;
+}
+
+:root[data-focus-mode='true'] .cm-editor.cm-focused .cm-line {
+  opacity: 1;
 }
 
 .cm-preview-block > *:first-child {
@@ -132,7 +201,8 @@ body {
 }
 
 .cm-preview-block code {
-  font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+  font-family: var(--editor-code-font-family);
+  font-size: var(--editor-code-font-size);
 }
 
 .cm-preview-block p code,

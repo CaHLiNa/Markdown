@@ -12,7 +12,7 @@ enum EditorInterfaceStyle: Equatable {
     case dark
 }
 
-enum EditorAppearanceMode: String, CaseIterable, Identifiable {
+enum EditorAppearanceMode: String, CaseIterable, Identifiable, Codable {
     case followSystem = "跟随系统"
     case light = "浅色"
     case dark = "深色"
@@ -31,7 +31,7 @@ enum EditorAppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum EditorTheme: String, CaseIterable, Identifiable {
+enum EditorTheme: String, CaseIterable, Identifiable, Codable {
     case defaultTheme = "默认"
     case codexPaper = "codex-paper"
     case nightInk = "night-ink"

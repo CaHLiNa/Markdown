@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, test } from 'vitest'
 
 import { createMarkdownEditor } from './editor'
+import { defaultEditorPresentation } from './editor-presentation'
 
 beforeAll(() => {
   const rect = {
@@ -88,6 +89,130 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
+  test('supports the new inline and block editing commands', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for advanced command test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'hello world'
+    })
+
+    editor.setSelectionInParagraph(0, 0, 5)
+    expect(editor.runCommand('inline-math')).toBe(true)
+    expect(editor.getMarkdown()).toBe('$hello$ world')
+
+    editor.setSelectionInParagraph(0, 0, 7)
+    expect(editor.runCommand('highlight')).toBe(true)
+    expect(editor.getMarkdown()).toBe('==$hello$== world')
+
+    editor.loadMarkdown('')
+    expect(editor.runCommand('horizontal-rule')).toBe(true)
+    expect(editor.getMarkdown()).toBe('---')
+
+    editor.loadMarkdown('')
+    expect(editor.runCommand('front-matter')).toBe(true)
+    expect(editor.getMarkdown()).toBe('---\ntitle: 标题\ntags: []\n---')
+
+    await editor.destroy()
+  })
+
+  test('applies auto-pair behavior from presentation settings', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for auto-pair test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: ''
+    })
+
+    editor.setPresentation({
+      ...defaultEditorPresentation,
+      autoPairBracket: true,
+      autoPairMarkdownSyntax: true,
+      autoPairQuote: true
+    })
+
+    expect(editor.pressKey('(')).toBe(true)
+    expect(editor.getMarkdown()).toBe('()')
+    expect(editor.getSelectionOffsets()).toEqual({
+      anchor: 1,
+      head: 1
+    })
+
+    editor.loadMarkdown('')
+    editor.setPresentation({
+      ...defaultEditorPresentation,
+      autoPairBracket: false,
+      autoPairMarkdownSyntax: false,
+      autoPairQuote: false
+    })
+
+    expect(editor.pressKey('(')).toBe(false)
+    expect(editor.getMarkdown()).toBe('')
+
+    await editor.destroy()
+  })
+
+  test('upgrades and degrades headings in place', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for heading transform test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+    expect(editor.runCommand('upgrade-heading')).toBe(true)
+    expect(editor.getMarkdown()).toBe('## 标题')
+
+    expect(editor.runCommand('degrade-heading')).toBe(true)
+    expect(editor.getMarkdown()).toBe('# 标题')
+
+    await editor.destroy()
+  })
+
+  test('duplicates and deletes blocks without corrupting surrounding spacing', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for block command test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n正文\n\n尾段'
+    })
+
+    editor.setSelectionInParagraph(0, 0)
+    expect(editor.runCommand('duplicate-block')).toBe(true)
+    expect(editor.getMarkdown()).toBe('# 标题\n\n正文\n\n正文\n\n尾段')
+
+    editor.setSelectionInParagraph(1, 0)
+    expect(editor.runCommand('delete-block')).toBe(true)
+    expect(editor.getMarkdown()).toBe('# 标题\n\n正文\n\n尾段')
+
+    await editor.destroy()
+  })
+
   test('inserts a table template and exposes rendered HTML for the native layer', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 
@@ -109,6 +234,130 @@ describe('createMarkdownEditor', () => {
 
     expect(markdown).toContain('| 列 1 | 列 2 |')
     expect(renderedHTML).toContain('<table>')
+
+    await editor.destroy()
+  })
+
+  test('exposes an editor snapshot with markdown, active block and selection metadata', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for editor snapshot test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n正文'
+    })
+
+    editor.setSelectionInParagraph(0, 1, 2)
+
+    expect(editor.getEditorState()).toEqual({
+      markdown: '# 标题\n\n正文',
+      activeBlock: {
+        type: 'paragraph',
+        text: '正文',
+        from: 6,
+        to: 8
+      },
+      selection: {
+        anchor: 7,
+        head: 8
+      }
+    })
+
+    await editor.destroy()
+  })
+
+  test('shows a selection format toolbar and applies toolbar commands', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for format toolbar test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'hello world'
+    })
+
+    editor.setSelectionInParagraph(0, 0, 5)
+
+    const toolbar = root.querySelector<HTMLElement>('.cm-format-toolbar')
+    const highlightButton = root.querySelector<HTMLButtonElement>(
+      '[data-editor-command="highlight"]'
+    )
+
+    expect(toolbar).not.toBeNull()
+
+    highlightButton?.click()
+
+    expect(editor.getMarkdown()).toBe('==hello== world')
+
+    await editor.destroy()
+  })
+
+  test('shows a quick insert menu for @ triggers and inserts the selected structure', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for quick insert test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '@'
+    })
+
+    editor.setSelectionInParagraph(0, 1)
+
+    const quickInsert = root.querySelector<HTMLElement>('.cm-quick-insert')
+    const tableButton = root.querySelector<HTMLButtonElement>(
+      '.cm-quick-insert [data-editor-command="table"]'
+    )
+
+    expect(quickInsert).not.toBeNull()
+
+    tableButton?.click()
+
+    expect(editor.getMarkdown()).toContain('| 列 1 | 列 2 |')
+    expect(editor.getMarkdown()).not.toContain('@')
+
+    await editor.destroy()
+  })
+
+  test('shows a block menu for the active block and runs block actions from it', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for block menu test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n正文'
+    })
+
+    editor.setSelectionInParagraph(0, 0)
+
+    const blockMenu = root.querySelector<HTMLElement>('.cm-block-menu')
+    const duplicateButton = root.querySelector<HTMLButtonElement>(
+      '.cm-block-menu [data-editor-command="duplicate-block"]'
+    )
+
+    expect(blockMenu).not.toBeNull()
+
+    duplicateButton?.click()
+
+    expect(editor.getMarkdown()).toBe('# 标题\n\n正文\n\n正文')
 
     await editor.destroy()
   })

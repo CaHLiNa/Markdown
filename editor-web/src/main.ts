@@ -11,12 +11,12 @@ import {
   type EditorCommand,
   type MarkdownEditor
 } from './editor'
+import {
+  defaultEditorPresentation,
+  normalizeEditorPresentation,
+  type EditorPresentation
+} from './editor-presentation'
 import { renderMarkdownDocument } from './markdown-renderer'
-
-type PendingAppearance = {
-  theme: 'light' | 'dark' | 'sepia'
-  typewriterMode: boolean
-}
 
 const app = document.querySelector<HTMLDivElement>('#app')
 
@@ -26,35 +26,28 @@ if (!app) {
 
 let editor: MarkdownEditor | null = null
 let pendingMarkdown = ''
-let pendingAppearance: PendingAppearance = {
-  theme: 'light',
-  typewriterMode: false
-}
+let pendingAppearance: EditorPresentation = { ...defaultEditorPresentation }
 
 const normalizeMarkdown = (value: unknown) => {
   return typeof value === 'string' ? value : ''
 }
 
-const normalizeAppearance = (value: unknown): PendingAppearance => {
-  const appearance = (value ?? {}) as {
-    theme?: unknown
-    typewriterMode?: unknown
-  }
-
-  const theme = appearance.theme
-  const normalizedTheme =
-    theme === 'dark' || theme === 'sepia' || theme === 'light' ? theme : 'light'
-
-  return {
-    theme: normalizedTheme,
-    typewriterMode: appearance.typewriterMode === true
-  }
-}
-
-const applyAppearance = (appearance: PendingAppearance) => {
+const applyAppearance = (appearance: EditorPresentation) => {
   pendingAppearance = appearance
   document.documentElement.dataset.editorTheme = appearance.theme
+  document.documentElement.dataset.focusMode = appearance.focusMode ? 'true' : 'false'
   document.documentElement.dataset.typewriterMode = appearance.typewriterMode ? 'true' : 'false'
+  document.documentElement.style.setProperty('--editor-font-family', appearance.fontFamily)
+  document.documentElement.style.setProperty('--editor-font-size', `${appearance.fontSize}px`)
+  document.documentElement.style.setProperty('--editor-line-height', `${appearance.lineHeight}`)
+  document.documentElement.style.setProperty('--editor-page-width', appearance.pageWidth)
+  document.documentElement.style.setProperty('--editor-code-font-family', appearance.codeFontFamily)
+  document.documentElement.style.setProperty('--editor-code-font-size', `${appearance.codeFontSize}px`)
+  document.documentElement.dataset.hideQuickInsertHint = appearance.hideQuickInsertHint ? 'true' : 'false'
+  document.documentElement.dataset.autoPairBracket = appearance.autoPairBracket ? 'true' : 'false'
+  document.documentElement.dataset.autoPairMarkdownSyntax =
+    appearance.autoPairMarkdownSyntax ? 'true' : 'false'
+  document.documentElement.dataset.autoPairQuote = appearance.autoPairQuote ? 'true' : 'false'
 }
 
 const setMarkdownFromNative = (markdown: string) => {
@@ -68,7 +61,11 @@ const setMarkdownFromNative = (markdown: string) => {
 }
 
 const setAppearanceFromNative = (appearance: unknown) => {
-  applyAppearance(normalizeAppearance(appearance))
+  applyAppearance(normalizeEditorPresentation(appearance))
+
+  if (editor) {
+    editor.setPresentation(pendingAppearance)
+  }
 }
 
 const runCommandFromNative = (command: string) => {
@@ -97,7 +94,22 @@ const getRenderedHTML = () => {
   return renderMarkdownDocument(pendingMarkdown)
 }
 
-installNativeBridge(setMarkdownFromNative, runCommandFromNative)
+const getEditorState = () => {
+  if (editor) {
+    return editor.getEditorState()
+  }
+
+  return {
+    markdown: pendingMarkdown,
+    activeBlock: null,
+    selection: {
+      anchor: 0,
+      head: 0
+    }
+  }
+}
+
+installNativeBridge(setMarkdownFromNative, runCommandFromNative, getEditorState)
 window.setEditorAppearance = setAppearanceFromNative
 window.revealHeading = revealHeading
 window.getRenderedHTML = getRenderedHTML
@@ -118,6 +130,7 @@ const bootEditor = async () => {
     editor.loadMarkdown(pendingMarkdown)
   }
 
+  editor.setPresentation(pendingAppearance)
   applyAppearance(pendingAppearance)
 }
 

@@ -18,10 +18,9 @@ type EditorImageAssetResponse = {
   error?: string
 }
 
-type EditorAppearance = {
-  theme?: string
-  typewriterMode?: boolean
-}
+type EditorAppearance = Partial<EditorPresentation>
+
+type EditorStateProvider = () => unknown
 
 declare global {
   interface Window {
@@ -31,6 +30,7 @@ declare global {
     ) => void
     loadMarkdown?: (text: unknown) => void
     runEditorCommand?: (command: unknown) => boolean
+    getEditorState?: () => unknown
     revealHeading?: (text: unknown) => void
     getRenderedHTML?: () => string
     setEditorAppearance?: (appearance: EditorAppearance) => void
@@ -136,7 +136,8 @@ export const persistImageAssetInNative = async (file: File): Promise<string | nu
 
 export const installNativeBridge = (
   receiveMarkdown: (text: string) => void,
-  runEditorCommand: (command: string) => boolean = () => false
+  runEditorCommand: (command: string) => boolean = () => false,
+  getEditorState: EditorStateProvider = () => undefined
 ) => {
   installImageAssetResolver()
 
@@ -147,4 +148,9 @@ export const installNativeBridge = (
   window.runEditorCommand = (command: unknown) => {
     return runEditorCommand(normalizeCommand(command))
   }
+
+  window.getEditorState = () => {
+    return getEditorState()
+  }
 }
+import type { EditorPresentation } from './editor-presentation'

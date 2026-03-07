@@ -18,14 +18,14 @@ enum EditorSidebarPane: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-enum EditorMode: String, CaseIterable, Identifiable {
+enum EditorMode: String, CaseIterable, Identifiable, Codable {
     case wysiwyg = "所见即所得"
     case sourceView = "源码视图"
 
     var id: String { rawValue }
 }
 
-enum EditorCommand: String {
+enum EditorCommand: String, CaseIterable {
     case paragraph = "paragraph"
     case heading1 = "heading-1"
     case heading2 = "heading-2"
@@ -33,17 +33,30 @@ enum EditorCommand: String {
     case heading4 = "heading-4"
     case heading5 = "heading-5"
     case heading6 = "heading-6"
+    case upgradeHeading = "upgrade-heading"
+    case degradeHeading = "degrade-heading"
     case blockquote = "blockquote"
     case bulletList = "bullet-list"
     case orderedList = "ordered-list"
     case taskList = "task-list"
     case table = "table"
+    case horizontalRule = "horizontal-rule"
+    case frontMatter = "front-matter"
     case codeBlock = "code-block"
     case mathBlock = "math-block"
     case bold = "bold"
     case italic = "italic"
+    case underline = "underline"
+    case highlight = "highlight"
     case inlineCode = "inline-code"
+    case inlineMath = "inline-math"
     case strikethrough = "strikethrough"
+    case link = "link"
+    case image = "image"
+    case clearFormat = "clear-format"
+    case duplicateBlock = "duplicate-block"
+    case newParagraph = "new-paragraph"
+    case deleteBlock = "delete-block"
 }
 
 struct EditorOutlineItem: Identifiable, Equatable {
@@ -75,26 +88,98 @@ final class EditorDocumentController: ObservableObject {
     @Published private(set) var folderURL: URL?
     @Published private(set) var folderFiles: [EditorWorkspaceFile] = []
     @Published private(set) var workspaceTree: [EditorWorkspaceNode] = []
-    @Published var workspaceSearchQuery = ""
+    @Published var workspaceSearchQuery = "" {
+        didSet { refreshWorkspaceSearchResults() }
+    }
+    @Published var workspaceSearchCaseSensitive = false {
+        didSet { refreshWorkspaceSearchResults() }
+    }
+    @Published var workspaceSearchUseRegularExpression = false {
+        didSet { refreshWorkspaceSearchResults() }
+    }
+    @Published private(set) var workspaceSearchResults: [EditorWorkspaceSearchResult] = []
     @Published private(set) var expandedFolderIDs: Set<String> = []
     @Published private(set) var recentFiles: [URL]
     @Published var sidebarPane: EditorSidebarPane = .files
-    @Published var editorMode: EditorMode = .wysiwyg
-    @Published var appearanceMode: EditorAppearanceMode = .followSystem
-    @Published var editorTheme: EditorTheme = .defaultTheme
+    @Published var editorMode: EditorMode {
+        didSet { persistPreferences() }
+    }
+    @Published var appearanceMode: EditorAppearanceMode {
+        didSet { persistPreferences() }
+    }
+    @Published var editorTheme: EditorTheme {
+        didSet { persistPreferences() }
+    }
     @Published var isSidebarVisible = true
-    @Published var isFocusModeEnabled = false
-    @Published var isTypewriterModeEnabled = false
-    @Published var isTabStripVisible = false
+    @Published var isFocusModeEnabled: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var isTypewriterModeEnabled: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var isTabStripVisible: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var editorFontFamily: String {
+        didSet { persistPreferences() }
+    }
+    @Published var editorFontSize: Double {
+        didSet { persistPreferences() }
+    }
+    @Published var editorLineHeight: Double {
+        didSet { persistPreferences() }
+    }
+    @Published var editorPageWidth: String {
+        didSet { persistPreferences() }
+    }
+    @Published var codeFontFamily: String {
+        didSet { persistPreferences() }
+    }
+    @Published var codeFontSize: Double {
+        didSet { persistPreferences() }
+    }
+    @Published var hideQuickInsertHint: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var autoPairBracket: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var autoPairMarkdownSyntax: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var autoPairQuote: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var isCommandPalettePresented = false
+    @Published var commandPaletteQuery = ""
+    @Published var isQuickOpenPresented = false
+    @Published var quickOpenQuery = ""
 
     let editorController = EditorWebView.Controller()
     private var untitledDocumentCount = 1
 
     init(markdown: String? = nil) {
+        let preferences = Self.loadPreferences()
         let initialTab = Self.makeUntitledTab(markdown: markdown ?? Self.defaultMarkdown, index: 1)
         self.tabs = [initialTab]
         self.activeTabID = initialTab.id
         self.recentFiles = Self.loadRecentFiles()
+        self.editorMode = preferences.editorMode
+        self.appearanceMode = preferences.appearanceMode
+        self.editorTheme = preferences.editorTheme
+        self.isFocusModeEnabled = preferences.focusMode
+        self.isTypewriterModeEnabled = preferences.typewriterMode
+        self.isTabStripVisible = preferences.tabBarVisibility
+        self.editorFontFamily = preferences.fontFamily
+        self.editorFontSize = preferences.fontSize
+        self.editorLineHeight = preferences.lineHeight
+        self.editorPageWidth = preferences.pageWidth
+        self.codeFontFamily = preferences.codeFontFamily
+        self.codeFontSize = preferences.codeFontSize
+        self.hideQuickInsertHint = preferences.hideQuickInsertHint
+        self.autoPairBracket = preferences.autoPairBracket
+        self.autoPairMarkdownSyntax = preferences.autoPairMarkdownSyntax
+        self.autoPairQuote = preferences.autoPairQuote
     }
 
     var currentMarkdown: String {
@@ -111,7 +196,7 @@ final class EditorDocumentController: ObservableObject {
     }
 
     var canRunRichTextCommands: Bool {
-        editorMode == .wysiwyg
+        true
     }
 
     var canExportRenderedDocument: Bool {
@@ -148,10 +233,6 @@ final class EditorDocumentController: ObservableObject {
         Self.parseOutline(from: currentMarkdown)
     }
 
-    var filteredWorkspaceTree: [EditorWorkspaceNode] {
-        EditorWorkspaceTreeBuilder.filter(nodes: workspaceTree, query: workspaceSearchQuery)
-    }
-
     var wordCount: Int {
         currentMarkdown.split { $0.isWhitespace || $0.isNewline }.count
     }
@@ -167,8 +248,49 @@ final class EditorDocumentController: ObservableObject {
     var currentPresentation: EditorWebView.Presentation {
         .init(
             theme: editorTheme.webTheme(for: effectiveInterfaceStyle),
-            isTypewriterModeEnabled: isTypewriterModeEnabled
+            focusMode: isFocusModeEnabled,
+            typewriterMode: isTypewriterModeEnabled,
+            fontFamily: editorFontFamily,
+            fontSize: editorFontSize,
+            lineHeight: editorLineHeight,
+            pageWidth: editorPageWidth,
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            hideQuickInsertHint: hideQuickInsertHint,
+            autoPairBracket: autoPairBracket,
+            autoPairMarkdownSyntax: autoPairMarkdownSyntax,
+            autoPairQuote: autoPairQuote
         )
+    }
+
+    var filteredQuickOpenFiles: [EditorWorkspaceFile] {
+        let query = quickOpenQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let files = folderFiles.isEmpty
+            ? recentFiles.map { EditorWorkspaceFile(url: $0, relativePath: $0.lastPathComponent) }
+            : folderFiles
+
+        guard !query.isEmpty else {
+            return files
+        }
+
+        return files.filter {
+            $0.relativePath.localizedCaseInsensitiveContains(query) ||
+                $0.displayName.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    var filteredCommandPaletteItems: [EditorCommandPaletteItem] {
+        let query = commandPaletteQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return EditorCommandPaletteCatalog.allItems
+        }
+
+        return EditorCommandPaletteCatalog.allItems.filter { item in
+            item.title.localizedCaseInsensitiveContains(query) ||
+                item.category.localizedCaseInsensitiveContains(query) ||
+                item.keywords.contains(where: { $0.localizedCaseInsensitiveContains(query) }) ||
+                item.id.localizedCaseInsensitiveContains(query)
+        }
     }
 
     func openDocument() {
@@ -207,6 +329,7 @@ final class EditorDocumentController: ObservableObject {
             folderFiles = files
             workspaceTree = EditorWorkspaceTreeBuilder.build(from: files)
             expandedFolderIDs = EditorWorkspaceTreeBuilder.folderIDs(in: workspaceTree)
+            refreshWorkspaceSearchResults()
 
             if tabs.count == 1, tabs[0].fileURL == nil, let firstURL = folderFiles.first?.url {
                 openDocument(at: firstURL)
@@ -227,6 +350,7 @@ final class EditorDocumentController: ObservableObject {
             folderFiles = files
             workspaceTree = EditorWorkspaceTreeBuilder.build(from: files)
             expandedFolderIDs = EditorWorkspaceTreeBuilder.folderIDs(in: workspaceTree)
+            refreshWorkspaceSearchResults()
         } catch {
             presentError(error, title: "无法刷新工作区")
         }
@@ -238,6 +362,36 @@ final class EditorDocumentController: ObservableObject {
 
     func openRecentFile(_ url: URL) {
         openDocument(at: url)
+    }
+
+    func showCommandPalette() {
+        isQuickOpenPresented = false
+        commandPaletteQuery = ""
+        isCommandPalettePresented = true
+    }
+
+    func hideCommandPalette() {
+        isCommandPalettePresented = false
+    }
+
+    func showQuickOpen() {
+        isCommandPalettePresented = false
+        quickOpenQuery = ""
+        isQuickOpenPresented = true
+    }
+
+    func hideQuickOpen() {
+        isQuickOpenPresented = false
+    }
+
+    func openQuickOpenFile(_ item: EditorWorkspaceFile) {
+        openDocument(at: item.url)
+        hideQuickOpen()
+    }
+
+    func performCommandPaletteItem(_ item: EditorCommandPaletteItem) {
+        performCommand(id: item.id)
+        hideCommandPalette()
     }
 
     func showFilesPane() {
@@ -488,6 +642,10 @@ final class EditorDocumentController: ObservableObject {
         editorController.revealHeading(item.title)
     }
 
+    func openWorkspaceSearchResult(_ result: EditorWorkspaceSearchResult) {
+        openDocument(at: result.url)
+    }
+
     func toggleSidebarVisibility() {
         isSidebarVisible.toggle()
     }
@@ -596,6 +754,100 @@ final class EditorDocumentController: ObservableObject {
         Self.persistRecentFiles(recentFiles)
     }
 
+    private func refreshWorkspaceSearchResults() {
+        let query = workspaceSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            workspaceSearchResults = []
+            return
+        }
+
+        let searchFiles: [EditorWorkspaceSearchFile] = folderFiles.compactMap { item in
+            guard let content = try? MarkdownFileService.readMarkdown(from: item.url) else {
+                return nil
+            }
+
+            return EditorWorkspaceSearchFile(
+                url: item.url,
+                relativePath: item.relativePath,
+                content: content
+            )
+        }
+
+        workspaceSearchResults = EditorWorkspaceSearch.search(
+            query: query,
+            in: searchFiles,
+            isCaseSensitive: workspaceSearchCaseSensitive,
+            useRegularExpression: workspaceSearchUseRegularExpression
+        )
+    }
+
+    private func performCommand(id: String) {
+        if let editorCommand = EditorCommand(rawValue: id) {
+            executeEditorCommand(editorCommand)
+            return
+        }
+
+        switch id {
+        case "file.new-document":
+            createUntitledDocument()
+        case "file.open-document":
+            openDocument()
+        case "file.open-folder":
+            openFolder()
+        case "file.save":
+            saveDocument()
+        case "file.export-html":
+            exportHTMLDocument()
+        case "file.export-pdf":
+            exportPDFDocument()
+        case "file.quick-open":
+            showQuickOpen()
+        case "view.command-palette":
+            showCommandPalette()
+        case "view.search":
+            showSearchPane()
+        case "view.files":
+            showFilesPane()
+        case "view.outline":
+            showOutlinePane()
+        case "view.source-code-mode":
+            toggleSourceView()
+        case "view.focus-mode":
+            toggleFocusMode()
+        case "view.typewriter-mode":
+            isTypewriterModeEnabled.toggle()
+        case "view.toggle-sidebar":
+            toggleSidebarVisibility()
+        case "view.toggle-tab-strip":
+            toggleTabStripVisibility()
+        default:
+            break
+        }
+    }
+
+    private func persistPreferences() {
+        let preferences = EditorPreferences(
+            appearanceMode: appearanceMode,
+            editorTheme: editorTheme,
+            editorMode: editorMode,
+            tabBarVisibility: isTabStripVisible,
+            typewriterMode: isTypewriterModeEnabled,
+            focusMode: isFocusModeEnabled,
+            fontFamily: editorFontFamily,
+            fontSize: editorFontSize,
+            lineHeight: editorLineHeight,
+            pageWidth: editorPageWidth,
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            hideQuickInsertHint: hideQuickInsertHint,
+            autoPairBracket: autoPairBracket,
+            autoPairMarkdownSyntax: autoPairMarkdownSyntax,
+            autoPairQuote: autoPairQuote
+        )
+
+        Self.persistPreferences(preferences)
+    }
+
     private var exportBaseName: String {
         if let currentFileURL {
             return currentFileURL.deletingPathExtension().lastPathComponent
@@ -687,9 +939,29 @@ final class EditorDocumentController: ObservableObject {
     }
 
     private static let recentFilesDefaultsKey = "recentMarkdownFiles"
+    private static let preferencesDefaultsKey = "editorPreferences"
     private static var systemPrefersDarkAppearance: Bool {
         let bestMatch = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
         return bestMatch == .darkAqua
     }
     private static let defaultMarkdown = ""
+
+    private static func loadPreferences() -> EditorPreferences {
+        guard
+            let data = UserDefaults.standard.data(forKey: preferencesDefaultsKey),
+            let preferences = try? JSONDecoder().decode(EditorPreferences.self, from: data)
+        else {
+            return .defaultValue
+        }
+
+        return preferences
+    }
+
+    private static func persistPreferences(_ preferences: EditorPreferences) {
+        guard let data = try? JSONEncoder().encode(preferences) else {
+            return
+        }
+
+        UserDefaults.standard.set(data, forKey: preferencesDefaultsKey)
+    }
 }

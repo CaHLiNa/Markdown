@@ -23,6 +23,18 @@ import {
   renderMarkdownBlock,
   renderMarkdownDocument
 } from './markdown-renderer'
+import {
+  blockMenuCommands,
+  editorCommandRegistry,
+  formatToolbarCommands,
+  quickInsertCommands,
+  type EditorCommand
+} from './commands'
+import {
+  defaultEditorPresentation,
+  type EditorPresentation
+} from './editor-presentation'
+import { type EditorRuntimeState } from './editor-state'
 
 type Root = HTMLElement | string
 
@@ -33,26 +45,6 @@ type CreateMarkdownEditorOptions = {
   persistImageAsset?: (file: File) => Promise<string | null>
   pickImageFile?: () => Promise<File | null>
 }
-
-export type EditorCommand =
-  | 'paragraph'
-  | 'heading-1'
-  | 'heading-2'
-  | 'heading-3'
-  | 'heading-4'
-  | 'heading-5'
-  | 'heading-6'
-  | 'blockquote'
-  | 'bullet-list'
-  | 'ordered-list'
-  | 'task-list'
-  | 'table'
-  | 'code-block'
-  | 'math-block'
-  | 'bold'
-  | 'italic'
-  | 'inline-code'
-  | 'strikethrough'
 
 type JSONNode = Record<string, unknown>
 
@@ -69,9 +61,11 @@ type FileTransferLike = {
 
 export type MarkdownEditor = {
   loadMarkdown: (markdown: string) => void
+  setPresentation: (presentation: EditorPresentation) => void
   getMarkdown: () => string
   getRenderedHTML: () => string
   getDocumentJSON: () => JSONNode
+  getEditorState: () => EditorRuntimeState
   getSelectionOffsets: () => { anchor: number; head: number }
   pressKey: (key: string) => boolean
   runCommand: (command: EditorCommand) => boolean
@@ -405,15 +399,15 @@ const editorTheme = EditorView.theme({
   },
   '.cm-scroller': {
     overflow: 'auto',
-    fontFamily: '"Iowan Old Style", "Palatino Linotype", "PingFang SC", "SF Pro Text", serif'
+    fontFamily: 'var(--editor-font-family)'
   },
   '.cm-content': {
     minHeight: '100vh',
     maxWidth: 'var(--editor-page-width)',
     margin: '0 auto',
     padding: '52px 56px 128px',
-    fontSize: '17px',
-    lineHeight: '1.86',
+    fontSize: 'var(--editor-font-size)',
+    lineHeight: 'var(--editor-line-height)',
     caretColor: 'var(--editor-heading)'
   },
   '&.cm-focused .cm-cursor': {
@@ -1116,6 +1110,99 @@ const runEditorKey = (view: EditorView, key: string) => {
   }
 }
 
+type AutoPairFeature =
+  | 'autoPairBracket'
+  | 'autoPairMarkdownSyntax'
+  | 'autoPairQuote'
+
+type AutoPairBehavior = {
+  opening: string
+  closing: string
+  feature: AutoPairFeature
+}
+
+const autoPairBehaviors: Record<string, AutoPairBehavior> = {
+  '(': {
+    opening: '(',
+    closing: ')',
+    feature: 'autoPairBracket'
+  },
+  '[': {
+    opening: '[',
+    closing: ']',
+    feature: 'autoPairBracket'
+  },
+  '{': {
+    opening: '{',
+    closing: '}',
+    feature: 'autoPairBracket'
+  },
+  '"': {
+    opening: '"',
+    closing: '"',
+    feature: 'autoPairQuote'
+  },
+  "'": {
+    opening: "'",
+    closing: "'",
+    feature: 'autoPairQuote'
+  },
+  '*': {
+    opening: '*',
+    closing: '*',
+    feature: 'autoPairMarkdownSyntax'
+  },
+  '_': {
+    opening: '_',
+    closing: '_',
+    feature: 'autoPairMarkdownSyntax'
+  },
+  '`': {
+    opening: '`',
+    closing: '`',
+    feature: 'autoPairMarkdownSyntax'
+  }
+}
+
+const isAutoPairEnabled = (
+  presentation: EditorPresentation,
+  feature: AutoPairFeature
+) => {
+  return presentation[feature]
+}
+
+const runTextInsertionKey = (
+  view: EditorView,
+  key: string,
+  presentation: EditorPresentation
+) => {
+  const behavior = autoPairBehaviors[key]
+
+  if (!behavior || !isAutoPairEnabled(presentation, behavior.feature)) {
+    return false
+  }
+
+  const selection = view.state.selection.main
+  const selectedText = view.state.doc.sliceString(selection.from, selection.to)
+  const nextText = view.state.doc.sliceString(selection.from, selection.from + behavior.closing.length)
+
+  if (
+    selection.empty &&
+    behavior.opening === behavior.closing &&
+    nextText === behavior.closing
+  ) {
+    updateSelection(view, selection.from + behavior.closing.length)
+    return true
+  }
+
+  const replacement = `${behavior.opening}${selectedText}${behavior.closing}`
+  const anchor = selection.from + behavior.opening.length
+  const head = selection.empty ? anchor : anchor + selectedText.length
+
+  replaceRange(view, selection.from, selection.to, replacement, anchor, head)
+  return true
+}
+
 const transformSelectedLines = (
   view: EditorView,
   transform: (line: string, index: number) => string
@@ -1599,6 +1686,102 @@ const applyParagraphCommand = (view: EditorView) => {
   return true
 }
 
+const activeHeadingLevel = (block: MarkdownBlock) => {
+  if (block.type !== 'heading') {
+    return null
+  }
+
+  return Math.max(1, Math.min(6, block.text.match(/^#{1,6}/)?.[0].length ?? 1))
+}
+
+const applyHeadingShiftCommand = (view: EditorView, delta: 1 | -1) => {
+  const block = getActiveBlock(view)
+
+  if (!block) {
+    return false
+  }
+
+  if (block.type === 'heading') {
+    const level = activeHeadingLevel(block) ?? 1
+    const nextLevel = level + delta
+
+    if (nextLevel <= 0) {
+      return applyParagraphCommand(view)
+    }
+
+    return applyHeadingCommand(view, Math.min(6, nextLevel))
+  }
+
+  if (delta > 0) {
+    return applyHeadingCommand(view, 1)
+  }
+
+  return false
+}
+
+const clearInlineFormatting = (text: string) => {
+  return text
+    .replace(/^\[([^\]]+)\]\(([^)]+)\)$/, '$1')
+    .replace(/^!\[([^\]]*)\]\(([^)]+)\)$/, '$1')
+    .replace(/^<u>([\s\S]+)<\/u>$/, '$1')
+    .replace(/^\*\*([\s\S]+)\*\*$/, '$1')
+    .replace(/^\*([\s\S]+)\*$/, '$1')
+    .replace(/^~~([\s\S]+)~~$/, '$1')
+    .replace(/^==([\s\S]+)==$/, '$1')
+    .replace(/^`([\s\S]+)`$/, '$1')
+    .replace(/^\$([\s\S]+)\$$/, '$1')
+}
+
+const duplicateActiveBlock = (view: EditorView) => {
+  const block = getActiveBlock(view)
+
+  if (!block) {
+    return false
+  }
+
+  const documentText = getDocumentText(view)
+  const trailingGap = documentText.slice(block.to, block.to + 2) === '\n\n' ? '\n\n' : '\n\n'
+  const insertion = `${trailingGap}${block.text}`
+  const insertionOffset = block.to + insertion.length
+
+  replaceRange(view, block.to, block.to, insertion, insertionOffset)
+  return true
+}
+
+const insertParagraphAfterBlock = (view: EditorView) => {
+  const block = getActiveBlock(view)
+
+  if (!block) {
+    return false
+  }
+
+  const documentText = getDocumentText(view)
+  const trailingGap = documentText.slice(block.to, block.to + 2) === '\n\n' ? '\n\n' : '\n\n'
+  replaceRange(view, block.to, block.to, trailingGap, block.to + trailingGap.length)
+  return true
+}
+
+const deleteActiveBlock = (view: EditorView) => {
+  const block = getActiveBlock(view)
+
+  if (!block) {
+    return false
+  }
+
+  const documentText = getDocumentText(view)
+  let from = block.from
+  let to = block.to
+
+  if (documentText.slice(to, to + 2) === '\n\n') {
+    to += 2
+  } else if (from >= 2 && documentText.slice(from - 2, from) === '\n\n') {
+    from -= 2
+  }
+
+  replaceRange(view, from, to, '', from)
+  return true
+}
+
 const insertTemplate = (view: EditorView, template: string, offset = 0) => {
   const selection = view.state.selection.main
   replaceRange(
@@ -1615,6 +1798,10 @@ const runSourceCommand = (view: EditorView, command: EditorCommand) => {
   switch (command) {
     case 'paragraph':
       return applyParagraphCommand(view)
+    case 'upgrade-heading':
+      return applyHeadingShiftCommand(view, 1)
+    case 'degrade-heading':
+      return applyHeadingShiftCommand(view, -1)
     case 'heading-1':
       return applyHeadingCommand(view, 1)
     case 'heading-2':
@@ -1641,6 +1828,10 @@ const runSourceCommand = (view: EditorView, command: EditorCommand) => {
         '| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |',
         2
       )
+    case 'horizontal-rule':
+      return insertTemplate(view, '---')
+    case 'front-matter':
+      return insertTemplate(view, '---\ntitle: 标题\ntags: []\n---', '---\ntitle: '.length)
     case 'code-block': {
       const selection = view.state.selection.main
       const selectedText =
@@ -1659,10 +1850,208 @@ const runSourceCommand = (view: EditorView, command: EditorCommand) => {
       return wrapSelection(view, '**')
     case 'italic':
       return wrapSelection(view, '*')
+    case 'underline':
+      return wrapSelection(view, '<u>', '</u>')
+    case 'highlight':
+      return wrapSelection(view, '==')
     case 'inline-code':
       return wrapSelection(view, '`')
+    case 'inline-math':
+      return wrapSelection(view, '$')
     case 'strikethrough':
       return wrapSelection(view, '~~')
+    case 'link':
+      return wrapSelection(view, '[', '](https://example.com)', '链接文本')
+    case 'image':
+      return insertTemplate(view, '![图片描述](https://example.com/image.png)', 2)
+    case 'clear-format': {
+      const selection = view.state.selection.main
+      const selectedText = view.state.doc.sliceString(selection.from, selection.to)
+
+      if (selectedText.length === 0) {
+        return false
+      }
+
+      const clearedText = clearInlineFormatting(selectedText)
+      replaceRange(
+        view,
+        selection.from,
+        selection.to,
+        clearedText,
+        selection.from,
+        selection.from + clearedText.length
+      )
+      return true
+    }
+    case 'duplicate-block':
+      return duplicateActiveBlock(view)
+    case 'new-paragraph':
+      return insertParagraphAfterBlock(view)
+    case 'delete-block':
+      return deleteActiveBlock(view)
+  }
+}
+
+const createFloatingCommandButton = (
+  command: EditorCommand,
+  onClick: (command: EditorCommand) => void
+) => {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'cm-floating-command-button'
+  button.dataset.editorCommand = command
+  button.textContent = editorCommandRegistry[command].label
+  button.addEventListener('mousedown', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+  })
+  button.addEventListener('click', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    onClick(command)
+  })
+  return button
+}
+
+const positionFloatingElement = (
+  element: HTMLElement,
+  rootElement: HTMLElement,
+  view: EditorView,
+  from: number,
+  to = from,
+  options: {
+    above?: boolean
+    offsetX?: number
+    offsetY?: number
+  } = {}
+) => {
+  const start = view.coordsAtPos(from)
+  const end = view.coordsAtPos(to)
+  const rootRect = rootElement.getBoundingClientRect()
+  const fallbackLeft = 12 + (options.offsetX ?? 0)
+  const fallbackTop = 12 + (options.offsetY ?? 0)
+
+  if (!start || !end) {
+    element.style.left = `${fallbackLeft}px`
+    element.style.top = `${fallbackTop}px`
+    return
+  }
+
+  const averageLeft = (start.left + end.right) / 2 - rootRect.left
+  const anchorTop = options.above === false ? end.bottom - rootRect.top : start.top - rootRect.top
+  const nextTop =
+    anchorTop +
+    (options.above === false ? 12 + (options.offsetY ?? 0) : -48 + (options.offsetY ?? 0))
+
+  element.style.left = `${Math.max(12, averageLeft + (options.offsetX ?? 0))}px`
+  element.style.top = `${Math.max(12, nextTop)}px`
+}
+
+const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
+  rootElement.style.position = rootElement.style.position || 'relative'
+
+  const formatToolbar = document.createElement('div')
+  formatToolbar.className = 'cm-floating-ui cm-format-toolbar'
+
+  const quickInsertMenu = document.createElement('div')
+  quickInsertMenu.className = 'cm-floating-ui cm-quick-insert'
+
+  const blockMenu = document.createElement('div')
+  blockMenu.className = 'cm-floating-ui cm-block-menu'
+
+  rootElement.append(formatToolbar, quickInsertMenu, blockMenu)
+
+  const hide = (element: HTMLElement) => {
+    element.hidden = true
+    element.replaceChildren()
+  }
+
+  const show = (element: HTMLElement) => {
+    element.hidden = false
+  }
+
+  const runQuickInsertCommand = (command: EditorCommand) => {
+    const selection = view.state.selection.main
+    const line = view.state.doc.lineAt(selection.from)
+
+    if (line.text.trim() === '@') {
+      replaceRange(view, line.from, line.to, '', line.from)
+    }
+
+    runSourceCommand(view, command)
+    view.focus()
+  }
+
+  const sync = () => {
+    const selection = view.state.selection.main
+    const activeBlock = getActiveBlock(view)
+    const line = view.state.doc.lineAt(selection.from)
+
+    if (!selection.empty) {
+      formatToolbar.replaceChildren(
+        ...formatToolbarCommands.map((command) =>
+          createFloatingCommandButton(command, (nextCommand) => {
+            runSourceCommand(view, nextCommand)
+            sync()
+            view.focus()
+          })
+        )
+      )
+      positionFloatingElement(formatToolbar, rootElement, view, selection.from, selection.to)
+      show(formatToolbar)
+    } else {
+      hide(formatToolbar)
+    }
+
+    if (line.text.trim() === '@') {
+      quickInsertMenu.replaceChildren(
+        ...quickInsertCommands.map((command) =>
+          createFloatingCommandButton(command, (nextCommand) => {
+            runQuickInsertCommand(nextCommand)
+            sync()
+          })
+        )
+      )
+      positionFloatingElement(quickInsertMenu, rootElement, view, line.from, line.to, {
+        above: false
+      })
+      show(quickInsertMenu)
+    } else {
+      hide(quickInsertMenu)
+    }
+
+    if (activeBlock && selection.empty) {
+      blockMenu.replaceChildren(
+        ...blockMenuCommands
+          .filter((command) => ['duplicate-block', 'new-paragraph', 'delete-block'].includes(command))
+          .map((command) =>
+            createFloatingCommandButton(command, (nextCommand) => {
+              runSourceCommand(view, nextCommand)
+              sync()
+              view.focus()
+            })
+          )
+      )
+      positionFloatingElement(blockMenu, rootElement, view, activeBlock.from, activeBlock.from, {
+        offsetX: -96
+      })
+      show(blockMenu)
+    } else {
+      hide(blockMenu)
+    }
+  }
+
+  hide(formatToolbar)
+  hide(quickInsertMenu)
+  hide(blockMenu)
+
+  return {
+    sync,
+    destroy() {
+      formatToolbar.remove()
+      quickInsertMenu.remove()
+      blockMenu.remove()
+    }
   }
 }
 
@@ -1676,6 +2065,8 @@ export const createMarkdownEditor = async ({
   const rootElement = resolveRoot(root)
   let lastSyncedMarkdown = initialMarkdown
   let suppressNextOutboundSync = false
+  let syncFloatingControls = () => undefined
+  let currentPresentation: EditorPresentation = { ...defaultEditorPresentation }
 
   const view = new EditorView({
     parent: rootElement,
@@ -1717,28 +2108,29 @@ export const createMarkdownEditor = async ({
           ...historyKeymap
         ]),
         EditorView.updateListener.of((update) => {
-          if (!update.docChanged) {
-            return
+          if (update.docChanged) {
+            const markdownText = update.state.doc.toString()
+
+            if (suppressNextOutboundSync) {
+              suppressNextOutboundSync = false
+              lastSyncedMarkdown = markdownText
+            } else if (markdownText !== lastSyncedMarkdown) {
+              lastSyncedMarkdown = markdownText
+              onMarkdownChange?.(markdownText)
+            }
           }
 
-          const markdownText = update.state.doc.toString()
-
-          if (suppressNextOutboundSync) {
-            suppressNextOutboundSync = false
-            lastSyncedMarkdown = markdownText
-            return
+          if (update.docChanged || update.selectionSet) {
+            syncFloatingControls()
           }
-
-          if (markdownText === lastSyncedMarkdown) {
-            return
-          }
-
-          lastSyncedMarkdown = markdownText
-          onMarkdownChange?.(markdownText)
         })
       ]
     })
   })
+
+  const floatingControls = mountFloatingControls(rootElement, view)
+  syncFloatingControls = floatingControls.sync
+  syncFloatingControls()
 
   const handlePaste = (event: Event) => {
     const imageFile = firstImageFileFromTransfer(
@@ -1791,9 +2183,27 @@ export const createMarkdownEditor = async ({
     event.preventDefault()
   }
 
+  const handleKeydown = (event: KeyboardEvent) => {
+    if (
+      event.defaultPrevented ||
+      event.isComposing ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.key.length !== 1
+    ) {
+      return
+    }
+
+    if (runTextInsertionKey(view, event.key, currentPresentation)) {
+      event.preventDefault()
+    }
+  }
+
   view.dom.addEventListener('paste', handlePaste)
   view.dom.addEventListener('drop', handleDrop)
   view.dom.addEventListener('dragover', handleDragOver)
+  view.dom.addEventListener('keydown', handleKeydown, true)
 
   return {
     loadMarkdown(markdownText: string) {
@@ -1804,6 +2214,10 @@ export const createMarkdownEditor = async ({
       suppressNextOutboundSync = true
       lastSyncedMarkdown = markdownText
       replaceRange(view, 0, view.state.doc.length, markdownText, Math.min(markdownText.length, view.state.selection.main.head))
+    },
+
+    setPresentation(presentation: EditorPresentation) {
+      currentPresentation = presentation
     },
 
     getMarkdown() {
@@ -1821,6 +2235,28 @@ export const createMarkdownEditor = async ({
       }
     },
 
+    getEditorState() {
+      const markdown = getDocumentText(view)
+      const selection = view.state.selection.main
+      const activeBlock = getActiveBlock(view)
+
+      return {
+        markdown,
+        activeBlock: activeBlock
+          ? {
+              type: activeBlock.type,
+              text: activeBlock.text,
+              from: activeBlock.from,
+              to: activeBlock.to
+            }
+          : null,
+        selection: {
+          anchor: selection.anchor,
+          head: selection.head
+        }
+      }
+    },
+
     getSelectionOffsets() {
       return {
         anchor: view.state.selection.main.anchor,
@@ -1829,7 +2265,7 @@ export const createMarkdownEditor = async ({
     },
 
     pressKey(key: string) {
-      return runEditorKey(view, key)
+      return runEditorKey(view, key) || runTextInsertionKey(view, key, currentPresentation)
     },
 
     runCommand(command: EditorCommand) {
@@ -1864,6 +2300,8 @@ export const createMarkdownEditor = async ({
       view.dom.removeEventListener('paste', handlePaste)
       view.dom.removeEventListener('drop', handleDrop)
       view.dom.removeEventListener('dragover', handleDragOver)
+      view.dom.removeEventListener('keydown', handleKeydown, true)
+      floatingControls.destroy()
       view.destroy()
     }
   }
