@@ -23,6 +23,37 @@ enum MarkdownFileService {
         try markdown.write(to: destinationURL, atomically: true, encoding: .utf8)
     }
 
+    static func persistImageAsset(
+        _ data: Data,
+        originalFilename: String,
+        mimeType: String,
+        alongsideMarkdownFile markdownFileURL: URL
+    ) throws -> String {
+        let assetDirectoryURL = markdownFileURL
+            .deletingPathExtension()
+            .appendingPathExtension("assets", conformingTo: .folder)
+
+        try FileManager.default.createDirectory(
+            at: assetDirectoryURL,
+            withIntermediateDirectories: true
+        )
+
+        let preferredExtension = imagePathExtension(
+            originalFilename: originalFilename,
+            mimeType: mimeType
+        )
+        let baseName = sanitizedAssetBaseName(from: originalFilename)
+        let destinationURL = uniqueAssetURL(
+            in: assetDirectoryURL,
+            baseName: baseName,
+            pathExtension: preferredExtension
+        )
+
+        try data.write(to: destinationURL, options: .atomic)
+
+        return "\(assetDirectoryURL.lastPathComponent)/\(destinationURL.lastPathComponent)"
+    }
+
     static func renameMarkdownFile(at fileURL: URL, to proposedName: String) throws -> URL {
         let trimmedName = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
@@ -211,5 +242,53 @@ enum MarkdownFileService {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
+    private static func imagePathExtension(originalFilename: String, mimeType: String) -> String {
+        let filenameExtension = URL(fileURLWithPath: originalFilename).pathExtension.lowercased()
+        if !filenameExtension.isEmpty {
+            return filenameExtension == "jpeg" ? "jpg" : filenameExtension
+        }
+
+        if let type = UTType(mimeType: mimeType),
+           let preferredExtension = type.preferredFilenameExtension?.lowercased()
+        {
+            return preferredExtension == "jpeg" ? "jpg" : preferredExtension
+        }
+
+        return "png"
+    }
+
+    private static func sanitizedAssetBaseName(from originalFilename: String) -> String {
+        let rawBaseName = URL(fileURLWithPath: originalFilename).deletingPathExtension().lastPathComponent
+        let trimmedBaseName = rawBaseName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sanitizedBaseName = trimmedBaseName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+
+        if sanitizedBaseName.isEmpty {
+            return "image"
+        }
+
+        return sanitizedBaseName
+    }
+
+    private static func uniqueAssetURL(
+        in directoryURL: URL,
+        baseName: String,
+        pathExtension: String
+    ) -> URL {
+        let fileManager = FileManager.default
+        var suffix = 1
+        var candidateURL = directoryURL.appendingPathComponent(baseName).appendingPathExtension(pathExtension)
+
+        while fileManager.fileExists(atPath: candidateURL.path) {
+            suffix += 1
+            candidateURL = directoryURL
+                .appendingPathComponent("\(baseName)-\(suffix)")
+                .appendingPathExtension(pathExtension)
+        }
+
+        return candidateURL
     }
 }

@@ -437,6 +437,32 @@ final class EditorDocumentController: ObservableObject {
         }
     }
 
+    func persistImageAsset(
+        _ request: EditorWebView.ImageAssetRequest,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        do {
+            guard let currentFileURL else {
+                throw NSError(
+                    domain: "Markdown",
+                    code: 41,
+                    userInfo: [NSLocalizedDescriptionKey: "请先保存当前文档后再插入图片。"]
+                )
+            }
+
+            let relativePath = try MarkdownFileService.persistImageAsset(
+                request.data,
+                originalFilename: request.filename,
+                mimeType: request.mimeType,
+                alongsideMarkdownFile: currentFileURL
+            )
+            completion(.success(relativePath))
+        } catch {
+            presentError(error, title: "无法插入图片")
+            completion(.failure(error))
+        }
+    }
+
     func revealOutlineItem(_ item: EditorOutlineItem) {
         editorController.revealHeading(item.title)
     }

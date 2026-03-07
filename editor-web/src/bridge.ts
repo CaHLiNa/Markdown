@@ -86,12 +86,36 @@ export const postMarkdownToNative = (markdown: string) => {
   window.webkit?.messageHandlers?.editorContentChanged?.postMessage(markdown)
 }
 
+const installImageAssetResolver = () => {
+  window.__resolveEditorAssetRequest = (requestID: unknown, response: EditorImageAssetResponse) => {
+    const normalizedID = typeof requestID === 'string' ? requestID : ''
+    const pendingRequest = pendingImageAssetRequests.get(normalizedID)
+
+    if (!pendingRequest) {
+      return
+    }
+
+    pendingImageAssetRequests.delete(normalizedID)
+
+    const path = normalizeImageAssetPath(response?.path)
+
+    if (path != null) {
+      pendingRequest.resolve(path)
+      return
+    }
+
+    pendingRequest.reject(new Error(normalizeImageAssetError(response?.error)))
+  }
+}
+
 export const persistImageAssetInNative = async (file: File): Promise<string | null> => {
   const handler = window.webkit?.messageHandlers?.editorImageAssetRequest
 
   if (!handler) {
     return null
   }
+
+  installImageAssetResolver()
 
   const requestID = `image-asset-${nextImageAssetRequestID}`
   nextImageAssetRequestID += 1
@@ -114,25 +138,7 @@ export const installNativeBridge = (
   receiveMarkdown: (text: string) => void,
   runEditorCommand: (command: string) => boolean = () => false
 ) => {
-  window.__resolveEditorAssetRequest = (requestID: unknown, response: EditorImageAssetResponse) => {
-    const normalizedID = typeof requestID === 'string' ? requestID : ''
-    const pendingRequest = pendingImageAssetRequests.get(normalizedID)
-
-    if (!pendingRequest) {
-      return
-    }
-
-    pendingImageAssetRequests.delete(normalizedID)
-
-    const path = normalizeImageAssetPath(response?.path)
-
-    if (path != null) {
-      pendingRequest.resolve(path)
-      return
-    }
-
-    pendingRequest.reject(new Error(normalizeImageAssetError(response?.error)))
-  }
+  installImageAssetResolver()
 
   window.loadMarkdown = (text: unknown) => {
     receiveMarkdown(normalizeMarkdown(text))
