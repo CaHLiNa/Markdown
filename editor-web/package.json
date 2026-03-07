@@ -1,0 +1,37 @@
+{
+  "name": "editor-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.10.2",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.2",
+    "@codemirror/state": "^6.5.4",
+    "@codemirror/view": "^6.39.16",
+    "katex": "^0.16.37",
+    "markdown-it": "^14.1.1",
+    "markdown-it-deflist": "^3.0.0",
+    "markdown-it-footnote": "^4.0.0",
+    "markdown-it-mark": "^4.0.0",
+    "markdown-it-sub": "^2.0.0",
+    "markdown-it-sup": "^2.0.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "markdown-it-texmath": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^25.3.5",
+    "jsdom": "^28.1.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.18"
+  }
+}

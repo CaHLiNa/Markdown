@@ -1,0 +1,13 @@
+.DS_Store
+
+# Frontend dependencies and caches
+editor-web/node_modules/
+editor-web/.vite/
+editor-web/.vitest/
+editor-web/coverage/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
