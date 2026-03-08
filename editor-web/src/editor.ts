@@ -95,7 +95,14 @@ type TableContextMenuAction =
   | 'open-autofill-submenu'
   | 'insert-paragraph-above'
   | 'insert-paragraph-below'
-  | 'open-grid-popover'
+  | 'insert-table-row-above'
+  | 'insert-table-row-below'
+  | 'insert-table-column-left'
+  | 'insert-table-column-right'
+  | 'delete-table-row'
+  | 'delete-table-column'
+  | 'copy-table'
+  | 'format-table-source'
   | 'autofill-from-header'
   | 'autofill-from-first-column'
   | 'delete-table'
@@ -191,17 +198,49 @@ const TABLE_CONTEXT_MENU_ITEMS: Record<
     label: string
     title: string
     hasSubmenu?: boolean
+    separatorBefore?: boolean
   }>
 > = {
   root: [
     { action: 'open-table-submenu', label: '表格', title: '表格操作', hasSubmenu: true },
-    { action: 'insert-paragraph-above', label: '在上方插入段落', title: '在表格上方插入段落' },
+    {
+      action: 'insert-paragraph-above',
+      label: '在上方插入段落',
+      title: '在表格上方插入段落',
+      separatorBefore: true
+    },
     { action: 'insert-paragraph-below', label: '在下方插入段落', title: '在表格下方插入段落' },
-    { action: 'open-autofill-submenu', label: '自动填充', title: '自动填充表格内容', hasSubmenu: true }
+    {
+      action: 'open-autofill-submenu',
+      label: '自动填充',
+      title: '自动填充表格内容',
+      hasSubmenu: true,
+      separatorBefore: true
+    }
   ],
   table: [
-    { action: 'open-grid-popover', label: '调整当前表格', title: '调整当前表格行列' },
-    { action: 'delete-table', label: '删除整个表格', title: '删除整个表格' }
+    { action: 'insert-table-row-above', label: '上方插入行', title: '在当前行上方插入一行' },
+    { action: 'insert-table-row-below', label: '下方插入行', title: '在当前行下方插入一行' },
+    {
+      action: 'insert-table-column-left',
+      label: '左侧插入列',
+      title: '在当前列左侧插入一列',
+      separatorBefore: true
+    },
+    {
+      action: 'insert-table-column-right',
+      label: '右侧插入列',
+      title: '在当前列右侧插入一列'
+    },
+    { action: 'delete-table-row', label: '删除行', title: '删除当前行', separatorBefore: true },
+    { action: 'delete-table-column', label: '删除列', title: '删除当前列' },
+    { action: 'copy-table', label: '复制表格', title: '复制整个表格', separatorBefore: true },
+    {
+      action: 'format-table-source',
+      label: '格式化表格源码',
+      title: '格式化当前表格源码'
+    },
+    { action: 'delete-table', label: '删除表格', title: '删除整个表格', separatorBefore: true }
   ],
   autofill: [
     { action: 'autofill-from-header', label: '用首行填充空白', title: '使用首行内容填充空白单元格' },
@@ -1419,6 +1458,135 @@ export const createMarkdownEditor = async ({
     })
   }
 
+  const insertTableRow = (context: TableContext, position: 'above' | 'below') => {
+    return applyCurrentTableTransform(context, (table) => {
+      const targetColumns = Math.max(1, table.header.length)
+      const domRowIndex = (context.cellElement.parentElement as HTMLTableRowElement).rowIndex
+      const insertIndex = position === 'above' ? Math.max(0, domRowIndex - 1) : Math.max(0, domRowIndex)
+
+      table.rows.splice(insertIndex, 0, Array.from({ length: targetColumns }, () => ''))
+
+      return {
+        rowIndex: insertIndex + 1,
+        columnIndex: clamp(context.cellElement.cellIndex, 0, targetColumns - 1)
+      }
+    })
+  }
+
+  const deleteTableRow = (context: TableContext) => {
+    return applyCurrentTableTransform(context, (table) => {
+      if (table.rows.length === 0) {
+        return {
+          rowIndex: 0,
+          columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+        }
+      }
+
+      const domRowIndex = (context.cellElement.parentElement as HTMLTableRowElement).rowIndex
+      const targetRowIndex = clamp(domRowIndex - 1, 0, table.rows.length - 1)
+
+      table.rows.splice(targetRowIndex, 1)
+
+      return {
+        rowIndex: table.rows.length === 0 ? 0 : clamp(targetRowIndex + 1, 1, table.rows.length),
+        columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+      }
+    })
+  }
+
+  const insertTableColumn = (context: TableContext, position: 'left' | 'right') => {
+    return applyCurrentTableTransform(context, (table) => {
+      const targetColumnIndex = clamp(context.cellElement.cellIndex, 0, Math.max(0, table.header.length - 1))
+      const insertIndex = position === 'left' ? targetColumnIndex : targetColumnIndex + 1
+
+      table.header.splice(insertIndex, 0, '')
+      table.aligns.splice(insertIndex, 0, null)
+      table.rows = table.rows.map((row) => {
+        const nextRow = [...row]
+        nextRow.splice(insertIndex, 0, '')
+        return nextRow
+      })
+
+      return {
+        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
+        columnIndex: insertIndex
+      }
+    })
+  }
+
+  const deleteTableColumn = (context: TableContext) => {
+    return applyCurrentTableTransform(context, (table) => {
+      if (table.header.length <= 1) {
+        return {
+          rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
+          columnIndex: 0
+        }
+      }
+
+      const targetColumnIndex = clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+
+      table.header.splice(targetColumnIndex, 1)
+      table.aligns.splice(targetColumnIndex, 1)
+      table.rows = table.rows.map((row) => {
+        const nextRow = [...row]
+        nextRow.splice(targetColumnIndex, 1)
+        return nextRow
+      })
+
+      return {
+        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
+        columnIndex: clamp(targetColumnIndex, 0, table.header.length - 1)
+      }
+    })
+  }
+
+  const copyTextToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', 'true')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      textarea.style.pointerEvents = 'none'
+      document.body.append(textarea)
+      textarea.select()
+
+      try {
+        return document.execCommand('copy')
+      } finally {
+        textarea.remove()
+      }
+    }
+  }
+
+  const copyCurrentTable = (context: TableContext) => {
+    const markdown = readMarkdown()
+    const block = resolveMarkdownTableBlock(markdown, context)
+
+    if (!block || block.type !== 'table') {
+      return false
+    }
+
+    const table = parseMarkdownTable(block.text)
+    const content = table ? stringifyMarkdownTable(table) : block.text
+
+    hideTableToolbarPopover()
+    void copyTextToClipboard(content)
+    return true
+  }
+
+  const formatCurrentTableSource = (context: TableContext) => {
+    return applyCurrentTableTransform(context, (table) => {
+      return {
+        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
+        columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+      }
+    })
+  }
+
   const insertParagraphNearTable = (context: TableContext, position: 'above' | 'below') => {
     const markdown = readMarkdown()
     const block = resolveMarkdownTableBlock(markdown, context)
@@ -1651,37 +1819,16 @@ export const createMarkdownEditor = async ({
     tableToolbarPopover.replaceChildren(panelElement)
   }
 
-  const renderTableContextMenu = (view: TableContextMenuView = 'root') => {
-    if (!tableToolbarPopover || !showTableToolbarPopover('menu')) {
-      return
-    }
-
-    tableContextMenuView = view
-
+  const createTableContextMenuPanel = (
+    view: TableContextMenuView,
+    activeSubview: Exclude<TableContextMenuView, 'root'> | null = null
+  ) => {
     const panelElement = document.createElement('div')
     panelElement.className = 'editor-table-toolbar__menu'
     panelElement.dataset.view = view
 
-    if (view !== 'root') {
-      const backButton = document.createElement('button')
-      backButton.type = 'button'
-      backButton.className = 'editor-table-toolbar__menu-button editor-table-toolbar__menu-button--back'
-      backButton.textContent = '返回'
-      backButton.addEventListener('pointerdown', (event) => {
-        markTableToolbarInteraction()
-        event.preventDefault()
-      })
-      backButton.addEventListener('click', () => {
-        renderTableContextMenu('root')
-      })
-      panelElement.append(backButton)
-    }
-
-    TABLE_CONTEXT_MENU_ITEMS[view].forEach((item, index) => {
-      if (
-        (view === 'root' && (index === 1 || index === 3)) ||
-        (view !== 'root' && index === 0 && panelElement.childElementCount > 0)
-      ) {
+    TABLE_CONTEXT_MENU_ITEMS[view].forEach((item) => {
+      if (item.separatorBefore) {
         const separator = document.createElement('div')
         separator.className = 'editor-table-toolbar__menu-separator'
         panelElement.append(separator)
@@ -1689,12 +1836,16 @@ export const createMarkdownEditor = async ({
 
       const button = document.createElement('button')
       const label = document.createElement('span')
+      const isActiveSubmenu =
+        (item.action === 'open-table-submenu' && activeSubview === 'table') ||
+        (item.action === 'open-autofill-submenu' && activeSubview === 'autofill')
 
       button.type = 'button'
       button.className = 'editor-table-toolbar__menu-button'
       button.dataset.action = item.action
       button.title = item.title
       button.setAttribute('aria-label', item.title)
+      button.dataset.active = isActiveSubmenu ? 'true' : 'false'
       label.textContent = item.label
       button.append(label)
 
@@ -1716,7 +1867,28 @@ export const createMarkdownEditor = async ({
       panelElement.append(button)
     })
 
-    tableToolbarPopover.replaceChildren(panelElement)
+    return panelElement
+  }
+
+  const renderTableContextMenu = (view: TableContextMenuView = 'root') => {
+    if (!tableToolbarPopover || !showTableToolbarPopover('menu')) {
+      return
+    }
+
+    tableContextMenuView = view
+
+    if (view === 'root') {
+      tableToolbarPopover.replaceChildren(createTableContextMenuPanel('root'))
+      return
+    }
+
+    const stackElement = document.createElement('div')
+    stackElement.className = 'editor-table-toolbar__menu-stack'
+    stackElement.append(
+      createTableContextMenuPanel('root', view),
+      createTableContextMenuPanel(view, view)
+    )
+    tableToolbarPopover.replaceChildren(stackElement)
   }
 
   const hideTableToolbar = () => {
@@ -1762,7 +1934,10 @@ export const createMarkdownEditor = async ({
     }
 
     const currentContext = getCurrentTableContext()
-    const context = retainTableContext(currentContext) ?? getRetainedTableContext()
+    const context =
+      suppressTableToolbarSelectionChange && !currentContext
+        ? getRetainedTableContext()
+        : retainTableContext(currentContext)
 
     if (!context) {
       hideTableToolbar()
@@ -1847,9 +2022,29 @@ export const createMarkdownEditor = async ({
       case 'insert-paragraph-below':
         hideTableToolbarPopover()
         return insertParagraphNearTable(context, 'below')
-      case 'open-grid-popover':
-        renderTableGridPopover(context)
-        return true
+      case 'insert-table-row-above':
+        hideTableToolbarPopover()
+        return insertTableRow(context, 'above')
+      case 'insert-table-row-below':
+        hideTableToolbarPopover()
+        return insertTableRow(context, 'below')
+      case 'insert-table-column-left':
+        hideTableToolbarPopover()
+        return insertTableColumn(context, 'left')
+      case 'insert-table-column-right':
+        hideTableToolbarPopover()
+        return insertTableColumn(context, 'right')
+      case 'delete-table-row':
+        hideTableToolbarPopover()
+        return deleteTableRow(context)
+      case 'delete-table-column':
+        hideTableToolbarPopover()
+        return deleteTableColumn(context)
+      case 'copy-table':
+        return copyCurrentTable(context)
+      case 'format-table-source':
+        hideTableToolbarPopover()
+        return formatCurrentTableSource(context)
       case 'autofill-from-header':
         hideTableToolbarPopover()
         return fillTableBlanksFromHeaderRow(context)

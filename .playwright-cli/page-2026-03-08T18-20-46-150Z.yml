@@ -1,0 +1,27 @@
+- generic [ref=e1]:
+  - img
+  - generic [ref=e3]:
+    - table [ref=e105]:
+      - rowgroup [ref=e106]:
+        - row "A B" [ref=e107]:
+          - columnheader "A" [ref=e108]
+          - columnheader "B" [ref=e109]
+      - rowgroup [ref=e110]:
+        - row "1 2" [ref=e111]:
+          - cell "1" [ref=e112]
+          - cell "2" [ref=e113]
+        - row "3 4" [ref=e114]:
+          - cell "3" [ref=e115]
+          - cell "4" [ref=e116]
+    - toolbar [ref=e19]:
+      - button "表格工具" [ref=e21] [cursor=pointer]:
+        - img [ref=e22]
+      - generic [ref=e27]:
+        - button "当前列左对齐" [pressed] [ref=e28] [cursor=pointer]:
+          - img [ref=e29]
+        - button "当前列居中" [ref=e30] [cursor=pointer]:
+          - img [ref=e31]
+        - button "当前列右对齐" [ref=e32] [cursor=pointer]:
+          - img [ref=e33]
+      - button "删除整个表格" [ref=e35] [cursor=pointer]:
+        - img [ref=e36]
