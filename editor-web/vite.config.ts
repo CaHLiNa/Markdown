@@ -1,8 +1,19 @@
+import { readFileSync } from 'node:fs'
+
 import { viteStaticCopy } from 'vite-plugin-static-copy'
 import { defineConfig } from 'vitest/config'
 
+const { version: vditorVersion } = JSON.parse(
+  readFileSync(new URL('./node_modules/vditor/package.json', import.meta.url), 'utf8')
+) as {
+  version: string
+}
+
 export default defineConfig({
   base: './',
+  define: {
+    __VDITOR_VERSION__: JSON.stringify(vditorVersion)
+  },
   plugins: [
     viteStaticCopy({
       targets: [

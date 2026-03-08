@@ -1,4 +1,4 @@
-import Vditor from 'vditor'
+import type Vditor from 'vditor'
 
 import type { EditorCommand } from './commands'
 import { setEditorDebugPhase } from './editor-debug'
@@ -12,6 +12,8 @@ import type { EditorPresentation } from './editor-presentation'
 import type { EditorRuntimeState } from './editor-state'
 
 type Root = HTMLElement | string
+
+declare const __VDITOR_VERSION__: string
 
 type CreateMarkdownEditorOptions = {
   root: Root
@@ -63,6 +65,12 @@ type VditorUndoController = {
   redo: (vditor: Vditor['vditor']) => void
 }
 
+type VditorConstructor = typeof import('vditor')['default']
+
+type VditorGlobalScope = typeof globalThis & {
+  VDITOR_VERSION?: string
+}
+
 type TableContext = {
   tableElement: HTMLTableElement
   cellElement: HTMLTableCellElement
@@ -78,6 +86,8 @@ type TableToolbarAction =
   | 'insert-column-right'
   | 'delete-row'
   | 'delete-column'
+
+type TableToolbarMenuKind = 'structure' | 'delete'
 
 export type MarkdownEditor = {
   loadMarkdown: (markdown: string) => void
@@ -108,22 +118,53 @@ const DEFAULT_LINK_PLACEHOLDER = 'https://'
 const DEFAULT_INLINE_PLACEHOLDER = 'text'
 const DEFAULT_IMAGE_ALT = 'image'
 const DEFAULT_TABLE_SNIPPET = '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1 | Value 2 |'
+const TABLE_TOOLBAR_MIN_WIDTH = 228
 
-const TABLE_TOOLBAR_ACTIONS: Array<{
+const TABLE_TOOLBAR_MENU_ACTIONS: Record<
+  TableToolbarMenuKind,
+  Array<{
+    action: TableToolbarAction
+    label: string
+    title: string
+  }>
+> = {
+  structure: [
+    { action: 'insert-row-above', label: '在上方插入一行', title: '在上方插入一行' },
+    { action: 'insert-row-below', label: '在下方插入一行', title: '在下方插入一行' },
+    { action: 'insert-column-left', label: '在左侧插入一列', title: '在左侧插入一列' },
+    { action: 'insert-column-right', label: '在右侧插入一列', title: '在右侧插入一列' }
+  ],
+  delete: [
+    { action: 'delete-row', label: '删除当前行', title: '删除当前行' },
+    { action: 'delete-column', label: '删除当前列', title: '删除当前列' }
+  ]
+}
+
+const TABLE_TOOLBAR_ALIGNMENT_ACTIONS: Array<{
   action: TableToolbarAction
-  label: string
+  icon: string
   title: string
 }> = [
-  { action: 'align-left', label: '左', title: '当前列左对齐' },
-  { action: 'align-center', label: '中', title: '当前列居中' },
-  { action: 'align-right', label: '右', title: '当前列右对齐' },
-  { action: 'insert-row-above', label: '上行+', title: '在上方插入一行' },
-  { action: 'insert-row-below', label: '下行+', title: '在下方插入一行' },
-  { action: 'insert-column-left', label: '左列+', title: '在左侧插入一列' },
-  { action: 'insert-column-right', label: '右列+', title: '在右侧插入一列' },
-  { action: 'delete-row', label: '删行', title: '删除当前行' },
-  { action: 'delete-column', label: '删列', title: '删除当前列' }
+  { action: 'align-left', icon: 'vditor-icon-align-left', title: '当前列左对齐' },
+  { action: 'align-center', icon: 'vditor-icon-align-center', title: '当前列居中' },
+  { action: 'align-right', icon: 'vditor-icon-align-right', title: '当前列右对齐' }
 ]
+
+const installVditorVersionGlobal = () => {
+  const runtimeGlobal = globalThis as VditorGlobalScope
+
+  if (typeof runtimeGlobal.VDITOR_VERSION === 'string' && runtimeGlobal.VDITOR_VERSION.length > 0) {
+    return
+  }
+
+  runtimeGlobal.VDITOR_VERSION = __VDITOR_VERSION__
+}
+
+const loadVditorConstructor = async (): Promise<VditorConstructor> => {
+  installVditorVersionGlobal()
+  const module = await import('vditor')
+  return module.default
+}
 
 const resolveRoot = (root: Root) => {
   if (typeof root === 'string') {
@@ -717,6 +758,7 @@ export const createMarkdownEditor = async ({
   pickImageFile
 }: CreateMarkdownEditorOptions): Promise<MarkdownEditor> => {
   setEditorDebugPhase('create-editor-start')
+  const VditorConstructor = await loadVditorConstructor()
   const mountRoot = resolveRoot(root)
   const host = document.createElement('div')
   host.className = 'editor-host'
@@ -733,7 +775,10 @@ export const createMarkdownEditor = async ({
   let removeTableToolbarListeners: (() => void) | null = null
   let tableToolbarRefreshFrame = 0
   let tableToolbar: HTMLDivElement | null = null
+  let tableToolbarMenu: HTMLDivElement | null = null
   let tableToolbarMeta: HTMLSpanElement | null = null
+  let tableToolbarMenuKind: TableToolbarMenuKind | null = null
+  let tableToolbarMenuTrigger: HTMLButtonElement | null = null
   const tableToolbarButtons = new Map<TableToolbarAction, HTMLButtonElement>()
 
   const getInstance = () => {
@@ -1156,7 +1201,94 @@ export const createMarkdownEditor = async ({
     return (context.cellElement.parentElement as HTMLTableRowElement).cells[targetColumn] as HTMLTableCellElement
   }
 
+  const hideTableToolbarMenu = () => {
+    if (tableToolbarMenuTrigger) {
+      tableToolbarMenuTrigger.dataset.active = 'false'
+      tableToolbarMenuTrigger.setAttribute('aria-pressed', 'false')
+    }
+
+    tableToolbarMenuKind = null
+    tableToolbarMenuTrigger = null
+
+    if (!tableToolbar || !tableToolbarMenu) {
+      return
+    }
+
+    tableToolbar.dataset.menuOpen = 'false'
+    tableToolbarMenu.hidden = true
+    tableToolbarMenu.setAttribute('aria-hidden', 'true')
+    tableToolbarMenu.replaceChildren()
+  }
+
+  const renderTableToolbarMenu = (menuKind: TableToolbarMenuKind) => {
+    if (!tableToolbarMenu) {
+      return
+    }
+
+    const menuElement = tableToolbarMenu
+    const fragment = document.createDocumentFragment()
+    const titleElement = document.createElement('div')
+
+    titleElement.className = 'editor-table-toolbar__menu-title'
+    titleElement.textContent = menuKind === 'structure' ? '表格' : '删除'
+    fragment.append(titleElement)
+
+    for (const definition of TABLE_TOOLBAR_MENU_ACTIONS[menuKind]) {
+      const button = document.createElement('button')
+
+      button.type = 'button'
+      button.className = 'editor-table-toolbar__menu-button'
+      button.dataset.action = definition.action
+      button.textContent = definition.label
+      button.title = definition.title
+      button.setAttribute('aria-label', definition.title)
+      button.addEventListener('pointerdown', (event) => {
+        event.preventDefault()
+      })
+      button.addEventListener('click', () => {
+        hideTableToolbarMenu()
+        void runTableToolbarAction(definition.action)
+      })
+
+      tableToolbarButtons.set(definition.action, button)
+      fragment.append(button)
+    }
+
+    menuElement.replaceChildren(fragment)
+  }
+
+  const toggleTableToolbarMenu = (
+    menuKind: TableToolbarMenuKind,
+    anchor: 'start' | 'end',
+    trigger: HTMLButtonElement
+  ) => {
+    if (!tableToolbar || !tableToolbarMenu) {
+      return
+    }
+
+    if (tableToolbarMenuKind === menuKind) {
+      hideTableToolbarMenu()
+      return
+    }
+
+    if (tableToolbarMenuKind) {
+      hideTableToolbarMenu()
+    }
+
+    tableToolbarMenuKind = menuKind
+    tableToolbarMenuTrigger = trigger
+    trigger.dataset.active = 'true'
+    trigger.setAttribute('aria-pressed', 'true')
+    tableToolbar.dataset.menuOpen = 'true'
+    tableToolbarMenu.dataset.anchor = anchor
+    renderTableToolbarMenu(menuKind)
+    tableToolbarMenu.hidden = false
+    tableToolbarMenu.setAttribute('aria-hidden', 'false')
+  }
+
   const hideTableToolbar = () => {
+    hideTableToolbarMenu()
+
     if (!tableToolbar) {
       return
     }
@@ -1171,19 +1303,19 @@ export const createMarkdownEditor = async ({
     }
 
     const tableRect = context.tableElement.getBoundingClientRect()
+    const hostRect = host.getBoundingClientRect()
 
     if (tableRect.width <= 0 || tableRect.height <= 0) {
       hideTableToolbar()
       return
     }
 
+    const width = clamp(Math.round(tableRect.width), TABLE_TOOLBAR_MIN_WIDTH, host.clientWidth)
+    tableToolbar.style.width = `${width}px`
+
     const toolbarRect = tableToolbar.getBoundingClientRect()
-    const preferredTop = tableRect.top - toolbarRect.height - 10
-    const top =
-      preferredTop >= 12
-        ? preferredTop
-        : clamp(tableRect.top + 10, 12, window.innerHeight - toolbarRect.height - 12)
-    const left = clamp(tableRect.left, 12, window.innerWidth - toolbarRect.width - 12)
+    const top = Math.max(0, tableRect.top - hostRect.top - toolbarRect.height - 6)
+    const left = clamp(Math.round(tableRect.left - hostRect.left), 0, Math.max(0, host.clientWidth - width))
 
     tableToolbar.style.top = `${Math.round(top)}px`
     tableToolbar.style.left = `${Math.round(left)}px`
@@ -1219,6 +1351,7 @@ export const createMarkdownEditor = async ({
 
     tableToolbar.hidden = false
     tableToolbar.setAttribute('aria-hidden', 'false')
+    tableToolbar.dataset.menuOpen = tableToolbarMenuKind ? 'true' : 'false'
     positionTableToolbar(context)
   }
 
@@ -1282,38 +1415,71 @@ export const createMarkdownEditor = async ({
 
   const installTableToolbar = () => {
     const toolbarElement = document.createElement('div')
+    const startGroup = document.createElement('div')
     const alignGroup = document.createElement('div')
-    const editGroup = document.createElement('div')
-    const destructiveGroup = document.createElement('div')
+    const endGroup = document.createElement('div')
+    const structureButton = document.createElement('button')
+    const deleteButton = document.createElement('button')
+    const menuElement = document.createElement('div')
     const meta = document.createElement('span')
 
     toolbarElement.className = 'editor-table-toolbar'
     toolbarElement.hidden = true
     toolbarElement.setAttribute('aria-hidden', 'true')
+    toolbarElement.dataset.menuOpen = 'false'
 
+    startGroup.className = 'editor-table-toolbar__group editor-table-toolbar__group--start'
     alignGroup.className = 'editor-table-toolbar__group'
-    editGroup.className = 'editor-table-toolbar__group'
-    destructiveGroup.className = 'editor-table-toolbar__group'
+    endGroup.className = 'editor-table-toolbar__group editor-table-toolbar__group--end'
     meta.className = 'editor-table-toolbar__meta'
+    menuElement.className = 'editor-table-toolbar__menu'
+    menuElement.hidden = true
+    menuElement.setAttribute('aria-hidden', 'true')
 
     tableToolbar = toolbarElement
+    tableToolbarMenu = menuElement
     tableToolbarMeta = meta
 
-    const appendButton = (container: HTMLElement, action: TableToolbarAction, label: string, title: string) => {
+    const configureIconButton = (
+      button: HTMLButtonElement,
+      icon: string,
+      title: string,
+      onClick: () => void
+    ) => {
+      button.type = 'button'
+      button.className = 'editor-table-toolbar__icon'
+      button.dataset.active = 'false'
+      button.setAttribute('aria-pressed', 'false')
+      button.setAttribute('aria-label', title)
+      button.title = title
+      button.innerHTML = `<svg viewBox="0 0 32 32" aria-hidden="true"><use xlink:href="#${icon}"></use></svg>`
+      button.addEventListener('pointerdown', (event) => {
+        event.preventDefault()
+      })
+      button.addEventListener('click', onClick)
+    }
+
+    const appendAlignmentButton = (
+      container: HTMLElement,
+      action: TableToolbarAction,
+      icon: string,
+      title: string
+    ) => {
       const button = document.createElement('button')
 
       button.type = 'button'
-      button.className = 'editor-table-toolbar__button'
+      button.className = 'editor-table-toolbar__icon'
       button.dataset.action = action
       button.dataset.active = 'false'
       button.setAttribute('aria-pressed', 'false')
       button.setAttribute('aria-label', title)
       button.title = title
-      button.textContent = label
+      button.innerHTML = `<svg viewBox="0 0 32 32" aria-hidden="true"><use xlink:href="#${icon}"></use></svg>`
       button.addEventListener('pointerdown', (event) => {
         event.preventDefault()
       })
       button.addEventListener('click', () => {
+        hideTableToolbarMenu()
         void runTableToolbarAction(action)
       })
 
@@ -1321,20 +1487,27 @@ export const createMarkdownEditor = async ({
       container.append(button)
     }
 
-    for (const definition of TABLE_TOOLBAR_ACTIONS) {
-      if (definition.action.startsWith('align-')) {
-        appendButton(alignGroup, definition.action, definition.label, definition.title)
-      } else if (definition.action.startsWith('delete-')) {
-        appendButton(destructiveGroup, definition.action, definition.label, definition.title)
-      } else {
-        appendButton(editGroup, definition.action, definition.label, definition.title)
-      }
+    configureIconButton(structureButton, 'vditor-icon-table', '表格操作', () => {
+      toggleTableToolbarMenu('structure', 'start', structureButton)
+    })
+    structureButton.dataset.kind = 'structure'
+
+    configureIconButton(deleteButton, 'vditor-icon-trashcan', '删除当前行或列', () => {
+      toggleTableToolbarMenu('delete', 'end', deleteButton)
+    })
+    deleteButton.dataset.kind = 'delete'
+
+    for (const definition of TABLE_TOOLBAR_ALIGNMENT_ACTIONS) {
+      appendAlignmentButton(alignGroup, definition.action, definition.icon, definition.title)
     }
 
-    toolbarElement.append(alignGroup, editGroup, destructiveGroup, meta)
-    document.body.append(toolbarElement)
+    startGroup.append(structureButton, meta)
+    endGroup.append(deleteButton)
+    toolbarElement.append(startGroup, alignGroup, endGroup, menuElement)
+    host.append(toolbarElement)
 
     const handleSelectionChange = () => {
+      hideTableToolbarMenu()
       scheduleTableToolbarRefresh()
     }
 
@@ -1352,6 +1525,7 @@ export const createMarkdownEditor = async ({
       }
 
       window.requestAnimationFrame(() => {
+        hideTableToolbarMenu()
         const context = getCurrentTableContext()
 
         if (!context) {
@@ -1376,7 +1550,10 @@ export const createMarkdownEditor = async ({
       document.removeEventListener('scroll', handleViewportChange, true)
       window.removeEventListener('resize', handleViewportChange)
 
+      hideTableToolbarMenu()
       tableToolbarButtons.clear()
+      tableToolbarMenu = null
+      tableToolbarMenuTrigger = null
       tableToolbarMeta = null
       tableToolbar?.remove()
       tableToolbar = null
@@ -1678,7 +1855,7 @@ export const createMarkdownEditor = async ({
     }
 
     setEditorDebugPhase('vditor-constructing', window.location.href)
-    instance = new Vditor(host, vditorOptions)
+    instance = new VditorConstructor(host, vditorOptions)
   })
 
   const handleBackgroundPointerDown = (event: PointerEvent) => {

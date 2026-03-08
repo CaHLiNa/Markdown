@@ -184,14 +184,21 @@ struct EditorWebView: NSViewRepresentable {
       }
 
       window.addEventListener('error', (event) => {
+        const errorEvent = event;
+        const target = errorEvent.target instanceof Element ? errorEvent.target : null;
+
         post('error', [
-          event.message,
-          event.filename,
-          event.lineno,
-          event.colno,
-          event.error
+          errorEvent.message,
+          errorEvent.filename,
+          errorEvent.lineno,
+          errorEvent.colno,
+          errorEvent.error,
+          target?.tagName ?? null,
+          target?.getAttribute?.('src') ?? null,
+          target?.getAttribute?.('href') ?? null,
+          target?.outerHTML ?? null
         ]);
-      });
+      }, true);
 
       window.addEventListener('unhandledrejection', (event) => {
         post('error', ['Unhandled promise rejection', event.reason]);
