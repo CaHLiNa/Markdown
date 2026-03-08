@@ -10,10 +10,18 @@
   --editor-heading: #17120d;
   --editor-link: #8d5425;
   --editor-border: rgba(54, 46, 39, 0.12);
-  --editor-code: rgba(245, 234, 215, 0.9);
+  --editor-inline-code: rgba(244, 234, 219, 0.82);
+  --editor-inline-code-border: rgba(141, 84, 37, 0.12);
+  --editor-code-block: rgba(248, 243, 236, 0.92);
+  --editor-code-block-border: rgba(70, 56, 41, 0.1);
+  --editor-code-block-focus: rgba(244, 238, 230, 0.98);
+  --editor-math-block: rgba(252, 249, 245, 0.92);
+  --editor-math-border: rgba(141, 84, 37, 0.14);
+  --editor-quote-surface: rgba(177, 109, 52, 0.06);
   --editor-selection: rgba(201, 135, 70, 0.18);
   --editor-quote: #b16d34;
   --editor-canvas: transparent;
+  --editor-shadow: 0 1px 0 rgba(255, 255, 255, 0.35) inset;
   color-scheme: light;
   background: transparent;
 }
@@ -24,9 +32,17 @@
   --editor-heading: #f9f5ef;
   --editor-link: #f0a35c;
   --editor-border: rgba(255, 255, 255, 0.08);
-  --editor-code: rgba(37, 28, 22, 0.92);
+  --editor-inline-code: rgba(255, 255, 255, 0.06);
+  --editor-inline-code-border: rgba(255, 255, 255, 0.07);
+  --editor-code-block: rgba(23, 27, 33, 0.88);
+  --editor-code-block-border: rgba(255, 255, 255, 0.08);
+  --editor-code-block-focus: rgba(27, 32, 39, 0.96);
+  --editor-math-block: rgba(248, 241, 231, 0.04);
+  --editor-math-border: rgba(240, 163, 92, 0.16);
+  --editor-quote-surface: rgba(255, 255, 255, 0.03);
   --editor-selection: rgba(240, 163, 92, 0.2);
   --editor-quote: #f0a35c;
+  --editor-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
   color-scheme: dark;
 }
 
@@ -36,9 +52,17 @@
   --editor-heading: #34261c;
   --editor-link: #9c6332;
   --editor-border: rgba(92, 69, 44, 0.12);
-  --editor-code: rgba(236, 211, 166, 0.92);
+  --editor-inline-code: rgba(238, 219, 184, 0.72);
+  --editor-inline-code-border: rgba(140, 99, 56, 0.14);
+  --editor-code-block: rgba(244, 232, 211, 0.86);
+  --editor-code-block-border: rgba(104, 79, 52, 0.12);
+  --editor-code-block-focus: rgba(241, 228, 205, 0.96);
+  --editor-math-block: rgba(247, 238, 221, 0.9);
+  --editor-math-border: rgba(156, 99, 50, 0.16);
+  --editor-quote-surface: rgba(161, 95, 40, 0.06);
   --editor-selection: rgba(166, 111, 59, 0.18);
   --editor-quote: #a15f28;
+  --editor-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset;
   color-scheme: light;
 }
 
@@ -93,7 +117,7 @@ body {
   min-height: 100vh;
   max-width: min(100%, var(--editor-page-width));
   margin: 0 auto;
-  padding: 52px clamp(22px, 5vw, 76px) 180px;
+  padding: 42px clamp(28px, 4.6vw, 72px) 160px;
   box-sizing: border-box;
   color: var(--editor-text);
   caret-color: var(--editor-heading);
@@ -127,14 +151,16 @@ body {
 .vditor-ir ol,
 .vditor-ir blockquote,
 .vditor-ir pre,
+.vditor-ir .vditor-ir__preview,
 .vditor-ir table,
 .vditor-reset p,
 .vditor-reset ul,
 .vditor-reset ol,
 .vditor-reset blockquote,
 .vditor-reset pre,
+.vditor-reset .language-math,
 .vditor-reset table {
-  margin: 0 0 1em;
+  margin: 0 0 0.92rem;
 }
 
 .vditor-ir p,
@@ -144,6 +170,18 @@ body {
   font-family: var(--editor-font-family);
   font-size: var(--editor-font-size);
   line-height: var(--editor-line-height);
+}
+
+.vditor-ir ul,
+.vditor-ir ol,
+.vditor-reset ul,
+.vditor-reset ol {
+  padding-left: 1.35em;
+}
+
+.vditor-ir li + li,
+.vditor-reset li + li {
+  margin-top: 0.18rem;
 }
 
 .vditor-ir h1,
@@ -160,6 +198,34 @@ body {
 .vditor-reset h6 {
   color: var(--editor-heading);
   line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin: 1.6rem 0 0.7rem;
+}
+
+.vditor-ir h1,
+.vditor-reset h1 {
+  margin-top: 0;
+  margin-bottom: 0.95rem;
+  font-size: clamp(2.1rem, 2.8vw, 2.7rem);
+}
+
+.vditor-ir h2,
+.vditor-reset h2 {
+  font-size: clamp(1.6rem, 2vw, 2rem);
+}
+
+.vditor-ir h3,
+.vditor-reset h3 {
+  font-size: clamp(1.3rem, 1.6vw, 1.55rem);
+}
+
+.vditor-ir h4,
+.vditor-ir h5,
+.vditor-ir h6,
+.vditor-reset h4,
+.vditor-reset h5,
+.vditor-reset h6 {
+  letter-spacing: -0.01em;
 }
 
 .vditor-ir a,
@@ -170,21 +236,7 @@ body {
 }
 
 .vditor-ir__preview {
-  color: var(--editor-muted);
-}
-
-.vditor-ir pre,
-.vditor-reset pre,
-.vditor-ir code,
-.vditor-reset code {
-  background: var(--editor-code);
-  border-radius: 10px;
-}
-
-.vditor-ir pre,
-.vditor-reset pre {
-  padding: 0.9rem 1rem;
-  overflow-x: auto;
+  color: inherit;
 }
 
 .vditor-ir code,
@@ -193,17 +245,24 @@ body {
   font-size: var(--editor-code-font-size);
 }
 
-.vditor-ir p code,
-.vditor-ir li code,
-.vditor-reset p code,
-.vditor-reset li code {
-  padding: 0.16rem 0.34rem;
+.vditor-ir p code:not(.hljs):not(.highlight-chroma),
+.vditor-ir li code:not(.hljs):not(.highlight-chroma),
+.vditor-reset p code:not(.hljs):not(.highlight-chroma),
+.vditor-reset li code:not(.hljs):not(.highlight-chroma) {
+  padding: 0.12rem 0.38rem;
+  border: 1px solid var(--editor-inline-code-border);
+  border-radius: 7px;
+  background: var(--editor-inline-code) !important;
+  background-image: none !important;
 }
 
 .vditor-ir blockquote,
 .vditor-reset blockquote {
-  padding-left: 1rem;
-  border-left: 3px solid var(--editor-quote);
+  margin: 1rem 0 1.1rem;
+  padding: 0.2rem 0 0.2rem 1rem;
+  border-left: 2px solid var(--editor-quote);
+  background: linear-gradient(90deg, var(--editor-quote-surface), transparent 72%);
+  border-radius: 0 12px 12px 0;
   color: var(--editor-muted);
 }
 
@@ -228,6 +287,83 @@ body {
   max-width: 100%;
   height: auto;
   border-radius: 12px;
+}
+
+.vditor-ir__node[data-type='code-block'],
+.vditor-ir__node[data-type='math-block'] {
+  margin: 0.35rem 0 1.2rem;
+}
+
+.vditor-ir__node--expand[data-type='code-block']:before,
+.vditor-ir__node--expand[data-type='code-block']:after,
+.vditor-ir__node--expand[data-type='math-block']:before,
+.vditor-ir__node--expand[data-type='math-block']:after,
+.vditor-ir__node--expand .vditor-ir__marker {
+  color: var(--editor-muted);
+  opacity: 0.72;
+}
+
+.vditor-ir pre,
+.vditor-reset pre {
+  margin: 1rem 0 1.15rem;
+  padding: 0;
+  background: transparent !important;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.vditor-ir pre.vditor-reset,
+.vditor-reset pre {
+  padding: 0.95rem 1.05rem;
+  overflow-x: auto;
+  border: 1px solid var(--editor-code-block-border);
+  border-radius: 14px;
+  background: var(--editor-code-block) !important;
+  box-shadow: var(--editor-shadow);
+}
+
+.vditor-ir pre.vditor-reset:focus {
+  background: var(--editor-code-block-focus) !important;
+  border-color: var(--editor-math-border);
+}
+
+.vditor-ir pre > code,
+.vditor-reset pre > code,
+.vditor-ir pre code.hljs,
+.vditor-reset pre code.hljs {
+  display: block;
+  padding: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.vditor-ir__node[data-type='math-block'] .vditor-ir__preview,
+.vditor-reset .language-math {
+  display: block;
+  margin: 0.35rem 0;
+  padding: 1.05rem 1.25rem;
+  border: 1px solid var(--editor-math-border);
+  border-radius: 16px;
+  background: var(--editor-math-block) !important;
+  box-shadow: var(--editor-shadow);
+  color: var(--editor-text) !important;
+  text-align: center;
+}
+
+.vditor-ir__node[data-type='math-block'] .vditor-ir__preview .katex-display,
+.vditor-reset .language-math .katex-display {
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.12rem 0;
+}
+
+.vditor-ir__node[data-type='math-block'] .vditor-ir__preview .katex,
+.vditor-reset .language-math .katex {
+  font-size: 1.02em;
 }
 
 .vditor-ir .task-list-item,
