@@ -3,23 +3,10 @@ import 'katex/dist/katex.min.css'
 import '@milkdown/kit/prose/view/style/prosemirror.css'
 import '@milkdown/kit/prose/tables/style/tables.css'
 
-import {
-  installNativeBridge,
-  persistImageAssetInNative,
-  postMarkdownToNative
-} from './bridge'
-import {
-  createMarkdownEditor,
-  type EditorCommand,
-  type MarkdownEditor
-} from './editor'
-import {
-  defaultEditorPresentation,
-  normalizeEditorPresentation,
-  type EditorPresentation
-} from './editor-presentation'
-import { renderMarkdownDocument } from './markdown-renderer'
-import { createNativeMarkdownSync } from './native-markdown-sync'
+import { installNativeBridge, persistImageAssetInNative, postMarkdownToNative } from './bridge'
+import { createEditorBridge } from './editor-bridge'
+import { createMarkdownEditor, type MarkdownEditor } from './editor'
+import { type EditorPresentation } from './editor-presentation'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 
@@ -28,24 +15,8 @@ if (!app) {
 }
 
 let editor: MarkdownEditor | null = null
-let pendingMarkdown = ''
-let pendingAppearance: EditorPresentation = { ...defaultEditorPresentation }
-const nativeMarkdownSync = createNativeMarkdownSync((markdown) => {
-  postMarkdownToNative(markdown)
-})
-
-const normalizeMarkdown = (value: unknown) => {
-  return typeof value === 'string' ? value : ''
-}
-
-const normalizeNonNegativeInteger = (value: unknown) => {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-    ? Math.floor(value)
-    : null
-}
 
 const applyAppearance = (appearance: EditorPresentation) => {
-  pendingAppearance = appearance
   document.documentElement.dataset.editorTheme = appearance.theme
   document.documentElement.dataset.focusMode = appearance.focusMode ? 'true' : 'false'
   document.documentElement.dataset.typewriterMode = appearance.typewriterMode ? 'true' : 'false'
@@ -62,124 +33,43 @@ const applyAppearance = (appearance: EditorPresentation) => {
   document.documentElement.dataset.autoPairQuote = appearance.autoPairQuote ? 'true' : 'false'
 }
 
-const setMarkdownFromNative = (markdown: string) => {
-  nativeMarkdownSync.flush()
-  pendingMarkdown = markdown
+const bridge = createEditorBridge({
+  postMarkdownToNative,
+  installNativeBridge,
+  applyAppearance
+})
 
-  if (!editor) {
-    return
-  }
-
-  editor.loadMarkdown(markdown)
-}
-
-const setAppearanceFromNative = (appearance: unknown) => {
-  applyAppearance(normalizeEditorPresentation(appearance))
-
-  if (editor) {
-    editor.setPresentation(pendingAppearance)
-  }
-}
-
-const runCommandFromNative = (command: string) => {
-  if (!editor || command.length === 0) {
-    return false
-  }
-
-  return editor.runCommand(command as EditorCommand)
-}
-
-const revealHeading = (value: unknown) => {
-  const targetText = normalizeMarkdown(value).trim()
-
-  if (!targetText || !editor) {
-    return false
-  }
-
-  return editor.revealHeading(targetText)
-}
-
-const revealOffset = (offset: unknown, length: unknown) => {
-  if (!editor) {
-    return false
-  }
-
-  const normalizedOffset = normalizeNonNegativeInteger(offset)
-
-  if (normalizedOffset == null) {
-    return false
-  }
-
-  const normalizedLength = normalizeNonNegativeInteger(length) ?? 0
-  return editor.revealOffset(normalizedOffset, normalizedLength)
-}
-
-const getRenderedHTML = () => {
-  if (editor) {
-    return editor.getRenderedHTML()
-  }
-
-  return renderMarkdownDocument(pendingMarkdown)
-}
-
-const getEditorState = () => {
-  if (editor) {
-    return editor.getEditorState()
-  }
-
-  return {
-    markdown: pendingMarkdown,
-    mode: 'wysiwyg',
-    activeBlock: null,
-    selection: {
-      anchor: 0,
-      head: 0
-    }
-  }
-}
-
-installNativeBridge(setMarkdownFromNative, runCommandFromNative, getEditorState)
-window.setEditorAppearance = setAppearanceFromNative
-window.revealHeading = revealHeading
-window.revealOffset = revealOffset
-window.getRenderedHTML = getRenderedHTML
-applyAppearance(pendingAppearance)
+bridge.install()
 
 window.addEventListener('blur', () => {
-  nativeMarkdownSync.flush()
+  bridge.flush()
 })
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
-    nativeMarkdownSync.flush()
+    bridge.flush()
   }
 })
 
 window.addEventListener('pagehide', () => {
-  nativeMarkdownSync.flush()
+  bridge.flush()
 })
 
 window.addEventListener('beforeunload', () => {
-  nativeMarkdownSync.flush()
+  bridge.flush()
 })
 
 const bootEditor = async () => {
   editor = await createMarkdownEditor({
     root: app,
-    initialMarkdown: pendingMarkdown,
+    initialMarkdown: bridge.currentMarkdown,
     persistImageAsset: persistImageAssetInNative,
     onMarkdownChange(markdown) {
-      pendingMarkdown = markdown
-      nativeMarkdownSync.schedule(markdown)
+      bridge.handleEditorMarkdownChange(markdown)
     }
   })
 
-  if (pendingMarkdown.length > 0) {
-    editor.loadMarkdown(pendingMarkdown)
-  }
-
-  editor.setPresentation(pendingAppearance)
-  applyAppearance(pendingAppearance)
+  bridge.attachEditor(editor)
 }
 
 void bootEditor().catch((error: unknown) => {

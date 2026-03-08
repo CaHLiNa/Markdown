@@ -1,13 +1,32 @@
-import MarkdownIt from 'markdown-it'
-import type Token from 'markdown-it/lib/token.mjs'
-import markdownItDeflist from 'markdown-it-deflist'
-import markdownItFootnote from 'markdown-it-footnote'
-import markdownItMark from 'markdown-it-mark'
-import markdownItSub from 'markdown-it-sub'
-import markdownItSup from 'markdown-it-sup'
-import markdownItTaskLists from 'markdown-it-task-lists'
-import markdownItTexmath from 'markdown-it-texmath'
-import katex from 'katex'
+import rehypeKatex from 'rehype-katex'
+import rehypeStringify from 'rehype-stringify'
+import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import remarkParse from 'remark-parse'
+import remarkRehype from 'remark-rehype'
+import { unified } from 'unified'
+
+import { sharedKatexOptions } from './math-config'
+
+type MarkdownNode = {
+  type: string
+  value?: string
+  alt?: string
+  depth?: number
+  children?: MarkdownNode[]
+  position?: {
+    start?: {
+      offset?: number
+    }
+    end?: {
+      offset?: number
+    }
+  }
+}
+
+type MarkdownRoot = MarkdownNode & {
+  children: MarkdownNode[]
+}
 
 export type MarkdownBlock = {
   from: number
@@ -24,168 +43,182 @@ export type MarkdownBlock = {
     | 'hr'
 }
 
-const markdown = MarkdownIt({
-  html: false,
-  linkify: true,
-  typographer: false
-})
-  .use(markdownItDeflist)
-  .use(markdownItFootnote)
-  .use(markdownItMark)
-  .use(markdownItSub)
-  .use(markdownItSup)
-  .use(markdownItTaskLists, {
-    enabled: true,
-    label: true,
-    labelAfter: true
-  })
-  .use(markdownItTexmath, {
-    engine: katex,
-    delimiters: 'dollars',
-    katexOptions: {
-      throwOnError: false,
-      strict: 'ignore'
-    }
-  })
+const markdownParser = unified().use(remarkParse).use(remarkGfm).use(remarkMath)
 
-type LineInfo = {
-  text: string
-  from: number
-  to: number
-}
-
-const splitLines = (text: string): LineInfo[] => {
-  const lines = text.split('\n')
-  let offset = 0
-
-  return lines.map((line) => {
-    const from = offset
-    const to = offset + line.length
-    offset = to + 1
-    return { text: line, from, to }
-  })
-}
+const markdownRenderer = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkMath)
+  .use(remarkRehype)
+  .use(rehypeKatex, sharedKatexOptions)
+  .use(rehypeStringify)
 
 const headingPattern = /^\s{0,3}#{1,6}\s+/
 
-const createBlockFromToken = (
-  markdownText: string,
-  lines: LineInfo[],
-  token: Token,
-  type: MarkdownBlock['type']
-): MarkdownBlock | null => {
-  const map = token.map
-
-  if (!map) {
-    return null
-  }
-
-  const [startLine, endLineExclusive] = map
-  const lastLine = Math.max(startLine, endLineExclusive - 1)
-  const from = lines[startLine]?.from ?? 0
-  const to = lines[lastLine]?.to ?? markdownText.length
-
-  return {
-    from,
-    to,
-    text: markdownText.slice(from, to),
-    type
-  }
-}
-
-const tokenToBlockType = (token: Token): MarkdownBlock['type'] | null => {
-  switch (token.type) {
-    case 'heading_open':
+const blockTypeFromNode = (node: MarkdownNode): MarkdownBlock['type'] | null => {
+  switch (node.type) {
+    case 'heading':
       return 'heading'
-    case 'paragraph_open':
+    case 'paragraph':
       return 'paragraph'
-    case 'blockquote_open':
+    case 'blockquote':
       return 'blockquote'
-    case 'bullet_list_open':
-    case 'ordered_list_open':
+    case 'list':
       return 'list'
-    case 'table_open':
+    case 'table':
       return 'table'
-    case 'fence':
-    case 'code_block':
+    case 'code':
       return 'code'
-    case 'math_block':
+    case 'math':
       return 'math'
-    case 'hr':
+    case 'thematicBreak':
       return 'hr'
     default:
       return null
   }
 }
 
-let lastExtractedBlocksCache:
+const toNodeRange = (node: MarkdownNode, markdownText: string) => {
+  const from = node.position?.start?.offset ?? 0
+  const to = node.position?.end?.offset ?? markdownText.length
+
+  return {
+    from,
+    to
+  }
+}
+
+const nodeToText = (node: MarkdownNode): string => {
+  switch (node.type) {
+    case 'text':
+    case 'inlineCode':
+    case 'html':
+    case 'code':
+    case 'math':
+      return node.value ?? ''
+    case 'image':
+      return node.alt ?? ''
+    case 'break':
+      return '\n'
+    default:
+      return Array.isArray(node.children) ? node.children.map(nodeToText).join('') : ''
+  }
+}
+
+const parseMarkdownRoot = (text: string): MarkdownRoot => {
+  return markdownParser.parse(text) as MarkdownRoot
+}
+
+const collectHeadingNodes = (node: MarkdownNode, headings: Array<{ title: string; offset: number }>) => {
+  if (node.type === 'heading') {
+    headings.push({
+      title: nodeToText(node).trim(),
+      offset: node.position?.start?.offset ?? 0
+    })
+  }
+
+  for (const child of node.children ?? []) {
+    collectHeadingNodes(child, headings)
+  }
+}
+
+let lastParsedMarkdownCache:
   | {
       text: string
+      root: MarkdownRoot
       blocks: MarkdownBlock[]
+      headings: Array<{
+        title: string
+        offset: number
+      }>
     }
   | null = null
+
+const getParsedMarkdownCache = (text: string) => {
+  if (lastParsedMarkdownCache?.text === text) {
+    return lastParsedMarkdownCache
+  }
+
+  const root = parseMarkdownRoot(text)
+  const blocks = (root.children ?? [])
+    .flatMap((node) => {
+      const type = blockTypeFromNode(node)
+
+      if (!type) {
+        return []
+      }
+
+      const range = toNodeRange(node, text)
+
+      return [
+        {
+          from: range.from,
+          to: range.to,
+          text: text.slice(range.from, range.to),
+          type
+        } satisfies MarkdownBlock
+      ]
+    })
+
+  const headings = [] as Array<{
+    title: string
+    offset: number
+  }>
+  collectHeadingNodes(root, headings)
+
+  lastParsedMarkdownCache = {
+    text,
+    root,
+    blocks,
+    headings
+  }
+
+  return lastParsedMarkdownCache
+}
 
 export const extractMarkdownBlocks = (text: string): MarkdownBlock[] => {
   if (text.length === 0) {
     return []
   }
 
-  if (lastExtractedBlocksCache?.text === text) {
-    return lastExtractedBlocksCache.blocks
-  }
-
-  const lines = splitLines(text)
-  const blocks = markdown
-    .parse(text, {})
-    .flatMap((token) => {
-      if (token.level !== 0) {
-        return []
-      }
-
-      const type = tokenToBlockType(token)
-
-      if (!type) {
-        return []
-      }
-
-      const block = createBlockFromToken(text, lines, token, type)
-      return block ? [block] : []
-    })
-
-  lastExtractedBlocksCache = {
-    text,
-    blocks
-  }
-
-  return blocks
+  return getParsedMarkdownCache(text).blocks
 }
 
 export const renderMarkdownBlock = (markdownText: string) => {
-  return markdown.render(markdownText)
+  return String(markdownRenderer.processSync(markdownText))
 }
 
 export const renderMarkdownDocument = (markdownText: string) => {
-  return markdown.render(markdownText)
+  return String(markdownRenderer.processSync(markdownText))
 }
 
 export const findHeadingOffset = (markdownText: string, title: String) => {
-  const lines = splitLines(markdownText)
   const target = String(title).trim()
 
   if (target.length === 0) {
     return null
   }
 
+  const cached = getParsedMarkdownCache(markdownText)
+  const match = cached.headings.find((heading) => heading.title === target)
+
+  if (match) {
+    return match.offset
+  }
+
+  const lines = markdownText.split('\n')
+  let offset = 0
+
   for (const line of lines) {
-    if (!headingPattern.test(line.text)) {
-      continue
+    if (headingPattern.test(line)) {
+      const headingText = line.replace(headingPattern, '').trim()
+
+      if (headingText === target) {
+        return offset
+      }
     }
 
-    const headingText = line.text.replace(headingPattern, '').trim()
-
-    if (headingText === target) {
-      return line.from
-    }
+    offset += line.length + 1
   }
 
   return null

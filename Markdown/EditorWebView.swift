@@ -372,6 +372,7 @@ struct EditorWebView: NSViewRepresentable {
         private var lastSyncedMarkdown: String?
         private var lastSyncedPresentation: Presentation?
         private var lastRevealRequestID: UUID?
+        private var didAttemptInlineFallback = false
 
         init(parent: EditorWebView) {
             self.parent = parent
@@ -384,13 +385,8 @@ struct EditorWebView: NSViewRepresentable {
                 return
             }
 
+            didAttemptInlineFallback = false
             let readAccessURL = indexURL.deletingLastPathComponent()
-
-            if let inlinedHTML = Self.inlinedEditorHTML(from: indexURL) {
-                webView.loadHTMLString(inlinedHTML, baseURL: readAccessURL)
-                return
-            }
-
             webView.loadFileURL(indexURL, allowingReadAccessTo: readAccessURL)
         }
 
@@ -565,6 +561,7 @@ struct EditorWebView: NSViewRepresentable {
             withError error: Error
         ) {
             NSLog("[EditorWebView] didFail url=%@ error=%@", webView.url?.absoluteString ?? "<nil>", error.localizedDescription)
+            loadInlineFallbackIfNeeded(in: webView)
         }
 
         func webView(
@@ -573,6 +570,7 @@ struct EditorWebView: NSViewRepresentable {
             withError error: Error
         ) {
             NSLog("[EditorWebView] didFailProvisionalNavigation url=%@ error=%@", webView.url?.absoluteString ?? "<nil>", error.localizedDescription)
+            loadInlineFallbackIfNeeded(in: webView)
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -582,6 +580,22 @@ struct EditorWebView: NSViewRepresentable {
         private static func editorIndexURL() -> URL? {
             Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "Editor")
                 ?? Bundle.main.url(forResource: "index", withExtension: "html")
+        }
+
+        private func loadInlineFallbackIfNeeded(in webView: WKWebView) {
+            guard !didAttemptInlineFallback else {
+                return
+            }
+
+            guard let indexURL = Self.editorIndexURL(),
+                  let inlinedHTML = Self.inlinedEditorHTML(from: indexURL)
+            else {
+                return
+            }
+
+            didAttemptInlineFallback = true
+            let baseURL = indexURL.deletingLastPathComponent()
+            webView.loadHTMLString(inlinedHTML, baseURL: baseURL)
         }
 
         private static func inlinedEditorHTML(from indexURL: URL) -> String? {

@@ -1,7 +1,8 @@
 import type { Editor } from '@milkdown/kit/core'
 import { editorViewCtx } from '@milkdown/kit/core'
 import { setBlockType, toggleMark, wrapIn } from '@milkdown/kit/prose/commands'
-import { TextSelection } from '@milkdown/prose/state'
+import { mathBlockSchema, mathInlineSchema } from '@milkdown/plugin-math'
+import { NodeSelection, TextSelection } from '@milkdown/prose/state'
 import {
   blockquoteSchema,
   bulletListSchema,
@@ -23,7 +24,6 @@ import {
 } from '@milkdown/kit/preset/gfm'
 
 import type { EditorCommand } from '../commands'
-import { INTERNAL_MATH_LANGUAGE } from './math-markdown'
 
 type SelectionOffsets = {
   anchor: number
@@ -254,6 +254,41 @@ const resolveBlockRange = (editor: Editor) => {
   })
 }
 
+const insertBlockMath = (editor: Editor) => {
+  return editor.action((ctx) => {
+    const block = resolveBlockRange(editor)
+    const type = mathBlockSchema.type(ctx)
+
+    if (!block) {
+      return false
+    }
+
+    const node = type.create({
+      value: ''
+    })
+    const transaction = block.view.state.tr.replaceWith(block.from, block.to, node)
+    transaction.setSelection(NodeSelection.create(transaction.doc, block.from))
+    block.view.dispatch(transaction.scrollIntoView())
+    return true
+  })
+}
+
+const insertInlineMath = (editor: Editor) => {
+  return editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    const { from, to, empty } = view.state.selection
+    const selectedText = empty ? 'x' : view.state.doc.textBetween(from, to, ' ')
+    const node = mathInlineSchema.type(ctx).create(
+      undefined,
+      selectedText.length > 0 ? view.state.schema.text(selectedText) : undefined
+    )
+    const transaction = view.state.tr.replaceSelectionWith(node)
+    transaction.setSelection(NodeSelection.create(transaction.doc, from))
+    view.dispatch(transaction.scrollIntoView())
+    return true
+  })
+}
+
 const toTaskListItems = (editor: Editor) => {
   return editor.action((ctx) => {
     const view = ctx.get(editorViewCtx)
@@ -448,15 +483,15 @@ export const runMilkdownCommand = (editor: Editor, command: EditorCommand) => {
     case 'code-block':
       return runProseCommand(editor, (ctx) => setBlockType(codeBlockSchema.type(ctx), { language: '' }))
     case 'math-block':
-      return runProseCommand(editor, (ctx) =>
-        setBlockType(codeBlockSchema.type(ctx), { language: INTERNAL_MATH_LANGUAGE })
-      )
+      return insertBlockMath(editor)
     case 'bold':
       return runProseCommand(editor, (ctx) => toggleMark(strongSchema.type(ctx)))
     case 'italic':
       return runProseCommand(editor, (ctx) => toggleMark(emphasisSchema.type(ctx)))
     case 'inline-code':
       return runProseCommand(editor, (ctx) => toggleMark(inlineCodeSchema.type(ctx)))
+    case 'inline-math':
+      return insertInlineMath(editor)
     case 'strikethrough':
       return runProseCommand(editor, (ctx) => toggleMark(strikethroughSchema.type(ctx)))
     case 'link':
@@ -570,6 +605,7 @@ export const supportsMilkdownCommand = (command: EditorCommand) => {
     case 'bold':
     case 'italic':
     case 'inline-code':
+    case 'inline-math':
     case 'strikethrough':
     case 'link':
     case 'clear-format':

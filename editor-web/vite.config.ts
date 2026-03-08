@@ -14,8 +14,12 @@ const resolveVendorChunk = (id: string) => {
   if (
     normalized.includes('/node_modules/@milkdown/') ||
     normalized.includes('/node_modules/remark-math/') ||
+    normalized.includes('/node_modules/@types/katex/') ||
     normalized.includes('/node_modules/unified/') ||
     normalized.includes('/node_modules/mdast-util-') ||
+    normalized.includes('/node_modules/rehype-') ||
+    normalized.includes('/node_modules/remark-') ||
+    normalized.includes('/node_modules/remark-rehype/') ||
     normalized.includes('/node_modules/micromark') ||
     normalized.includes('/node_modules/unist-util-') ||
     normalized.includes('/node_modules/vfile/') ||
@@ -43,17 +47,6 @@ const resolveVendorChunk = (id: string) => {
     normalized.includes('/node_modules/style-mod/')
   ) {
     return 'vendor-codemirror'
-  }
-
-  if (
-    normalized.includes('/node_modules/markdown-it') ||
-    normalized.includes('/node_modules/linkify-it/') ||
-    normalized.includes('/node_modules/mdurl/') ||
-    normalized.includes('/node_modules/uc.micro/') ||
-    normalized.includes('/node_modules/entities/') ||
-    normalized.includes('/node_modules/punycode.js/')
-  ) {
-    return 'vendor-markdown'
   }
 
   if (normalized.includes('/node_modules/@floating-ui/')) {

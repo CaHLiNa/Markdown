@@ -1,27 +1,23 @@
-import { codeBlockSchema } from '@milkdown/kit/preset/commonmark'
-import { $view } from '@milkdown/utils'
-import katex from 'katex'
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
+import { mathBlockSchema, mathInlineSchema } from '@milkdown/plugin-math'
 import type { Node as ProseMirrorNode } from '@milkdown/prose/model'
+import { NodeSelection } from '@milkdown/prose/state'
 import type { Decoration, EditorView as ProseMirrorEditorView, NodeView } from '@milkdown/prose/view'
+import { $view } from '@milkdown/utils'
 
-import { isInternalMathLanguage } from './math-markdown'
+import { renderKatexToString } from '../math-config'
 
 const closingSymbols = new Set([')', ']', '}'])
 
-const createMathPreviewHTML = (expression: string) => {
+const createMathPreviewHTML = (expression: string, displayMode: boolean, placeholder: string) => {
   const trimmed = expression.trim()
 
   if (trimmed.length === 0) {
-    return '<div class="md-math-block__placeholder">输入公式</div>'
+    return `<span class="${placeholder}">输入公式</span>`
   }
 
-  return katex.renderToString(trimmed, {
-    displayMode: true,
-    throwOnError: false,
-    strict: 'ignore'
-  })
+  return renderKatexToString(trimmed, displayMode)
 }
 
 const maybeSkipClosingSymbol = (view: EditorView, key: string) => {
@@ -49,42 +45,7 @@ const maybeSkipClosingSymbol = (view: EditorView, key: string) => {
   return true
 }
 
-class StandardCodeBlockView implements NodeView {
-  dom: HTMLElement
-  contentDOM: HTMLElement
-  #node: ProseMirrorNode
-
-  constructor(node: ProseMirrorNode) {
-    this.#node = node
-    this.dom = document.createElement('pre')
-    this.dom.className = 'md-code-block'
-    this.contentDOM = document.createElement('code')
-    this.dom.append(this.contentDOM)
-    this.#applyLanguage()
-  }
-
-  update(node: ProseMirrorNode) {
-    if (node.type !== this.#node.type || isInternalMathLanguage(node.attrs.language)) {
-      return false
-    }
-
-    this.#node = node
-    this.#applyLanguage()
-    return true
-  }
-
-  #applyLanguage() {
-    const language = typeof this.#node.attrs.language === 'string' ? this.#node.attrs.language : ''
-
-    if (language.length > 0) {
-      this.dom.dataset.language = language
-    } else {
-      delete this.dom.dataset.language
-    }
-  }
-}
-
-class MathCodeBlockView implements NodeView {
+class BlockMathNodeView implements NodeView {
   dom: HTMLElement
   #node: ProseMirrorNode
   #editorView: ProseMirrorEditorView
@@ -117,7 +78,7 @@ class MathCodeBlockView implements NodeView {
   }
 
   update(node: ProseMirrorNode) {
-    if (node.type !== this.#node.type || !isInternalMathLanguage(node.attrs.language)) {
+    if (node.type !== this.#node.type) {
       return false
     }
 
@@ -126,7 +87,7 @@ class MathCodeBlockView implements NodeView {
 
     if (this.#sourceEditor) {
       const currentText = this.#sourceEditor.state.doc.toString()
-      const nextText = this.#node.textContent
+      const nextText = String(this.#node.attrs.value ?? '')
 
       if (currentText !== nextText) {
         this.#sourceEditor.dispatch({
@@ -161,14 +122,15 @@ class MathCodeBlockView implements NodeView {
   destroy() {
     this.#destroyed = true
     this.dom.removeEventListener('click', this.#handlePreviewClick)
+
     if (this.#flushTimer != null) {
       window.clearTimeout(this.#flushTimer)
-      this.#flushTimer = null
     }
+
     if (this.#collapseTimer != null) {
       window.clearTimeout(this.#collapseTimer)
-      this.#collapseTimer = null
     }
+
     this.#flush()
     this.#sourceEditor?.destroy()
     this.#sourceEditor = null
@@ -201,11 +163,7 @@ class MathCodeBlockView implements NodeView {
     this.#collapseTimer = window.setTimeout(() => {
       this.#collapseTimer = null
 
-      if (this.#destroyed) {
-        return
-      }
-
-      if (this.dom.contains(document.activeElement)) {
+      if (this.#destroyed || this.dom.contains(document.activeElement)) {
         return
       }
 
@@ -226,7 +184,7 @@ class MathCodeBlockView implements NodeView {
     this.#sourceEditor = new EditorView({
       parent: this.#sourceShell,
       state: EditorState.create({
-        doc: this.#node.textContent,
+        doc: String(this.#node.attrs.value ?? ''),
         extensions: [
           keymap.of([
             {
@@ -285,10 +243,6 @@ class MathCodeBlockView implements NodeView {
     }
 
     this.#flushTimer = window.setTimeout(() => {
-      if (this.#destroyed) {
-        return
-      }
-
       this.#flushTimer = null
       this.#flush()
     }, 120)
@@ -299,9 +253,9 @@ class MathCodeBlockView implements NodeView {
       return
     }
 
-    const nextText = this.#sourceEditor.state.doc.toString()
+    const nextValue = this.#sourceEditor.state.doc.toString()
 
-    if (nextText === this.#node.textContent) {
+    if (nextValue === String(this.#node.attrs.value ?? '')) {
       return
     }
 
@@ -311,28 +265,198 @@ class MathCodeBlockView implements NodeView {
       return
     }
 
-    const from = position + 1
-    const to = position + this.#node.nodeSize - 1
-    const transaction = this.#editorView.state.tr.insertText(nextText, from, to)
+    const transaction = this.#editorView.state.tr.setNodeMarkup(position, undefined, {
+      ...this.#node.attrs,
+      value: nextValue
+    })
+    transaction.setSelection(NodeSelection.create(transaction.doc, position))
     this.#editorView.dispatch(transaction)
   }
 
-  #renderPreview(text = this.#node.textContent) {
-    this.#preview.innerHTML = createMathPreviewHTML(text)
+  #renderPreview(text = String(this.#node.attrs.value ?? '')) {
+    this.#preview.innerHTML = createMathPreviewHTML(
+      text,
+      true,
+      'md-math-block__placeholder'
+    )
   }
 }
 
-export const mathCodeBlockView = $view(codeBlockSchema.node, () => {
+class InlineMathNodeView implements NodeView {
+  dom: HTMLElement
+  #node: ProseMirrorNode
+  #editorView: ProseMirrorEditorView
+  #getPos: (() => number | undefined) | boolean
+  #preview: HTMLElement
+  #input: HTMLInputElement
+  #expanded = false
+
+  constructor(
+    node: ProseMirrorNode,
+    editorView: ProseMirrorEditorView,
+    getPos: (() => number | undefined) | boolean
+  ) {
+    this.#node = node
+    this.#editorView = editorView
+    this.#getPos = getPos
+    this.dom = document.createElement('span')
+    this.dom.className = 'md-inline-math'
+    this.#preview = document.createElement('span')
+    this.#preview.className = 'md-inline-math__preview'
+    this.#input = document.createElement('input')
+    this.#input.className = 'md-inline-math__input'
+    this.#input.type = 'text'
+    this.#input.spellcheck = false
+    this.dom.append(this.#preview, this.#input)
+    this.#render()
+    this.dom.addEventListener('click', this.#handleClick)
+    this.#input.addEventListener('keydown', this.#handleKeydown)
+    this.#input.addEventListener('blur', this.#handleBlur)
+  }
+
+  update(node: ProseMirrorNode) {
+    if (node.type !== this.#node.type) {
+      return false
+    }
+
+    this.#node = node
+    this.#render()
+    return true
+  }
+
+  selectNode() {
+    this.#enterEditMode()
+  }
+
+  deselectNode() {
+    if (!this.#expanded) {
+      return
+    }
+
+    this.#commit()
+  }
+
+  stopEvent(event: Event) {
+    return this.dom.contains(event.target as Node)
+  }
+
+  ignoreMutation() {
+    return true
+  }
+
+  destroy() {
+    this.dom.removeEventListener('click', this.#handleClick)
+    this.#input.removeEventListener('keydown', this.#handleKeydown)
+    this.#input.removeEventListener('blur', this.#handleBlur)
+  }
+
+  #handleClick = () => {
+    this.#enterEditMode()
+  }
+
+  #handleKeydown = (event: KeyboardEvent) => {
+    event.stopPropagation()
+
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      this.#commit()
+      return
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      this.#cancel()
+      return
+    }
+  }
+
+  #handleBlur = () => {
+    this.#commit()
+  }
+
+  #enterEditMode() {
+    if (this.#expanded) {
+      this.#input.focus()
+      this.#input.select()
+      return
+    }
+
+    this.#expanded = true
+    this.dom.classList.add('is-editing')
+    this.#input.value = this.#node.textContent
+    this.#input.focus()
+    this.#input.select()
+  }
+
+  #commit() {
+    if (!this.#expanded || typeof this.#getPos !== 'function') {
+      return
+    }
+
+    const nextValue = this.#input.value
+    const position = this.#getPos()
+
+    if (position == null) {
+      this.#cancel()
+      return
+    }
+
+    if (nextValue !== this.#node.textContent) {
+      const nextNode = this.#node.type.create(
+        this.#node.attrs,
+        nextValue.length > 0 ? this.#editorView.state.schema.text(nextValue) : undefined
+      )
+      const transaction = this.#editorView.state.tr.replaceWith(
+        position,
+        position + this.#node.nodeSize,
+        nextNode
+      )
+      transaction.setSelection(NodeSelection.create(transaction.doc, position))
+      this.#editorView.dispatch(transaction)
+    }
+
+    this.#expanded = false
+    this.dom.classList.remove('is-editing')
+    this.#render()
+    this.#editorView.focus()
+  }
+
+  #cancel() {
+    this.#expanded = false
+    this.dom.classList.remove('is-editing')
+    this.#render()
+    this.#editorView.focus()
+  }
+
+  #render() {
+    const value = this.#node.textContent
+    this.#preview.innerHTML = createMathPreviewHTML(
+      value,
+      false,
+      'md-inline-math__placeholder'
+    )
+    this.#input.value = value
+  }
+}
+
+export const blockMathView = $view(mathBlockSchema.node, () => {
   return (
     node: ProseMirrorNode,
     editorView: ProseMirrorEditorView,
     getPos: (() => number | undefined) | boolean,
     _decorations: readonly Decoration[]
   ) => {
-    if (isInternalMathLanguage(node.attrs.language)) {
-      return new MathCodeBlockView(node, editorView, getPos)
-    }
+    return new BlockMathNodeView(node, editorView, getPos)
+  }
+})
 
-    return new StandardCodeBlockView(node)
+export const inlineMathView = $view(mathInlineSchema.node, () => {
+  return (
+    node: ProseMirrorNode,
+    editorView: ProseMirrorEditorView,
+    getPos: (() => number | undefined) | boolean,
+    _decorations: readonly Decoration[]
+  ) => {
+    return new InlineMathNodeView(node, editorView, getPos)
   }
 })

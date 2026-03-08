@@ -972,6 +972,19 @@ body {
   margin: 0 0 1em;
 }
 
+.md-upload-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.38rem 0.72rem;
+  border: 1px solid var(--editor-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--editor-panel-strong) 92%, transparent);
+  color: var(--editor-muted);
+  font: 600 12px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  letter-spacing: 0.02em;
+}
+
 .md-math-block {
   display: grid;
   gap: 0.75rem;
@@ -1015,5 +1028,65 @@ body {
 }
 
 .md-math-block.is-expanded .md-math-block__source {
+  display: block;
+}
+
+.md-inline-math {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin: 0 0.08rem;
+  padding: 0.08rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--editor-border) 82%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--editor-panel) 84%, transparent);
+  color: var(--editor-heading);
+  vertical-align: baseline;
+  cursor: text;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.md-inline-math:hover,
+.md-inline-math.is-editing,
+.md-inline-math.ProseMirror-selectednode {
+  border-color: color-mix(in srgb, var(--editor-quote) 24%, var(--editor-border));
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.08);
+}
+
+.md-inline-math__preview {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.4rem;
+}
+
+.md-inline-math__preview .katex {
+  font-size: 0.98em;
+}
+
+.md-inline-math__placeholder {
+  color: var(--editor-muted);
+  font: 600 11px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.md-inline-math__input {
+  display: none;
+  width: 10rem;
+  border: 0;
+  background: transparent;
+  color: var(--editor-heading);
+  font: 500 12px/1.2 var(--editor-code-font-family);
+  outline: none;
+}
+
+.md-inline-math.is-editing .md-inline-math__preview {
+  display: none;
+}
+
+.md-inline-math.is-editing .md-inline-math__input {
   display: block;
 }

@@ -5,34 +5,38 @@ import {
   editorViewOptionsCtx,
   rootCtx
 } from '@milkdown/kit/core'
-import { serializerCtx } from '@milkdown/core'
+import { parserCtx, serializerCtx } from '@milkdown/core'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { indent, indentConfig } from '@milkdown/kit/plugin/indent'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { trailing } from '@milkdown/kit/plugin/trailing'
+import { upload, uploadConfig } from '@milkdown/kit/plugin/upload'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
 import { gfm } from '@milkdown/kit/preset/gfm'
 import { getMarkdown, replaceAll } from '@milkdown/kit/utils'
+import { math, katexOptionsCtx } from '@milkdown/plugin-math'
 import { $prose } from '@milkdown/utils'
-import { Fragment } from '@milkdown/prose/model'
+import { Fragment, Slice } from '@milkdown/prose/model'
 import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/prose/state'
+import { Decoration } from '@milkdown/prose/view'
 import type { EditorView } from '@milkdown/prose/view'
 import { imageSchema, paragraphSchema } from '@milkdown/kit/preset/commonmark'
 
 import { type EditorCommand } from '../commands'
 import { type EditorPresentation } from '../editor-presentation'
 import { type EditorRuntimeState } from '../editor-state'
+import { sharedKatexOptions } from '../math-config'
 import { renderMarkdownDocument } from '../markdown-renderer'
 import { runMilkdownCommand, runSourceCommand } from './commands-adapter'
 import { BlockHandleProvider } from './block-handle-provider'
 import { ImagePopoverProvider } from './image-popover-provider'
-import {
-  convertExternalMathBlocksToInternal,
-  convertInternalMathBlocksToExternal
-} from './math-markdown'
-import { mathCodeBlockView } from './math-nodeview-source'
+import { blockMathView, inlineMathView } from './math-nodeviews'
 import { MarkdownOffsetMapper } from './offset-mapper'
+import {
+  mapMarkdownOffsetToProseSelection,
+  mapProseSelectionToMarkdownOffset
+} from './selection-mapper'
 import { SlashMenuProvider } from './slash-provider'
 import { createSourceEditor, type SourceEditorController } from './source-editor'
 import { SelectionToolbarProvider } from './tooltip-provider'
@@ -112,8 +116,6 @@ const extractImageFiles = (transfer: FileTransferLike | null | undefined) => {
     .filter((file): file is File => file instanceof File)
 }
 
-const blockSelector = 'p, h1, h2, h3, h4, h5, h6, blockquote, pre, table, li'
-
 const createImmediateMarkdownPlugin = (
   onMarkdownChange: (markdown: string) => void
 ) => {
@@ -127,7 +129,7 @@ const createImmediateMarkdownPlugin = (
           }
 
           const markdown = ctx.get(serializerCtx)(view.state.doc)
-          onMarkdownChange(convertInternalMathBlocksToExternal(markdown))
+          onMarkdownChange(markdown)
         }
       })
     })
@@ -210,7 +212,7 @@ export class MilkdownSessionController {
   }
 
   getDocumentJSON() {
-    if (this.#milkdown) {
+    if (this.#mode !== 'global-source' && this.#milkdown) {
       return this.#milkdown.action((ctx) => {
         return ctx.get(editorViewCtx).state.doc.toJSON()
       })
@@ -245,6 +247,19 @@ export class MilkdownSessionController {
   getSelectionOffsets() {
     if (this.#mode === 'global-source') {
       this.#selection = this.#sourceEditor?.getSelection() ?? this.#selection
+      return { ...this.#selection }
+    }
+
+    if (this.#milkdown && this.#milkdownMounted) {
+      this.#selection = this.#milkdown.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const { selection } = view.state
+
+        return {
+          anchor: mapProseSelectionToMarkdownOffset(view.state.doc, this.#mapper.blocks, selection.anchor),
+          head: mapProseSelectionToMarkdownOffset(view.state.doc, this.#mapper.blocks, selection.head)
+        }
+      })
     }
 
     return { ...this.#selection }
@@ -259,16 +274,13 @@ export class MilkdownSessionController {
     this.#markdown = markdown
     this.#mapper.update(markdown)
 
-    if (this.#mode === 'global-source') {
-      this.#sourceEditor?.setMarkdown(markdown)
-      return
-    }
+    this.#sourceEditor?.setMarkdown(markdown)
 
     if (!this.#milkdown) {
       return
     }
 
-    this.#milkdown.action(replaceAll(convertExternalMathBlocksToInternal(markdown), true))
+    this.#milkdown.action(replaceAll(markdown, true))
     this.#refreshWysiwygInteractions()
   }
 
@@ -474,6 +486,10 @@ export class MilkdownSessionController {
   }
 
   #handleShellDragOver = (event: Event) => {
+    if (this.#mode !== 'global-source') {
+      return
+    }
+
     const transfer = 'dataTransfer' in event ? (event as DragEvent).dataTransfer : null
 
     if (extractImageFiles(transfer).length === 0) {
@@ -494,9 +510,7 @@ export class MilkdownSessionController {
       return this.#markdown
     }
 
-    const markdown = convertInternalMathBlocksToExternal(
-      this.#normalizeSerializedMarkdown(this.#milkdown.action(getMarkdown()))
-    )
+    const markdown = this.#normalizeSerializedMarkdown(this.#milkdown.action(getMarkdown()))
     this.#markdown = markdown
     this.#mapper.update(markdown)
     return markdown
@@ -511,11 +525,83 @@ export class MilkdownSessionController {
     this.#emitMarkdownChange(markdown)
   }
 
+  #applyMilkdownMarkdown(
+    markdown: string,
+    options: {
+      resetHistory?: boolean
+      addToHistory?: boolean
+    } = {}
+  ) {
+    if (!this.#milkdown || !this.#milkdownMounted) {
+      return
+    }
+
+    const { resetHistory = false, addToHistory = true } = options
+
+    if (resetHistory) {
+      this.#milkdown.action(replaceAll(markdown, true))
+      return
+    }
+
+    this.#milkdown.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const parser = ctx.get(parserCtx)
+      const doc = parser(markdown)
+
+      if (!doc) {
+        return
+      }
+
+      const transaction = view.state.tr.replace(
+        0,
+        view.state.doc.content.size,
+        new Slice(doc.content, 0, 0)
+      )
+
+      if (!addToHistory) {
+        transaction.setMeta('addToHistory', false)
+      }
+
+      view.dispatch(transaction)
+    })
+  }
+
+  #restoreWysiwygSelection(selection: SelectionOffsets) {
+    if (!this.#milkdown || !this.#milkdownMounted) {
+      return
+    }
+
+    this.#selection = this.#mapper.clampSelection(selection.anchor, selection.head)
+
+    this.#milkdown.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const anchor = mapMarkdownOffsetToProseSelection(
+        view.state.doc,
+        this.#mapper.blocks,
+        this.#selection.anchor
+      )
+      const head = mapMarkdownOffsetToProseSelection(
+        view.state.doc,
+        this.#mapper.blocks,
+        this.#selection.head
+      )
+      const transaction = view.state.tr
+
+      if (anchor.selectNode && head.selectNode && anchor.pos === head.pos) {
+        transaction.setSelection(NodeSelection.create(transaction.doc, anchor.pos))
+      } else {
+        transaction.setSelection(TextSelection.create(transaction.doc, anchor.pos, head.pos))
+      }
+
+      view.dispatch(transaction.scrollIntoView())
+    })
+  }
+
   async #handleTransferEvent(
     event: Event,
     transferKey: 'clipboardData' | 'dataTransfer'
   ) {
-    if (!this.#persistImageAsset) {
+    if (!this.#persistImageAsset || this.#mode !== 'global-source') {
       return
     }
 
@@ -532,24 +618,13 @@ export class MilkdownSessionController {
     event.preventDefault()
     event.stopPropagation()
 
-    const dropPosition =
-      transferKey === 'dataTransfer' && this.#mode === 'wysiwyg' && this.#milkdown
-        ? this.#milkdown.action((ctx) =>
-            this.#resolveDropPosition(ctx.get(editorViewCtx), event as DragEvent)
-          )
-        : null
     const images = await this.#persistImages(files)
 
     if (images.length === 0) {
       return
     }
 
-    if (this.#mode === 'global-source') {
-      this.#insertImagesIntoSource(images)
-      return
-    }
-
-    this.#insertImagesIntoWysiwyg(images, dropPosition)
+    this.#insertImagesIntoSource(images)
   }
 
   async #persistImages(files: File[]) {
@@ -861,32 +936,6 @@ export class MilkdownSessionController {
     return null
   }
 
-  #resolveDropPosition(view: EditorView, event: DragEvent) {
-    const coords =
-      Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
-        ? view.posAtCoords({
-            left: event.clientX,
-            top: event.clientY
-          })
-        : null
-
-    if (coords?.pos != null) {
-      return coords.pos
-    }
-
-    if (!(event.target instanceof Element)) {
-      return null
-    }
-
-    const block = event.target.closest<HTMLElement>(blockSelector)
-
-    if (!block || !view.dom.contains(block)) {
-      return null
-    }
-
-    return this.#resolveImageNodePosition(view, block)
-  }
-
   async #pickImageFileInternal() {
     if (this.#pickImageFile) {
       return this.#pickImageFile()
@@ -1019,6 +1068,7 @@ export class MilkdownSessionController {
   async #mountWysiwyg() {
     const host = document.createElement('div')
     host.className = 'md-editor__wysiwyg'
+    host.hidden = this.#mode !== 'wysiwyg'
     this.#milkdownHost = host
     this.#shell.append(host)
     this.#applyEditableClassNames()
@@ -1026,7 +1076,8 @@ export class MilkdownSessionController {
     const editor = Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, host)
-        ctx.set(defaultValueCtx, convertExternalMathBlocksToInternal(this.#markdown))
+        ctx.set(defaultValueCtx, this.#markdown)
+        ctx.set(katexOptionsCtx.key, sharedKatexOptions)
         ctx.set(editorViewOptionsCtx, {
           editable: () => true,
           handleDOMEvents: {
@@ -1035,6 +1086,34 @@ export class MilkdownSessionController {
               this.#handleImageSelectionClick(view, event)
           }
         })
+        ctx.update(uploadConfig.key, (value) => ({
+          ...value,
+          uploader: async (files, schema) => {
+            const images = await this.#persistImages(Array.from(files))
+            const imageType = schema.nodes.image
+            const paragraphType = schema.nodes.paragraph
+
+            if (!imageType || images.length === 0) {
+              return []
+            }
+
+            return images.map(({ src, alt }) => {
+              const imageNode = imageType.create({
+                src,
+                alt,
+                title: ''
+              })
+
+              return paragraphType ? paragraphType.create(null, imageNode) : imageNode
+            })
+          },
+          uploadWidgetFactory: (pos, spec) => {
+            const placeholder = document.createElement('span')
+            placeholder.className = 'md-upload-placeholder'
+            placeholder.textContent = '正在上传图片...'
+            return Decoration.widget(pos, placeholder, spec)
+          }
+        }))
         ctx.update(indentConfig.key, (value) => ({
           ...value,
           size: 2
@@ -1047,7 +1126,10 @@ export class MilkdownSessionController {
       .use(trailing)
       .use(clipboard)
       .use(gfm)
-      .use(mathCodeBlockView)
+      .use(math)
+      .use(upload)
+      .use(blockMathView)
+      .use(inlineMathView)
       .use(this.#immediateMarkdownPlugin)
       .config((ctx) => {
         const listeners = ctx.get(listenerCtx)
@@ -1060,10 +1142,12 @@ export class MilkdownSessionController {
         })
 
         listeners.focus(() => {
+          this.#selection = this.getSelectionOffsets()
           this.#refreshWysiwygInteractions()
         })
 
         listeners.selectionUpdated(() => {
+          this.#selection = this.getSelectionOffsets()
           this.#refreshWysiwygInteractions()
         })
       })
@@ -1078,31 +1162,13 @@ export class MilkdownSessionController {
     await this.#milkdownReady
   }
 
-  #unmountWysiwyg() {
-    this.#destroyWysiwygInteractions()
-    const activeMilkdown = this.#milkdown
-    const host = this.#milkdownHost
-    this.#milkdown = null
-    this.#milkdownHost = null
-    this.#milkdownMounted = false
-    host?.remove()
-
-    if (activeMilkdown) {
-      const destroyPromise = waitForNextTick()
-        .then(() => activeMilkdown.destroy())
-        .catch(() => undefined)
-      this.#pendingMilkdownDestroy = this.#pendingMilkdownDestroy.then(async () => {
-        await destroyPromise
-      })
-    }
-  }
-
   #enterGlobalSourceMode() {
     this.#selection = this.getSelectionOffsets()
     this.#syncMarkdownFromMilkdown()
     this.#mode = 'global-source'
     this.#applyEditableClassNames()
-    this.#unmountWysiwyg()
+    this.#destroyWysiwygInteractions()
+    this.#milkdownHost?.setAttribute('hidden', 'hidden')
 
     this.#sourceEditor = createSourceEditor({
       root: this.#shell,
@@ -1127,6 +1193,10 @@ export class MilkdownSessionController {
     this.#sourceEditor = null
     this.#mode = 'wysiwyg'
     this.#applyEditableClassNames()
-    void this.#mountWysiwyg()
+    this.#milkdownHost?.removeAttribute('hidden')
+    this.#applyMilkdownMarkdown(this.#markdown, { addToHistory: false })
+    this.#restoreWysiwygSelection(this.#selection)
+    this.#ensureWysiwygInteractions()
+    this.#refreshWysiwygInteractions()
   }
 }
