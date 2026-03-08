@@ -1,5 +1,5 @@
-import './style.css'
 import 'vditor/dist/index.css'
+import './style.css'
 
 import {
   installNativeBridge,

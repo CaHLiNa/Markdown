@@ -17,6 +17,10 @@
   --editor-code-block-focus: rgba(246, 241, 233, 0.44);
   --editor-math-block: transparent;
   --editor-math-border: transparent;
+  --editor-table-head: rgba(72, 60, 47, 0.05);
+  --editor-table-cell: rgba(72, 60, 47, 0.018);
+  --editor-floating-surface: rgba(255, 252, 247, 0.9);
+  --editor-floating-border: rgba(54, 46, 39, 0.08);
   --editor-quote-surface: transparent;
   --editor-selection: rgba(201, 135, 70, 0.18);
   --editor-quote: #b16d34;
@@ -39,6 +43,10 @@
   --editor-code-block-focus: rgba(255, 255, 255, 0.04);
   --editor-math-block: transparent;
   --editor-math-border: transparent;
+  --editor-table-head: rgba(255, 255, 255, 0.05);
+  --editor-table-cell: rgba(255, 255, 255, 0.018);
+  --editor-floating-surface: rgba(24, 24, 26, 0.9);
+  --editor-floating-border: rgba(255, 255, 255, 0.08);
   --editor-quote-surface: transparent;
   --editor-selection: rgba(240, 163, 92, 0.2);
   --editor-quote: #f0a35c;
@@ -59,6 +67,10 @@
   --editor-code-block-focus: rgba(241, 228, 205, 0.42);
   --editor-math-block: transparent;
   --editor-math-border: transparent;
+  --editor-table-head: rgba(112, 87, 58, 0.07);
+  --editor-table-cell: rgba(112, 87, 58, 0.025);
+  --editor-floating-surface: rgba(251, 245, 234, 0.9);
+  --editor-floating-border: rgba(92, 69, 44, 0.08);
   --editor-quote-surface: transparent;
   --editor-selection: rgba(166, 111, 59, 0.18);
   --editor-quote: #a15f28;
@@ -309,8 +321,42 @@ body {
 
 .vditor-ir table,
 .vditor-reset table {
+  display: table !important;
   width: 100%;
+  max-width: 100%;
+  margin: 0.2rem 0 0.92rem;
   border-collapse: collapse;
+  border-spacing: 0;
+  table-layout: fixed;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.vditor-ir thead,
+.vditor-ir tbody,
+.vditor-ir tr,
+.vditor-reset thead,
+.vditor-reset tbody,
+.vditor-reset tr {
+  background: transparent !important;
+}
+
+.vditor-ir tr,
+.vditor-reset tr {
+  border-top: 1px solid var(--editor-border);
+}
+
+.vditor-ir thead tr,
+.vditor-reset thead tr {
+  border-top: 0;
+}
+
+.vditor-ir table td:first-child::after,
+.vditor-ir table th:first-child::after,
+.vditor-reset table td:first-child::after,
+.vditor-reset table th:first-child::after {
+  content: none !important;
+  display: none !important;
 }
 
 .vditor-ir th,
@@ -318,8 +364,94 @@ body {
 .vditor-reset th,
 .vditor-reset td {
   border: 1px solid var(--editor-border);
-  padding: 0.6rem 0.8rem;
+  padding: 0.8rem 1rem;
   text-align: left;
+  vertical-align: top;
+  white-space: normal !important;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  background: var(--editor-table-cell);
+}
+
+.vditor-ir th,
+.vditor-reset th {
+  color: var(--editor-heading);
+  font-weight: 700;
+  background: var(--editor-table-head);
+}
+
+.vditor-ir td p,
+.vditor-ir th p,
+.vditor-reset td p,
+.vditor-reset th p {
+  margin: 0;
+}
+
+.vditor-ir td code,
+.vditor-ir th code,
+.vditor-reset td code,
+.vditor-reset th code {
+  white-space: pre-wrap;
+}
+
+.editor-table-toolbar {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--editor-floating-border);
+  border-radius: 999px;
+  background: var(--editor-floating-surface);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.editor-table-toolbar[hidden] {
+  display: none;
+}
+
+.editor-table-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: 0.18rem;
+}
+
+.editor-table-toolbar__button {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--editor-muted);
+  font: 600 12px/1 var(--editor-font-family);
+  letter-spacing: 0.01em;
+  padding: 0.38rem 0.58rem;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.editor-table-toolbar__button:hover,
+.editor-table-toolbar__button[data-active='true'] {
+  background: var(--editor-selection);
+  color: var(--editor-heading);
+}
+
+.editor-table-toolbar__button:focus,
+.editor-table-toolbar__button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.editor-table-toolbar__meta {
+  min-width: 3rem;
+  color: var(--editor-muted);
+  font: 600 12px/1 var(--editor-code-font-family);
+  text-align: center;
 }
 
 .vditor-ir img,
