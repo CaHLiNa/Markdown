@@ -50,6 +50,7 @@ describe('native bridge', () => {
   it('registers window.getEditorState and returns the provided editor snapshot', () => {
     const getEditorState = vi.fn(() => ({
       markdown: '# 标题',
+      mode: 'wysiwyg',
       activeBlock: {
         type: 'heading',
         text: '# 标题'
@@ -64,6 +65,7 @@ describe('native bridge', () => {
 
     expect(window.getEditorState?.()).toEqual({
       markdown: '# 标题',
+      mode: 'wysiwyg',
       activeBlock: {
         type: 'heading',
         text: '# 标题'

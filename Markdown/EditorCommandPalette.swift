@@ -17,6 +17,8 @@ struct EditorCommandPaletteItem: Identifiable, Equatable {
 extension EditorCommand {
     var paletteTitle: String {
         switch self {
+        case .toggleGlobalSourceMode:
+            return "切换全局源码模式"
         case .paragraph:
             return "段落"
         case .heading1:
@@ -84,6 +86,8 @@ extension EditorCommand {
 
     var paletteCategory: String {
         switch self {
+        case .toggleGlobalSourceMode:
+            return "视图"
         case .paragraph, .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
             return "段落"
         case .upgradeHeading, .degradeHeading:
@@ -99,6 +103,8 @@ extension EditorCommand {
 
     var paletteKeywords: [String] {
         switch self {
+        case .toggleGlobalSourceMode:
+            return ["source", "markdown", "raw"]
         case .paragraph:
             return ["paragraph", "text"]
         case .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
@@ -257,10 +263,10 @@ enum EditorCommandPaletteCatalog {
             keywords: ["outline", "headings", "toc"]
         ),
         EditorCommandPaletteItem(
-            id: "view.source-code-mode",
-            title: "切换源码视图",
+            id: "view.toggle-global-source-mode",
+            title: "切换全局源码模式",
             category: "视图",
-            keywords: ["source", "code", "editor"]
+            keywords: ["source", "markdown", "raw"]
         ),
         EditorCommandPaletteItem(
             id: "view.focus-mode",

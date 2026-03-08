@@ -14,7 +14,6 @@ struct ContentView: View {
     @FocusState private var focusedSearchField: SearchField?
     @State private var isRenamingTitle = false
     @State private var titleDraft = ""
-    @State private var sourceSelection: TextSelection?
 
     private enum SearchField: Hashable {
         case query
@@ -66,8 +65,7 @@ struct ContentView: View {
     }
 
     private var isEmptyVisualDocument: Bool {
-        documentController.editorMode == .wysiwyg &&
-            documentController.currentMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        documentController.currentMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var displayTitle: String {
@@ -103,9 +101,6 @@ struct ContentView: View {
                     isTitleFieldFocused = true
                 }
             }
-        }
-        .onChange(of: documentController.revealRequest) { _, request in
-            applySourceSelection(for: request)
         }
         .onChange(of: documentController.isDocumentSearchPresented) { _, isPresented in
             guard isPresented else {
@@ -540,7 +535,6 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(documentController.outlineItems) { item in
                             Button {
-                                documentController.editorMode = .wysiwyg
                                 documentController.revealOutlineItem(item)
                             } label: {
                                 HStack(spacing: 10) {
@@ -710,18 +704,6 @@ struct ContentView: View {
                 revealRequest: documentController.revealRequest,
                 onImageAssetRequest: documentController.persistImageAsset
             )
-            .opacity(documentController.editorMode == .wysiwyg ? 1 : 0.0001)
-            .allowsHitTesting(documentController.editorMode == .wysiwyg)
-
-            if documentController.editorMode == .sourceView {
-                TextEditor(text: markdownBinding, selection: $sourceSelection)
-                    .font(.system(size: 15, weight: .regular, design: .monospaced))
-                    .foregroundStyle(palette.primaryText)
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, Metrics.editorLeadingInset)
-                    .padding(.vertical, 32)
-                    .background(palette.editorSurface)
-            }
 
             if isEmptyVisualDocument {
                 EmptyEditorHintView(palette: palette)
@@ -909,20 +891,6 @@ struct ContentView: View {
         titleDraft = displayTitle
     }
 
-    private func applySourceSelection(for request: EditorRevealRequest?) {
-        guard let request else {
-            return
-        }
-
-        let markdown = documentController.currentMarkdown
-        let clampedOffset = max(0, min(request.offset, markdown.count))
-        let maxLength = markdown.count - clampedOffset
-        let clampedLength = max(0, min(request.length, maxLength))
-        let startIndex = markdown.index(markdown.startIndex, offsetBy: clampedOffset)
-        let endIndex = markdown.index(startIndex, offsetBy: clampedLength)
-
-        sourceSelection = TextSelection(range: startIndex..<endIndex)
-    }
 }
 
 #Preview {

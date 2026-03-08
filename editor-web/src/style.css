@@ -864,3 +864,46 @@ body {
   color: #c7512d;
   font: 14px -apple-system, BlinkMacSystemFont, sans-serif;
 }
+
+.md-editor {
+  position: relative;
+  min-height: 100vh;
+  color: var(--editor-text);
+  background: var(--editor-surface);
+}
+
+.md-editor__wysiwyg,
+.md-editor__source {
+  min-height: 100vh;
+}
+
+.md-editor__wysiwyg .ProseMirror {
+  box-sizing: border-box;
+  min-height: 100vh;
+  max-width: var(--editor-page-width);
+  margin: 0 auto;
+  padding: 40px 48px 96px;
+  outline: none;
+  font-family: var(--editor-font-family);
+  font-size: var(--editor-font-size);
+  line-height: var(--editor-line-height);
+}
+
+.md-editor__wysiwyg .ProseMirror p,
+.md-editor__wysiwyg .ProseMirror h1,
+.md-editor__wysiwyg .ProseMirror h2,
+.md-editor__wysiwyg .ProseMirror h3,
+.md-editor__wysiwyg .ProseMirror h4,
+.md-editor__wysiwyg .ProseMirror h5,
+.md-editor__wysiwyg .ProseMirror h6,
+.md-editor__wysiwyg .ProseMirror blockquote,
+.md-editor__wysiwyg .ProseMirror pre,
+.md-editor__wysiwyg .ProseMirror ul,
+.md-editor__wysiwyg .ProseMirror ol {
+  margin: 0 0 1em;
+}
+
+.md-editor__wysiwyg .ProseMirror img {
+  max-width: 100%;
+  height: auto;
+}

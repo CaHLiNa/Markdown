@@ -1,5 +1,7 @@
 import './style.css'
 import 'katex/dist/katex.min.css'
+import '@milkdown/kit/prose/view/style/prosemirror.css'
+import '@milkdown/kit/prose/tables/style/tables.css'
 
 import {
   installNativeBridge,
@@ -17,16 +19,20 @@ import {
   type EditorPresentation
 } from './editor-presentation'
 import { renderMarkdownDocument } from './markdown-renderer'
+import { createNativeMarkdownSync } from './native-markdown-sync'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 
 if (!app) {
-  throw new Error('缺少用于挂载 CodeMirror 的 #app 容器。')
+  throw new Error('缺少用于挂载编辑器的 #app 容器。')
 }
 
 let editor: MarkdownEditor | null = null
 let pendingMarkdown = ''
 let pendingAppearance: EditorPresentation = { ...defaultEditorPresentation }
+const nativeMarkdownSync = createNativeMarkdownSync((markdown) => {
+  postMarkdownToNative(markdown)
+})
 
 const normalizeMarkdown = (value: unknown) => {
   return typeof value === 'string' ? value : ''
@@ -57,6 +63,7 @@ const applyAppearance = (appearance: EditorPresentation) => {
 }
 
 const setMarkdownFromNative = (markdown: string) => {
+  nativeMarkdownSync.flush()
   pendingMarkdown = markdown
 
   if (!editor) {
@@ -122,6 +129,7 @@ const getEditorState = () => {
 
   return {
     markdown: pendingMarkdown,
+    mode: 'wysiwyg',
     activeBlock: null,
     selection: {
       anchor: 0,
@@ -137,6 +145,24 @@ window.revealOffset = revealOffset
 window.getRenderedHTML = getRenderedHTML
 applyAppearance(pendingAppearance)
 
+window.addEventListener('blur', () => {
+  nativeMarkdownSync.flush()
+})
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    nativeMarkdownSync.flush()
+  }
+})
+
+window.addEventListener('pagehide', () => {
+  nativeMarkdownSync.flush()
+})
+
+window.addEventListener('beforeunload', () => {
+  nativeMarkdownSync.flush()
+})
+
 const bootEditor = async () => {
   editor = await createMarkdownEditor({
     root: app,
@@ -144,7 +170,7 @@ const bootEditor = async () => {
     persistImageAsset: persistImageAssetInNative,
     onMarkdownChange(markdown) {
       pendingMarkdown = markdown
-      postMarkdownToNative(markdown)
+      nativeMarkdownSync.schedule(markdown)
     }
   })
 
@@ -157,7 +183,7 @@ const bootEditor = async () => {
 }
 
 void bootEditor().catch((error: unknown) => {
-  console.error('[editor-web] CodeMirror 初始化失败', error)
+  console.error('[editor-web] 编辑器初始化失败', error)
   app.innerHTML = `
     <div class="editor-error">
       编辑器初始化失败。

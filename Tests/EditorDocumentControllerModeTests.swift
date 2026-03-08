@@ -3,30 +3,20 @@ import XCTest
 
 @MainActor
 final class EditorDocumentControllerModeTests: HostedXCTestCase {
-    func testDefaultsToWysiwyg() {
+    func testDefaultsToSingleWebEditorSurface() {
         resetPersistentState()
         let controller = EditorDocumentController()
 
-        XCTAssertEqual(controller.editorMode, .wysiwyg, "Expected the editor to start in WYSIWYG mode.")
+        XCTAssertTrue(controller.canExportRenderedDocument, "Expected the single WebView editor surface to support rendered export.")
     }
 
-    func testToggleSourceViewSwitchesBetweenVisualAndSourceView() {
+    func testTogglingGlobalSourceModeDoesNotChangeDocumentMarkdownImmediately() {
         resetPersistentState()
-        let controller = EditorDocumentController()
+        let controller = EditorDocumentController(markdown: "# Title")
 
-        controller.toggleSourceView()
-        XCTAssertEqual(controller.editorMode, .sourceView, "Expected toggleSourceView() to switch into source view.")
+        controller.toggleGlobalSourceMode()
 
-        controller.toggleSourceView()
-        XCTAssertEqual(controller.editorMode, .wysiwyg, "Expected toggleSourceView() to switch back into WYSIWYG.")
-    }
-
-    func testRenderedExportRemainsAvailableInSourceView() {
-        resetPersistentState()
-        let controller = EditorDocumentController()
-
-        controller.toggleSourceView()
-        XCTAssertTrue(controller.canExportRenderedDocument, "Expected rendered export to remain available in source view.")
+        XCTAssertEqual(controller.currentMarkdown, "# Title", "Expected toggling the in-web global source mode to leave the bound markdown unchanged until the web editor reports edits.")
     }
 
     private func resetPersistentState() {

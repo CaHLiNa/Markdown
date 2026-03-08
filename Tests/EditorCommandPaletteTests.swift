@@ -7,7 +7,7 @@ final class EditorCommandPaletteTests: XCTestCase {
 
         XCTAssertTrue(ids.contains("file.quick-open"), "Expected command palette catalog to include quick open.")
         XCTAssertTrue(ids.contains("view.command-palette"), "Expected command palette catalog to include command palette.")
-        XCTAssertTrue(ids.contains("view.source-code-mode"), "Expected command palette catalog to include source mode toggle.")
+        XCTAssertTrue(ids.contains("view.toggle-global-source-mode"), "Expected command palette catalog to include global source mode toggle.")
     }
 
     func testCatalogIncludesRichEditorCommands() {

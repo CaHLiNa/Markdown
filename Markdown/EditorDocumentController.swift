@@ -18,14 +18,8 @@ enum EditorSidebarPane: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-enum EditorMode: String, CaseIterable, Identifiable, Codable {
-    case wysiwyg = "所见即所得"
-    case sourceView = "源码视图"
-
-    var id: String { rawValue }
-}
-
 enum EditorCommand: String, CaseIterable {
+    case toggleGlobalSourceMode = "toggle-global-source-mode"
     case paragraph = "paragraph"
     case heading1 = "heading-1"
     case heading2 = "heading-2"
@@ -136,14 +130,6 @@ final class EditorDocumentController: ObservableObject {
     @Published private(set) var expandedFolderIDs: Set<String> = []
     @Published private(set) var recentFiles: [URL]
     @Published var sidebarPane: EditorSidebarPane = .files
-    @Published var editorMode: EditorMode {
-        didSet {
-            persistPreferences()
-            if isDocumentSearchPresented {
-                revealCurrentDocumentSearchMatch()
-            }
-        }
-    }
     @Published var appearanceMode: EditorAppearanceMode {
         didSet { persistPreferences() }
     }
@@ -238,7 +224,6 @@ final class EditorDocumentController: ObservableObject {
         self.tabs = [initialTab]
         self.activeTabID = initialTab.id
         self.recentFiles = Self.loadRecentFiles()
-        self.editorMode = preferences.editorMode
         self.appearanceMode = preferences.appearanceMode
         self.editorTheme = preferences.editorTheme
         self.htmlExportTheme = preferences.exportTheme
@@ -675,18 +660,25 @@ final class EditorDocumentController: ObservableObject {
         }
 
         if let fileURL = activeTab.fileURL {
-            do {
-                try MarkdownFileService.write(activeTab.markdown, to: fileURL)
-                try MarkdownFileService.removeUnusedSiblingImageAssets(
-                    for: activeTab.markdown,
-                    alongsideMarkdownFile: fileURL
-                )
-                updateActiveTab {
-                    $0.lastSavedMarkdown = $0.markdown
+            currentEditorMarkdown { [weak self] markdown in
+                guard let self else {
+                    return
                 }
-                addRecentFile(fileURL)
-            } catch {
-                presentError(error, title: "无法保存文件")
+
+                do {
+                    try MarkdownFileService.write(markdown, to: fileURL)
+                    try MarkdownFileService.removeUnusedSiblingImageAssets(
+                        for: markdown,
+                        alongsideMarkdownFile: fileURL
+                    )
+                    self.updateActiveTab {
+                        $0.markdown = markdown
+                        $0.lastSavedMarkdown = markdown
+                    }
+                    self.addRecentFile(fileURL)
+                } catch {
+                    self.presentError(error, title: "无法保存文件")
+                }
             }
             return
         }
@@ -712,34 +704,40 @@ final class EditorDocumentController: ObservableObject {
 
         let destinationURL = MarkdownFileService.normalizedMarkdownURL(from: selectedURL)
 
-        do {
-            let markdownToSave: String
+        currentEditorMarkdown { [weak self] markdown in
+            guard let self else {
+                return
+            }
 
-            if let sourceURL = activeTab.fileURL {
-                markdownToSave = try MarkdownFileService.relocateSiblingImageAssetsForSaveAs(
-                    activeTab.markdown,
-                    from: sourceURL,
-                    to: destinationURL
+            do {
+                let markdownToSave: String
+
+                if let sourceURL = activeTab.fileURL {
+                    markdownToSave = try MarkdownFileService.relocateSiblingImageAssetsForSaveAs(
+                        markdown,
+                        from: sourceURL,
+                        to: destinationURL
+                    )
+                } else {
+                    markdownToSave = markdown
+                }
+
+                try MarkdownFileService.write(markdownToSave, to: destinationURL)
+                try MarkdownFileService.removeUnusedSiblingImageAssets(
+                    for: markdownToSave,
+                    alongsideMarkdownFile: destinationURL
                 )
-            } else {
-                markdownToSave = activeTab.markdown
+                self.updateActiveTab {
+                    $0.fileURL = destinationURL
+                    $0.title = destinationURL.lastPathComponent
+                    $0.markdown = markdownToSave
+                    $0.lastSavedMarkdown = markdownToSave
+                }
+                self.addRecentFile(destinationURL)
+                self.refreshWorkspace()
+            } catch {
+                self.presentError(error, title: "无法保存文件")
             }
-
-            try MarkdownFileService.write(markdownToSave, to: destinationURL)
-            try MarkdownFileService.removeUnusedSiblingImageAssets(
-                for: markdownToSave,
-                alongsideMarkdownFile: destinationURL
-            )
-            updateActiveTab {
-                $0.fileURL = destinationURL
-                $0.title = destinationURL.lastPathComponent
-                $0.markdown = markdownToSave
-                $0.lastSavedMarkdown = markdownToSave
-            }
-            addRecentFile(destinationURL)
-            refreshWorkspace()
-        } catch {
-            presentError(error, title: "无法保存文件")
         }
     }
 
@@ -886,8 +884,8 @@ final class EditorDocumentController: ObservableObject {
         }
     }
 
-    func toggleSourceView() {
-        editorMode = editorMode == .wysiwyg ? .sourceView : .wysiwyg
+    func toggleGlobalSourceMode() {
+        editorController.runCommand(EditorCommand.toggleGlobalSourceMode.rawValue)
     }
 
     func toggleTabStripVisibility() {
@@ -938,6 +936,26 @@ final class EditorDocumentController: ObservableObject {
 
     private var activeTab: EditorTab? {
         tabs.first(where: { $0.id == activeTabID })
+    }
+
+    private func currentEditorMarkdown(completion: @escaping (String) -> Void) {
+        editorController.currentMarkdown { [weak self] result in
+            Task { @MainActor in
+                guard let self else {
+                    return
+                }
+
+                switch result {
+                case .success(let markdown):
+                    if self.currentMarkdown != markdown {
+                        self.currentMarkdown = markdown
+                    }
+                    completion(markdown)
+                case .failure:
+                    completion(self.currentMarkdown)
+                }
+            }
+        }
     }
 
     private func openDocument(at fileURL: URL) {
@@ -1112,8 +1130,8 @@ final class EditorDocumentController: ObservableObject {
             showFilesPane()
         case "view.outline":
             showOutlinePane()
-        case "view.source-code-mode":
-            toggleSourceView()
+        case "view.toggle-global-source-mode":
+            toggleGlobalSourceMode()
         case "view.focus-mode":
             toggleFocusMode()
         case "view.typewriter-mode":
@@ -1132,7 +1150,6 @@ final class EditorDocumentController: ObservableObject {
             appearanceMode: appearanceMode,
             editorTheme: editorTheme,
             exportTheme: htmlExportTheme,
-            editorMode: editorMode,
             tabBarVisibility: isTabStripVisible,
             typewriterMode: isTypewriterModeEnabled,
             focusMode: isFocusModeEnabled,

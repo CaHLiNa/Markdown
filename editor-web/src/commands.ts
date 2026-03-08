@@ -1,4 +1,5 @@
 export type EditorCommand =
+  | 'toggle-global-source-mode'
   | 'paragraph'
   | 'heading-1'
   | 'heading-2'
@@ -64,6 +65,16 @@ export type CommandSectionDefinition = {
 }
 
 const commandDefinitions: EditorCommandDefinition[] = [
+  {
+    id: 'toggle-global-source-mode',
+    label: '切换源码模式',
+    icon: '</>',
+    group: 'transform',
+    surface: 'block-menu',
+    section: 'actions',
+    priority: 82,
+    aliases: ['source', 'raw', 'markdown source', 'toggle source']
+  },
   {
     id: 'paragraph',
     label: '段落',

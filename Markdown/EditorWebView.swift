@@ -11,6 +11,7 @@ import WebKit
 enum EditorWebViewControllerError: LocalizedError {
     case pageNotReady
     case renderedContentUnavailable
+    case markdownUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +19,8 @@ enum EditorWebViewControllerError: LocalizedError {
             return "编辑器内容尚未准备好，请稍后再试。"
         case .renderedContentUnavailable:
             return "当前无法读取编辑器的渲染内容。"
+        case .markdownUnavailable:
+            return "当前无法读取编辑器的 Markdown 内容。"
         }
     }
 }
@@ -259,6 +262,33 @@ struct EditorWebView: NSViewRepresentable {
             evaluateJavaScript(script, completion: completion)
         }
 
+        func currentMarkdown(completion: @escaping (Result<String, Error>) -> Void) {
+            let script = """
+            (() => {
+                if (typeof window.getEditorState === 'function') {
+                    const state = window.getEditorState();
+                    return typeof state?.markdown === 'string' ? state.markdown : null;
+                }
+
+                return null;
+            })();
+            """
+
+            evaluateJavaScript(script) { result in
+                switch result {
+                case .success(let value):
+                    guard let markdown = value as? String else {
+                        completion(.failure(EditorWebViewControllerError.markdownUnavailable))
+                        return
+                    }
+
+                    completion(.success(markdown))
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+        }
+
         func renderedHTML(completion: @escaping (Result<String, Error>) -> Void) {
             let script = """
             (() => {
@@ -266,7 +296,7 @@ struct EditorWebView: NSViewRepresentable {
                     return window.getRenderedHTML();
                 }
 
-                const root = document.querySelector('.cm-editor .cm-content');
+                const root = document.querySelector('.md-editor__wysiwyg .ProseMirror');
                 return root ? root.innerHTML : '';
             })();
             """

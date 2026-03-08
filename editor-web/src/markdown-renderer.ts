@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import type Token from 'markdown-it/lib/token.mjs'
 import markdownItDeflist from 'markdown-it-deflist'
 import markdownItFootnote from 'markdown-it-footnote'
 import markdownItMark from 'markdown-it-mark'
@@ -47,14 +48,6 @@ const markdown = MarkdownIt({
     }
   })
 
-const headingPattern = /^\s{0,3}#{1,6}\s+/
-const horizontalRulePattern = /^\s{0,3}(?:[-*_]\s*){3,}$/
-const blockquotePattern = /^\s{0,3}>\s?/
-const listPattern = /^\s{0,3}(?:[-+*]\s+(?:\[[ xX]\]\s+)?|\d+\.\s+)/
-const fencedCodePattern = /^\s*(```|~~~)/
-const mathFencePattern = /^\s*\$\$\s*$/
-const tableDividerPattern = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/
-
 type LineInfo = {
   text: string
   from: number
@@ -73,176 +66,95 @@ const splitLines = (text: string): LineInfo[] => {
   })
 }
 
-const isBlankLine = (line: string) => line.trim().length === 0
+const headingPattern = /^\s{0,3}#{1,6}\s+/
 
-const isTableStart = (lines: LineInfo[], index: number) => {
-  const currentLine = lines[index]?.text ?? ''
-  const nextLine = lines[index + 1]?.text ?? ''
-
-  return currentLine.includes('|') && tableDividerPattern.test(nextLine)
-}
-
-const isBlockStarter = (lines: LineInfo[], index: number) => {
-  const line = lines[index]?.text ?? ''
-
-  return (
-    headingPattern.test(line) ||
-    horizontalRulePattern.test(line) ||
-    blockquotePattern.test(line) ||
-    listPattern.test(line) ||
-    fencedCodePattern.test(line) ||
-    mathFencePattern.test(line) ||
-    isTableStart(lines, index)
-  )
-}
-
-const createBlock = (
+const createBlockFromToken = (
+  markdownText: string,
   lines: LineInfo[],
-  startIndex: number,
-  endIndex: number,
+  token: Token,
   type: MarkdownBlock['type']
-): MarkdownBlock => ({
-  from: lines[startIndex]?.from ?? 0,
-  to: lines[endIndex]?.to ?? lines[startIndex]?.to ?? 0,
-  text: lines.slice(startIndex, endIndex + 1).map((line) => line.text).join('\n'),
-  type
-})
+): MarkdownBlock | null => {
+  const map = token.map
+
+  if (!map) {
+    return null
+  }
+
+  const [startLine, endLineExclusive] = map
+  const lastLine = Math.max(startLine, endLineExclusive - 1)
+  const from = lines[startLine]?.from ?? 0
+  const to = lines[lastLine]?.to ?? markdownText.length
+
+  return {
+    from,
+    to,
+    text: markdownText.slice(from, to),
+    type
+  }
+}
+
+const tokenToBlockType = (token: Token): MarkdownBlock['type'] | null => {
+  switch (token.type) {
+    case 'heading_open':
+      return 'heading'
+    case 'paragraph_open':
+      return 'paragraph'
+    case 'blockquote_open':
+      return 'blockquote'
+    case 'bullet_list_open':
+    case 'ordered_list_open':
+      return 'list'
+    case 'table_open':
+      return 'table'
+    case 'fence':
+    case 'code_block':
+      return 'code'
+    case 'math_block':
+      return 'math'
+    case 'hr':
+      return 'hr'
+    default:
+      return null
+  }
+}
+
+let lastExtractedBlocksCache:
+  | {
+      text: string
+      blocks: MarkdownBlock[]
+    }
+  | null = null
 
 export const extractMarkdownBlocks = (text: string): MarkdownBlock[] => {
   if (text.length === 0) {
     return []
   }
 
+  if (lastExtractedBlocksCache?.text === text) {
+    return lastExtractedBlocksCache.blocks
+  }
+
   const lines = splitLines(text)
-  const blocks: MarkdownBlock[] = []
-
-  for (let index = 0; index < lines.length; ) {
-    const line = lines[index]?.text ?? ''
-
-    if (isBlankLine(line)) {
-      index += 1
-      continue
-    }
-
-    if (fencedCodePattern.test(line)) {
-      const fence = line.match(fencedCodePattern)?.[1] ?? '```'
-      let endIndex = index
-
-      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-        endIndex = cursor
-
-        if ((lines[cursor]?.text ?? '').trim().startsWith(fence)) {
-          break
-        }
+  const blocks = markdown
+    .parse(text, {})
+    .flatMap((token) => {
+      if (token.level !== 0) {
+        return []
       }
 
-      blocks.push(createBlock(lines, index, endIndex, 'code'))
-      index = endIndex + 1
-      continue
-    }
+      const type = tokenToBlockType(token)
 
-    if (mathFencePattern.test(line)) {
-      let endIndex = index
-
-      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-        endIndex = cursor
-
-        if (mathFencePattern.test(lines[cursor]?.text ?? '')) {
-          break
-        }
+      if (!type) {
+        return []
       }
 
-      blocks.push(createBlock(lines, index, endIndex, 'math'))
-      index = endIndex + 1
-      continue
-    }
+      const block = createBlockFromToken(text, lines, token, type)
+      return block ? [block] : []
+    })
 
-    if (headingPattern.test(line)) {
-      blocks.push(createBlock(lines, index, index, 'heading'))
-      index += 1
-      continue
-    }
-
-    if (horizontalRulePattern.test(line)) {
-      blocks.push(createBlock(lines, index, index, 'hr'))
-      index += 1
-      continue
-    }
-
-    if (blockquotePattern.test(line)) {
-      let endIndex = index
-
-      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-        const currentLine = lines[cursor]?.text ?? ''
-
-        if (isBlankLine(currentLine) || blockquotePattern.test(currentLine)) {
-          endIndex = cursor
-          continue
-        }
-
-        break
-      }
-
-      blocks.push(createBlock(lines, index, endIndex, 'blockquote'))
-      index = endIndex + 1
-      continue
-    }
-
-    if (isTableStart(lines, index)) {
-      let endIndex = index + 1
-
-      for (let cursor = index + 2; cursor < lines.length; cursor += 1) {
-        const currentLine = lines[cursor]?.text ?? ''
-
-        if (isBlankLine(currentLine) || !currentLine.includes('|')) {
-          break
-        }
-
-        endIndex = cursor
-      }
-
-      blocks.push(createBlock(lines, index, endIndex, 'table'))
-      index = endIndex + 1
-      continue
-    }
-
-    if (listPattern.test(line)) {
-      let endIndex = index
-
-      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-        const currentLine = lines[cursor]?.text ?? ''
-
-        if (
-          isBlankLine(currentLine) ||
-          listPattern.test(currentLine) ||
-          /^\s{2,}\S/.test(currentLine)
-        ) {
-          endIndex = cursor
-          continue
-        }
-
-        break
-      }
-
-      blocks.push(createBlock(lines, index, endIndex, 'list'))
-      index = endIndex + 1
-      continue
-    }
-
-    let endIndex = index
-
-    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      const currentLine = lines[cursor]?.text ?? ''
-
-      if (isBlankLine(currentLine) || isBlockStarter(lines, cursor)) {
-        break
-      }
-
-      endIndex = cursor
-    }
-
-    blocks.push(createBlock(lines, index, endIndex, 'paragraph'))
-    index = endIndex + 1
+  lastExtractedBlocksCache = {
+    text,
+    blocks
   }
 
   return blocks
@@ -264,8 +176,6 @@ export const findHeadingOffset = (markdownText: string, title: String) => {
     return null
   }
 
-  let partialOffset: number | null = null
-
   for (const line of lines) {
     if (!headingPattern.test(line.text)) {
       continue
@@ -276,11 +186,7 @@ export const findHeadingOffset = (markdownText: string, title: String) => {
     if (headingText === target) {
       return line.from
     }
-
-    if (partialOffset == null && headingText.includes(target)) {
-      partialOffset = line.from
-    }
   }
 
-  return partialOffset
+  return null
 }

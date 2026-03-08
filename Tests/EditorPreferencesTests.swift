@@ -1,6 +1,7 @@
 import XCTest
 @testable import Markdown
 
+@MainActor
 final class EditorPreferencesTests: XCTestCase {
     func testDefaultPreferencesProduceExpectedPresentation() {
         let preferences = EditorPreferences.defaultValue
@@ -16,7 +17,6 @@ final class EditorPreferencesTests: XCTestCase {
 
     func testCustomizedPreferencesCarryAcrossPresentationFields() {
         let preferences = EditorPreferences(
-            editorMode: .sourceView,
             tabBarVisibility: true,
             typewriterMode: true,
             focusMode: true,
@@ -40,6 +40,18 @@ final class EditorPreferencesTests: XCTestCase {
         XCTAssertEqual(presentation.fontFamily, "LXGW WenKai", "Expected custom font family to be preserved.")
         XCTAssertEqual(presentation.codeFontFamily, "JetBrains Mono", "Expected custom code font family to be preserved.")
         XCTAssertFalse(presentation.autoPairMarkdownSyntax, "Expected autoPairMarkdownSyntax override to be preserved.")
+    }
+
+    func testLegacyEditorModePreferenceDoesNotBreakDecoding() throws {
+        let baseData = try JSONEncoder().encode(EditorPreferences.defaultValue)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: baseData) as? [String: Any])
+        object["editorMode"] = "sourceView"
+        let data = try JSONSerialization.data(withJSONObject: object)
+
+        let preferences = try JSONDecoder().decode(EditorPreferences.self, from: data)
+
+        XCTAssertEqual(preferences.appearanceMode, .followSystem, "Expected legacy payloads to keep decoding appearance mode.")
+        XCTAssertEqual(preferences.exportTheme, .matchEditor, "Expected legacy payloads to keep decoding export theme.")
     }
 
     func testDefaultExportThemeMatchesEditor() {

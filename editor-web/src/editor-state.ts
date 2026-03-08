@@ -9,6 +9,7 @@ export type EditorActiveBlockState = Pick<MarkdownBlock, 'type' | 'text' | 'from
 
 export type EditorRuntimeState = {
   markdown: string
+  mode: 'wysiwyg' | 'global-source'
   activeBlock: EditorActiveBlockState | null
   selection: EditorSelectionState
 }

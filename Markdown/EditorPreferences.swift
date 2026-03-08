@@ -33,7 +33,6 @@ struct EditorPreferences: Codable, Equatable {
     var appearanceMode: EditorAppearanceMode
     var editorTheme: EditorTheme
     var exportTheme: MarkdownExportTheme
-    var editorMode: EditorMode
     var tabBarVisibility: Bool
     var typewriterMode: Bool
     var focusMode: Bool
@@ -52,7 +51,6 @@ struct EditorPreferences: Codable, Equatable {
         case appearanceMode
         case editorTheme
         case exportTheme
-        case editorMode
         case tabBarVisibility
         case typewriterMode
         case focusMode
@@ -72,7 +70,6 @@ struct EditorPreferences: Codable, Equatable {
         appearanceMode: EditorAppearanceMode = .followSystem,
         editorTheme: EditorTheme = .defaultTheme,
         exportTheme: MarkdownExportTheme = .matchEditor,
-        editorMode: EditorMode = .wysiwyg,
         tabBarVisibility: Bool = true,
         typewriterMode: Bool = false,
         focusMode: Bool = false,
@@ -90,7 +87,6 @@ struct EditorPreferences: Codable, Equatable {
         self.appearanceMode = appearanceMode
         self.editorTheme = editorTheme
         self.exportTheme = exportTheme
-        self.editorMode = editorMode
         self.tabBarVisibility = tabBarVisibility
         self.typewriterMode = typewriterMode
         self.focusMode = focusMode
@@ -113,7 +109,6 @@ struct EditorPreferences: Codable, Equatable {
             appearanceMode: try container.decodeIfPresent(EditorAppearanceMode.self, forKey: .appearanceMode) ?? .followSystem,
             editorTheme: try container.decodeIfPresent(EditorTheme.self, forKey: .editorTheme) ?? .defaultTheme,
             exportTheme: try container.decodeIfPresent(MarkdownExportTheme.self, forKey: .exportTheme) ?? .matchEditor,
-            editorMode: try container.decodeIfPresent(EditorMode.self, forKey: .editorMode) ?? .wysiwyg,
             tabBarVisibility: try container.decodeIfPresent(Bool.self, forKey: .tabBarVisibility) ?? true,
             typewriterMode: try container.decodeIfPresent(Bool.self, forKey: .typewriterMode) ?? false,
             focusMode: try container.decodeIfPresent(Bool.self, forKey: .focusMode) ?? false,

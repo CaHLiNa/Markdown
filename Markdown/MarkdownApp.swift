@@ -427,10 +427,10 @@ private struct EditorViewCommands: Commands {
 
     var body: some Commands {
         CommandMenu("视图") {
-            Button("源码视图") {
-                documentController.toggleSourceView()
+            Button("切换全局源码模式") {
+                documentController.toggleGlobalSourceMode()
             }
-            .keyboardShortcut("s", modifiers: [.command, .option])
+            .keyboardShortcut("/", modifiers: [.command])
 
             Button("打字机模式") {
                 documentController.isTypewriterModeEnabled.toggle()
@@ -498,12 +498,6 @@ private struct EditorSettingsView: View {
             }
 
             Section("编辑") {
-                Picker("启动视图", selection: $documentController.editorMode) {
-                    ForEach(EditorMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-
                 Toggle("默认显示标签栏", isOn: $documentController.isTabStripVisible)
                 Toggle("开启打字机模式", isOn: $documentController.isTypewriterModeEnabled)
                 Toggle("开启专注模式", isOn: $documentController.isFocusModeEnabled)
