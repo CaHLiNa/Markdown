@@ -2,7 +2,7 @@
   --editor-page-width: 860px;
   --editor-font-family: "Iowan Old Style", "Palatino Linotype", "PingFang SC", "SF Pro Text", serif;
   --editor-font-size: 17px;
-  --editor-line-height: 1.86;
+  --editor-line-height: 1.72;
   --editor-code-font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
   --editor-code-font-size: 14px;
   --editor-text: #2e241b;
@@ -10,11 +10,11 @@
   --editor-heading: #17120d;
   --editor-link: #8d5425;
   --editor-border: rgba(54, 46, 39, 0.12);
-  --editor-inline-code: rgba(244, 234, 219, 0.44);
+  --editor-inline-code: rgba(244, 234, 219, 0.3);
   --editor-inline-code-border: rgba(141, 84, 37, 0.06);
-  --editor-code-block: rgba(246, 241, 233, 0.5);
-  --editor-code-block-border: rgba(70, 56, 41, 0.04);
-  --editor-code-block-focus: rgba(246, 241, 233, 0.72);
+  --editor-code-block: rgba(246, 241, 233, 0.34);
+  --editor-code-block-border: rgba(70, 56, 41, 0.02);
+  --editor-code-block-focus: rgba(246, 241, 233, 0.44);
   --editor-math-block: transparent;
   --editor-math-border: transparent;
   --editor-quote-surface: transparent;
@@ -32,11 +32,11 @@
   --editor-heading: #f9f5ef;
   --editor-link: #f0a35c;
   --editor-border: rgba(255, 255, 255, 0.08);
-  --editor-inline-code: rgba(255, 255, 255, 0.05);
+  --editor-inline-code: rgba(255, 255, 255, 0.04);
   --editor-inline-code-border: rgba(255, 255, 255, 0.04);
-  --editor-code-block: rgba(255, 255, 255, 0.035);
-  --editor-code-block-border: rgba(255, 255, 255, 0.05);
-  --editor-code-block-focus: rgba(255, 255, 255, 0.055);
+  --editor-code-block: rgba(255, 255, 255, 0.026);
+  --editor-code-block-border: rgba(255, 255, 255, 0.03);
+  --editor-code-block-focus: rgba(255, 255, 255, 0.04);
   --editor-math-block: transparent;
   --editor-math-border: transparent;
   --editor-quote-surface: transparent;
@@ -52,11 +52,11 @@
   --editor-heading: #34261c;
   --editor-link: #9c6332;
   --editor-border: rgba(92, 69, 44, 0.12);
-  --editor-inline-code: rgba(238, 219, 184, 0.48);
+  --editor-inline-code: rgba(238, 219, 184, 0.34);
   --editor-inline-code-border: rgba(140, 99, 56, 0.08);
-  --editor-code-block: rgba(244, 232, 211, 0.44);
-  --editor-code-block-border: rgba(104, 79, 52, 0.06);
-  --editor-code-block-focus: rgba(241, 228, 205, 0.7);
+  --editor-code-block: rgba(244, 232, 211, 0.3);
+  --editor-code-block-border: rgba(104, 79, 52, 0.03);
+  --editor-code-block-focus: rgba(241, 228, 205, 0.42);
   --editor-math-block: transparent;
   --editor-math-border: transparent;
   --editor-quote-surface: transparent;
@@ -117,7 +117,7 @@ body {
   min-height: 100vh;
   max-width: min(100%, var(--editor-page-width));
   margin: 0 auto;
-  padding: 22px clamp(20px, 3.4vw, 56px) 120px;
+  padding: 16px clamp(18px, 3vw, 48px) 104px;
   box-sizing: border-box;
   color: var(--editor-text);
   caret-color: var(--editor-heading);
@@ -160,7 +160,7 @@ body {
 .vditor-reset pre,
 .vditor-reset .language-math,
 .vditor-reset table {
-  margin: 0 0 0.7rem;
+  margin: 0 0 0.48rem;
 }
 
 .vditor-ir p,
@@ -181,7 +181,7 @@ body {
 
 .vditor-ir li + li,
 .vditor-reset li + li {
-  margin-top: 0.12rem;
+  margin-top: 0.05rem;
 }
 
 .vditor-ir h1,
@@ -199,13 +199,13 @@ body {
   color: var(--editor-heading);
   line-height: 1.2;
   letter-spacing: -0.02em;
-  margin: 1.15rem 0 0.42rem;
+  margin: 0.92rem 0 0.26rem;
 }
 
 .vditor-ir h1,
 .vditor-reset h1 {
   margin-top: 0;
-  margin-bottom: 0.72rem;
+  margin-bottom: 0.5rem;
   font-size: clamp(2.1rem, 2.8vw, 2.7rem);
 }
 
@@ -249,17 +249,17 @@ body {
 .vditor-ir li code:not(.hljs):not(.highlight-chroma),
 .vditor-reset p code:not(.hljs):not(.highlight-chroma),
 .vditor-reset li code:not(.hljs):not(.highlight-chroma) {
-  padding: 0.08rem 0.34rem;
+  padding: 0.05rem 0.28rem;
   border: 1px solid var(--editor-inline-code-border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--editor-inline-code) !important;
   background-image: none !important;
 }
 
 .vditor-ir blockquote,
 .vditor-reset blockquote {
-  margin: 0.85rem 0 0.9rem;
-  padding: 0.06rem 0 0.06rem 0.8rem;
+  margin: 0.6rem 0 0.66rem;
+  padding: 0.02rem 0 0.02rem 0.72rem;
   border-left: 2px solid var(--editor-quote);
   background: none;
   border-radius: 0;
@@ -291,7 +291,17 @@ body {
 
 .vditor-ir__node[data-type='code-block'],
 .vditor-ir__node[data-type='math-block'] {
-  margin: 0.2rem 0 0.62rem;
+  margin: 0.06rem 0 0.34rem;
+}
+
+.vditor-ir__node:not(.vditor-ir__node--expand)[data-type='math-block'] {
+  margin: 0 0 0.18rem;
+}
+
+.vditor-ir__node:not(.vditor-ir__node--expand)[data-type='math-block']:before,
+.vditor-ir__node:not(.vditor-ir__node--expand)[data-type='math-block']:after {
+  content: none;
+  display: none;
 }
 
 .vditor-ir__node--expand[data-type='code-block']:before,
@@ -315,13 +325,17 @@ body {
   box-shadow: none !important;
 }
 
+.vditor-ir > pre.vditor-reset:focus {
+  background: transparent !important;
+}
+
 .vditor-ir__node[data-type='code-block'] pre.vditor-reset,
-.vditor-reset pre {
-  margin: 0.5rem 0 0.72rem;
-  padding: 0.72rem 0.84rem;
+.vditor-reset pre:not(.vditor-ir__marker--pre) {
+  margin: 0.28rem 0 0.48rem;
+  padding: 0.58rem 0.72rem;
   overflow-x: auto;
   border: 1px solid var(--editor-code-block-border) !important;
-  border-radius: 6px !important;
+  border-radius: 3px !important;
   background: var(--editor-code-block) !important;
   box-shadow: var(--editor-shadow);
 }
@@ -347,14 +361,19 @@ body {
 .vditor-reset .language-math {
   display: block;
   width: 100%;
-  margin: 0.1rem 0 0.2rem;
-  padding: 0.1rem 0;
+  margin: 0.04rem 0 0.08rem;
+  padding: 0;
   border: 0 !important;
   border-radius: 0 !important;
   background: var(--editor-math-block) !important;
   box-shadow: none !important;
   color: var(--editor-text) !important;
   text-align: center;
+}
+
+.vditor-ir__node[data-type='math-block'] .vditor-ir__preview {
+  min-height: 0;
+  line-height: 1.35;
 }
 
 .vditor-ir__node--expand[data-type='math-block'] {
@@ -368,10 +387,14 @@ body {
   margin: 0;
 }
 
-.vditor-ir__node--expand[data-type='math-block'] .vditor-ir__marker--pre {
+.vditor-ir__node--expand[data-type='math-block'] .vditor-ir__marker--pre,
+.vditor-ir__node--expand[data-type='math-block'] .vditor-ir__preview {
   display: block;
   width: 100%;
   height: auto;
+}
+
+.vditor-ir__node--expand[data-type='math-block'] .vditor-ir__marker--pre {
   margin: 0;
   padding: 0;
   overflow: visible;
@@ -389,6 +412,8 @@ body {
   margin: 0;
   padding: 0;
   color: inherit;
+  font-size: 0.98em;
+  line-height: 1.58;
   text-align: left;
   white-space: pre-wrap;
   background: transparent !important;
@@ -397,9 +422,15 @@ body {
   box-shadow: none !important;
 }
 
+.vditor-ir__node--expand[data-type='math-block'] .vditor-ir__preview {
+  min-height: 0;
+  margin-top: 0.12rem;
+  text-align: center;
+}
+
 .vditor-ir__node[data-type='math-block'] .vditor-ir__preview .katex-display,
 .vditor-reset .language-math .katex-display {
-  margin: 0.08rem 0;
+  margin: 0.02rem 0;
   overflow-x: auto;
   overflow-y: hidden;
   padding: 0;
