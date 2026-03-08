@@ -151,14 +151,12 @@ body {
 .vditor-ir ol,
 .vditor-ir blockquote,
 .vditor-ir pre,
-.vditor-ir .vditor-ir__preview,
 .vditor-ir table,
 .vditor-reset p,
 .vditor-reset ul,
 .vditor-reset ol,
 .vditor-reset blockquote,
 .vditor-reset pre,
-.vditor-reset .language-math,
 .vditor-reset table {
   margin: 0 0 0.48rem;
 }
@@ -247,6 +245,39 @@ body {
 
 .vditor-ir__preview {
   color: inherit;
+}
+
+.vditor-ir [data-type='inline-node'] > .vditor-ir__preview {
+  display: inline;
+  width: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  vertical-align: baseline;
+  white-space: normal;
+}
+
+.vditor-ir [data-type='inline-node'] > .vditor-ir__preview > .language-math,
+.vditor-reset p .language-math,
+.vditor-reset li .language-math,
+.vditor-reset td .language-math,
+.vditor-reset th .language-math {
+  display: inline;
+  width: auto;
+  margin: 0;
+  padding: 0;
+  color: inherit !important;
+  text-align: inherit;
+  vertical-align: baseline;
+}
+
+.vditor-ir [data-type='inline-node'] > .vditor-ir__preview .katex-display,
+.vditor-reset p .language-math .katex-display,
+.vditor-reset li .language-math .katex-display,
+.vditor-reset td .language-math .katex-display,
+.vditor-reset th .language-math .katex-display {
+  display: inline;
+  margin: 0;
 }
 
 .vditor-ir code,
@@ -368,7 +399,8 @@ body {
 }
 
 .vditor-ir__node[data-type='math-block'] .vditor-ir__preview,
-.vditor-reset .language-math {
+.vditor-reset pre .language-math,
+.vditor-reset div[data-type='math-block'].language-math {
   display: block;
   width: 100%;
   margin: 0.04rem 0 0.08rem;
@@ -439,7 +471,8 @@ body {
 }
 
 .vditor-ir__node[data-type='math-block'] .vditor-ir__preview .katex-display,
-.vditor-reset .language-math .katex-display {
+.vditor-reset pre .language-math .katex-display,
+.vditor-reset div[data-type='math-block'].language-math .katex-display {
   margin: 0.02rem 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -447,7 +480,8 @@ body {
 }
 
 .vditor-ir__node[data-type='math-block'] .vditor-ir__preview .katex,
-.vditor-reset .language-math .katex {
+.vditor-reset pre .language-math .katex,
+.vditor-reset div[data-type='math-block'].language-math .katex {
   font-size: 1.04em;
 }
 
