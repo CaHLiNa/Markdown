@@ -27,6 +27,7 @@ enum EditorWebViewControllerError: LocalizedError {
 
 struct EditorWebView: NSViewRepresentable {
     static let contentChangedMessageName = "editorContentChanged"
+    static let readyMessageName = "editorReady"
     static let imageAssetRequestMessageName = "editorImageAssetRequest"
 
     @Binding var markdown: String
@@ -63,6 +64,7 @@ struct EditorWebView: NSViewRepresentable {
             configuration.writingToolsBehavior = .none
         }
         configuration.userContentController.add(context.coordinator, name: Self.contentChangedMessageName)
+        configuration.userContentController.add(context.coordinator, name: Self.readyMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.imageAssetRequestMessageName)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -84,6 +86,7 @@ struct EditorWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: contentChangedMessageName)
+        nsView.configuration.userContentController.removeScriptMessageHandler(forName: readyMessageName)
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: imageAssetRequestMessageName)
         nsView.navigationDelegate = nil
         coordinator.parent.controller.detach(webView: nsView)
@@ -373,6 +376,8 @@ struct EditorWebView: NSViewRepresentable {
         private var lastSyncedPresentation: Presentation?
         private var lastRevealRequestID: UUID?
         private var didAttemptInlineFallback = false
+        private var didReceiveEditorReady = false
+        private var readyFallbackWorkItem: DispatchWorkItem?
 
         init(parent: EditorWebView) {
             self.parent = parent
@@ -386,7 +391,10 @@ struct EditorWebView: NSViewRepresentable {
             }
 
             didAttemptInlineFallback = false
+            didReceiveEditorReady = false
+            cancelReadyFallback()
             let readAccessURL = indexURL.deletingLastPathComponent()
+            scheduleReadyFallback(for: webView)
             webView.loadFileURL(indexURL, allowingReadAccessTo: readAccessURL)
         }
 
@@ -459,10 +467,7 @@ struct EditorWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            parent.controller.markPageReady()
-            syncMarkdownToJavaScript()
-            syncPresentationToJavaScript()
-            syncRevealRequestToJavaScript()
+            NSLog("[EditorWebView] didFinish url=%@", webView.url?.absoluteString ?? "<nil>")
         }
 
         func userContentController(
@@ -480,6 +485,16 @@ struct EditorWebView: NSViewRepresentable {
                 }
 
                 parent.onContentChanged?(content)
+                return
+            }
+
+            if message.name == EditorWebView.readyMessageName {
+                didReceiveEditorReady = true
+                cancelReadyFallback()
+                parent.controller.markPageReady()
+                syncMarkdownToJavaScript()
+                syncPresentationToJavaScript()
+                syncRevealRequestToJavaScript()
                 return
             }
 
@@ -594,7 +609,10 @@ struct EditorWebView: NSViewRepresentable {
             }
 
             didAttemptInlineFallback = true
+            didReceiveEditorReady = false
+            cancelReadyFallback()
             let baseURL = indexURL.deletingLastPathComponent()
+            scheduleReadyFallback(for: webView)
             webView.loadHTMLString(inlinedHTML, baseURL: baseURL)
         }
 
@@ -623,43 +641,44 @@ struct EditorWebView: NSViewRepresentable {
             renderedHTML = replaceFirstMatch(
                 in: renderedHTML,
                 pattern: #"<script[^>]*src="\./index\.js"[^>]*></script>"#,
-                replacement: inlineBootstrapScript(for: script)
+                replacement: inlineModuleScript(for: script)
             )
 
             return renderedHTML
         }
 
-        private static func inlineBootstrapScript(for script: String) -> String {
-            let sourceWithName = script + "\n//# sourceURL=index.inline.js"
-            let literal = EditorWebView.javaScriptStringLiteral(for: sourceWithName)
+        private static func inlineModuleScript(for script: String) -> String {
+            let escapedSource = script
+                .replacingOccurrences(of: "</script", with: "<\\/script")
 
-            // The bundled editor is emitted for `type=\"module\"`, which normally defers execution
-            // until the document has been parsed. We keep that timing when embedding the script inline.
             return """
-            <script>
-            (() => {
-                const source = \(literal);
-                const run = () => {
-                    try {
-                        (new Function(source))();
-                    } catch (error) {
-                        console.error("[EditorWebView] Failed to bootstrap bundled editor", error);
-
-                        const app = document.getElementById("app");
-                        if (app) {
-                            app.innerHTML = "<div class=\\"editor-error\\">编辑器初始化失败。</div>";
-                        }
-                    }
-                };
-
-                if (document.readyState === "loading") {
-                    document.addEventListener("DOMContentLoaded", run, { once: true });
-                } else {
-                    run();
-                }
-            })();
+            <script type="module">
+            \(escapedSource)
             </script>
             """
+        }
+
+        private func scheduleReadyFallback(for webView: WKWebView) {
+            let workItem = DispatchWorkItem { [weak self, weak webView] in
+                guard let self, let webView else {
+                    return
+                }
+
+                guard !self.didReceiveEditorReady else {
+                    return
+                }
+
+                NSLog("[EditorWebView] editor ready timeout, switching to inline fallback")
+                self.loadInlineFallbackIfNeeded(in: webView)
+            }
+
+            readyFallbackWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: workItem)
+        }
+
+        private func cancelReadyFallback() {
+            readyFallbackWorkItem?.cancel()
+            readyFallbackWorkItem = nil
         }
 
         private static func replaceFirstMatch(

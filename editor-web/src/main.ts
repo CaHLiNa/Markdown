@@ -3,7 +3,12 @@ import 'katex/dist/katex.min.css'
 import '@milkdown/kit/prose/view/style/prosemirror.css'
 import '@milkdown/kit/prose/tables/style/tables.css'
 
-import { installNativeBridge, persistImageAssetInNative, postMarkdownToNative } from './bridge'
+import {
+  installNativeBridge,
+  persistImageAssetInNative,
+  postEditorReadyToNative,
+  postMarkdownToNative
+} from './bridge'
 import { createEditorBridge } from './editor-bridge'
 import { createMarkdownEditor, type MarkdownEditor } from './editor'
 import { type EditorPresentation } from './editor-presentation'
@@ -70,6 +75,7 @@ const bootEditor = async () => {
   })
 
   bridge.attachEditor(editor)
+  postEditorReadyToNative()
 }
 
 void bootEditor().catch((error: unknown) => {

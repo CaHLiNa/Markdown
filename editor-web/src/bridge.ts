@@ -2,6 +2,10 @@ type EditorContentChangedHandler = {
   postMessage: (markdown: string) => void
 }
 
+type EditorReadyHandler = {
+  postMessage: (payload: { ready: true }) => void
+}
+
 type EditorImageAssetRequest = {
   requestID: string
   filename: string
@@ -38,6 +42,7 @@ declare global {
     webkit?: {
       messageHandlers?: {
         editorContentChanged?: EditorContentChangedHandler
+        editorReady?: EditorReadyHandler
         editorImageAssetRequest?: EditorImageAssetRequestHandler
       }
     }
@@ -85,6 +90,10 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
 
 export const postMarkdownToNative = (markdown: string) => {
   window.webkit?.messageHandlers?.editorContentChanged?.postMessage(markdown)
+}
+
+export const postEditorReadyToNative = () => {
+  window.webkit?.messageHandlers?.editorReady?.postMessage({ ready: true })
 }
 
 const installImageAssetResolver = () => {
