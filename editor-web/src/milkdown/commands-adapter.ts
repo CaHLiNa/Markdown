@@ -12,6 +12,7 @@ import {
   imageSchema,
   inlineCodeSchema,
   linkSchema,
+  listItemSchema,
   orderedListSchema,
   paragraphSchema,
   strongSchema
@@ -22,6 +23,7 @@ import {
 } from '@milkdown/kit/preset/gfm'
 
 import type { EditorCommand } from '../commands'
+import { INTERNAL_MATH_LANGUAGE } from './math-markdown'
 
 type SelectionOffsets = {
   anchor: number
@@ -31,6 +33,13 @@ type SelectionOffsets = {
 type MarkdownEdit = {
   markdown: string
   selection: SelectionOffsets
+}
+
+type InlineWrapperMatch = {
+  from: number
+  to: number
+  contentFrom: number
+  contentTo: number
 }
 
 const normalizeRange = (selection: SelectionOffsets) => {
@@ -136,6 +145,79 @@ const clearInlineFormatting = (text: string) => {
   return next
 }
 
+const collectInlineWrapperMatches = (markdown: string) => {
+  const matches: InlineWrapperMatch[] = []
+
+  const pushMatches = (pattern: RegExp, contentOffset: (match: RegExpExecArray) => number) => {
+    pattern.lastIndex = 0
+
+    for (let match = pattern.exec(markdown); match; match = pattern.exec(markdown)) {
+      const full = match[0] ?? ''
+      const content = match[1] ?? ''
+      const from = match.index
+      const contentFrom = from + contentOffset(match)
+      matches.push({
+        from,
+        to: from + full.length,
+        contentFrom,
+        contentTo: contentFrom + content.length
+      })
+    }
+  }
+
+  pushMatches(/!\[([^\]]*)\]\(([^)]+)\)/g, () => 2)
+  pushMatches(/(?<!!)\[([^\]]+)\]\(([^)]+)\)/g, () => 1)
+  pushMatches(/<u>([\s\S]+?)<\/u>/g, () => 3)
+  pushMatches(/(?<!\*)\*\*([\s\S]+?)\*\*(?!\*)/g, () => 2)
+  pushMatches(/(?<!\*)\*([^*\n][\s\S]*?)\*(?!\*)/g, () => 1)
+  pushMatches(/~~([\s\S]+?)~~/g, () => 2)
+  pushMatches(/==([\s\S]+?)==/g, () => 2)
+  pushMatches(/`([^`\n]+?)`/g, () => 1)
+  pushMatches(/\$([^$\n]+?)\$/g, () => 1)
+
+  return matches
+}
+
+const selectionTouchesContent = (
+  selection: { from: number; to: number },
+  match: InlineWrapperMatch
+) => {
+  if (selection.from === selection.to) {
+    return selection.from >= match.contentFrom && selection.from <= match.contentTo
+  }
+
+  return selection.to > match.contentFrom && selection.from < match.contentTo
+}
+
+const expandSelectionForInlineFormatting = (
+  markdown: string,
+  selection: SelectionOffsets
+) => {
+  let current = normalizeRange(selection)
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidate = collectInlineWrapperMatches(markdown)
+      .filter((match) => selectionTouchesContent(current, match))
+      .filter((match) => match.from <= current.from && match.to >= current.to)
+      .sort((left, right) => (left.to - left.from) - (right.to - right.from))[0]
+
+    if (!candidate) {
+      return current
+    }
+
+    if (candidate.from === current.from && candidate.to === current.to) {
+      return current
+    }
+
+    current = {
+      from: candidate.from,
+      to: candidate.to
+    }
+  }
+
+  return current
+}
+
 const runProseCommand = (
   editor: Editor,
   buildCommand: (ctx: Parameters<Editor['action']>[0] extends (ctx: infer T) => unknown ? T : never) => ReturnType<typeof toggleMark>
@@ -172,6 +254,173 @@ const resolveBlockRange = (editor: Editor) => {
   })
 }
 
+const toTaskListItems = (editor: Editor) => {
+  return editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    const wrapInBulletList = wrapIn(bulletListSchema.type(ctx))
+    const wrapped = wrapInBulletList(view.state, view.dispatch, view)
+    const state = view.state
+    const listItemType = listItemSchema.type(ctx)
+    const { from, to } = state.selection
+    let transaction = state.tr
+    let changed = false
+
+    state.doc.descendants((node, pos) => {
+      if (node.type !== listItemType) {
+        return
+      }
+
+      const intersectsSelection = pos < to && pos + node.nodeSize > from
+      const containsCursor = from === to && pos < from && pos + node.nodeSize > from
+
+      if (!intersectsSelection && !containsCursor) {
+        return
+      }
+
+      const nextAttrs = {
+        ...node.attrs,
+        checked: false,
+        label: '•',
+        listType: 'bullet'
+      }
+
+      if (
+        node.attrs.checked === nextAttrs.checked &&
+        node.attrs.label === nextAttrs.label &&
+        node.attrs.listType === nextAttrs.listType
+      ) {
+        return
+      }
+
+      transaction = transaction.setNodeMarkup(pos, undefined, nextAttrs)
+      changed = true
+    })
+
+    if (changed) {
+      view.dispatch(transaction.scrollIntoView())
+    }
+
+    return wrapped || changed
+  })
+}
+
+const findActiveMarkRange = (
+  editor: Editor,
+  markType: ReturnType<typeof strongSchema.type>
+) => {
+  return editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    const { selection } = view.state
+
+    if (!selection.empty) {
+      return null
+    }
+
+    const { $from } = selection
+
+    if (!$from.parent.isTextblock) {
+      return null
+    }
+
+    const children = [] as Array<{
+      start: number
+      end: number
+      hasMark: boolean
+    }>
+    let offset = 0
+
+    for (let index = 0; index < $from.parent.childCount; index += 1) {
+      const child = $from.parent.child(index)
+      const start = offset
+      const end = offset + child.nodeSize
+      children.push({
+        start,
+        end,
+        hasMark: child.marks.some((mark) => mark.type === markType)
+      })
+      offset = end
+    }
+
+    const cursor = $from.parentOffset
+    const activeIndex = children.findIndex(
+      (child) => child.hasMark && cursor >= child.start && cursor <= child.end
+    )
+
+    if (activeIndex === -1) {
+      return null
+    }
+
+    let start = children[activeIndex]?.start ?? 0
+    let end = children[activeIndex]?.end ?? 0
+
+    for (let index = activeIndex - 1; index >= 0; index -= 1) {
+      if (!children[index]?.hasMark) {
+        break
+      }
+
+      start = children[index]?.start ?? start
+    }
+
+    for (let index = activeIndex + 1; index < children.length; index += 1) {
+      if (!children[index]?.hasMark) {
+        break
+      }
+
+      end = children[index]?.end ?? end
+    }
+
+    return {
+      from: $from.start() + start,
+      to: $from.start() + end
+    }
+  })
+}
+
+const clearMilkdownFormatting = (editor: Editor) => {
+  return editor.action((ctx) => {
+    const view = ctx.get(editorViewCtx)
+    const markTypes = [
+      strongSchema.type(ctx),
+      emphasisSchema.type(ctx),
+      inlineCodeSchema.type(ctx),
+      strikethroughSchema.type(ctx),
+      linkSchema.type(ctx)
+    ]
+    const { selection } = view.state
+    let transaction = view.state.tr
+    let changed = false
+
+    if (selection.empty) {
+      for (const markType of markTypes) {
+        const range = findActiveMarkRange(editor, markType)
+
+        if (!range) {
+          continue
+        }
+
+        transaction = transaction.removeMark(range.from, range.to, markType)
+        changed = true
+      }
+    } else {
+      for (const markType of markTypes) {
+        if (!view.state.doc.rangeHasMark(selection.from, selection.to, markType)) {
+          continue
+        }
+
+        transaction = transaction.removeMark(selection.from, selection.to, markType)
+        changed = true
+      }
+    }
+
+    if (!changed) {
+      return false
+    }
+
+    view.dispatch(transaction.scrollIntoView())
+    return true
+  })
+}
+
 export const runMilkdownCommand = (editor: Editor, command: EditorCommand) => {
   switch (command) {
     case 'paragraph':
@@ -194,8 +443,14 @@ export const runMilkdownCommand = (editor: Editor, command: EditorCommand) => {
       return runProseCommand(editor, (ctx) => wrapIn(bulletListSchema.type(ctx)))
     case 'ordered-list':
       return runProseCommand(editor, (ctx) => wrapIn(orderedListSchema.type(ctx), { order: 1 }))
+    case 'task-list':
+      return toTaskListItems(editor)
     case 'code-block':
       return runProseCommand(editor, (ctx) => setBlockType(codeBlockSchema.type(ctx), { language: '' }))
+    case 'math-block':
+      return runProseCommand(editor, (ctx) =>
+        setBlockType(codeBlockSchema.type(ctx), { language: INTERNAL_MATH_LANGUAGE })
+      )
     case 'bold':
       return runProseCommand(editor, (ctx) => toggleMark(strongSchema.type(ctx)))
     case 'italic':
@@ -208,6 +463,8 @@ export const runMilkdownCommand = (editor: Editor, command: EditorCommand) => {
       return runProseCommand(editor, (ctx) =>
         toggleMark(linkSchema.type(ctx), { href: 'https://example.com' })
       )
+    case 'clear-format':
+      return clearMilkdownFormatting(editor)
     case 'horizontal-rule':
       return editor.action((ctx) => {
         const view = ctx.get(editorViewCtx)
@@ -307,12 +564,15 @@ export const supportsMilkdownCommand = (command: EditorCommand) => {
     case 'blockquote':
     case 'bullet-list':
     case 'ordered-list':
+    case 'task-list':
     case 'code-block':
+    case 'math-block':
     case 'bold':
     case 'italic':
     case 'inline-code':
     case 'strikethrough':
     case 'link':
+    case 'clear-format':
     case 'horizontal-rule':
     case 'image':
     case 'table':
@@ -369,11 +629,12 @@ export const runSourceCommand = (
         head: normalizeRange(selection).from + 3
       })
     case 'clear-format': {
-      const { from, to } = normalizeRange(selection)
+      const { from, to } = expandSelectionForInlineFormatting(markdown, selection)
       const selected = markdown.slice(from, to)
-      return replaceSelection(markdown, selection, clearInlineFormatting(selected), {
+      const cleared = clearInlineFormatting(selected)
+      return replaceSelection(markdown, { anchor: from, head: to }, cleared, {
         anchor: from,
-        head: from + clearInlineFormatting(selected).length
+        head: from + cleared.length
       })
     }
     case 'blockquote':

@@ -190,6 +190,41 @@ body {
   gap: 0.22rem;
 }
 
+.cm-popover-field {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.cm-popover-field-label {
+  color: var(--editor-muted);
+  font: 700 10px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cm-popover-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--editor-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--editor-panel) 82%, transparent);
+  color: var(--editor-heading);
+  padding: 0.58rem 0.72rem;
+  font: 500 13px/1.35 'SF Pro Text', 'PingFang SC', sans-serif;
+  outline: none;
+}
+
+.cm-popover-input:focus {
+  border-color: color-mix(in srgb, var(--editor-quote) 32%, var(--editor-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--editor-selection) 90%, transparent);
+}
+
+.cm-popover-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
 .cm-emoji-picker-hint {
   color: var(--editor-muted);
   font: 600 11px/1 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
@@ -903,7 +938,82 @@ body {
   margin: 0 0 1em;
 }
 
+.md-editor__wysiwyg .ProseMirror li[data-item-type='task'] {
+  position: relative;
+  list-style: none;
+  margin-left: 0;
+  padding-left: 1.7rem;
+}
+
+.md-editor__wysiwyg .ProseMirror li[data-item-type='task']::before {
+  content: '☐';
+  position: absolute;
+  top: 0.08rem;
+  left: 0;
+  color: var(--editor-muted);
+  font: 700 1rem/1 'SF Pro Text', 'PingFang SC', sans-serif;
+}
+
+.md-editor__wysiwyg .ProseMirror li[data-item-type='task'][data-checked='true']::before {
+  content: '☑';
+  color: var(--editor-quote);
+}
+
+.md-editor__wysiwyg .ProseMirror li[data-item-type='task'] > p {
+  margin: 0;
+}
+
 .md-editor__wysiwyg .ProseMirror img {
   max-width: 100%;
   height: auto;
+}
+
+.md-code-block {
+  margin: 0 0 1em;
+}
+
+.md-math-block {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 0 1.1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--editor-border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--editor-panel) 88%, transparent);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.md-math-block:hover,
+.md-math-block.is-expanded {
+  border-color: color-mix(in srgb, var(--editor-quote) 24%, var(--editor-border));
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+
+.md-math-block__preview {
+  min-height: 2.6rem;
+  color: var(--editor-heading);
+}
+
+.md-math-block__placeholder {
+  color: var(--editor-muted);
+  font: 600 12px/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.md-math-block__source {
+  display: none;
+  overflow: hidden;
+  border: 1px solid var(--editor-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--editor-panel-strong) 94%, transparent);
+}
+
+.md-math-block.is-expanded .md-math-block__source {
+  display: block;
 }

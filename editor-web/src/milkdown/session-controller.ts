@@ -5,6 +5,7 @@ import {
   editorViewOptionsCtx,
   rootCtx
 } from '@milkdown/kit/core'
+import { serializerCtx } from '@milkdown/core'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { indent, indentConfig } from '@milkdown/kit/plugin/indent'
@@ -13,6 +14,11 @@ import { trailing } from '@milkdown/kit/plugin/trailing'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
 import { gfm } from '@milkdown/kit/preset/gfm'
 import { getMarkdown, replaceAll } from '@milkdown/kit/utils'
+import { $prose } from '@milkdown/utils'
+import { Fragment } from '@milkdown/prose/model'
+import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/prose/state'
+import type { EditorView } from '@milkdown/prose/view'
+import { imageSchema, paragraphSchema } from '@milkdown/kit/preset/commonmark'
 
 import { type EditorCommand } from '../commands'
 import { type EditorPresentation } from '../editor-presentation'
@@ -20,6 +26,12 @@ import { type EditorRuntimeState } from '../editor-state'
 import { renderMarkdownDocument } from '../markdown-renderer'
 import { runMilkdownCommand, runSourceCommand } from './commands-adapter'
 import { BlockHandleProvider } from './block-handle-provider'
+import { ImagePopoverProvider } from './image-popover-provider'
+import {
+  convertExternalMathBlocksToInternal,
+  convertInternalMathBlocksToExternal
+} from './math-markdown'
+import { mathCodeBlockView } from './math-nodeview-source'
 import { MarkdownOffsetMapper } from './offset-mapper'
 import { SlashMenuProvider } from './slash-provider'
 import { createSourceEditor, type SourceEditorController } from './source-editor'
@@ -49,6 +61,79 @@ type SelectionOffsets = {
   head: number
 }
 
+type FileTransferLike = {
+  files?: ArrayLike<File> | null
+  items?: ArrayLike<{
+    kind?: string
+    type?: string
+    getAsFile?: () => File | null
+  }> | null
+}
+
+type PersistedImage = {
+  src: string
+  alt: string
+}
+
+type ImageAttributes = PersistedImage & {
+  title: string
+}
+
+const waitForNextTick = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+
+const normalizeSelection = ({ anchor, head }: SelectionOffsets) => {
+  return anchor <= head
+    ? { from: anchor, to: head }
+    : { from: head, to: anchor }
+}
+
+const imageAltFromFileName = (fileName: string) => {
+  return fileName.replace(/\.[^.]+$/, '').replace(/\]/g, '\\]')
+}
+
+const imageMarkdownFromAsset = ({ src, alt }: PersistedImage) => {
+  return `![${alt}](${src})`
+}
+
+const extractImageFiles = (transfer: FileTransferLike | null | undefined) => {
+  if (!transfer) {
+    return [] as File[]
+  }
+
+  const files = Array.from(transfer.files ?? []).filter((file): file is File => file instanceof File)
+
+  if (files.length > 0) {
+    return files.filter((file) => file.type.startsWith('image/'))
+  }
+
+  return Array.from(transfer.items ?? [])
+    .filter((item) => item?.kind === 'file' && `${item.type ?? ''}`.startsWith('image/'))
+    .map((item) => item.getAsFile?.())
+    .filter((file): file is File => file instanceof File)
+}
+
+const blockSelector = 'p, h1, h2, h3, h4, h5, h6, blockquote, pre, table, li'
+
+const createImmediateMarkdownPlugin = (
+  onMarkdownChange: (markdown: string) => void
+) => {
+  return $prose((ctx) => {
+    return new Plugin({
+      key: new PluginKey('md-editor-immediate-markdown'),
+      view: () => ({
+        update(view, previousState) {
+          if (previousState.doc.eq(view.state.doc)) {
+            return
+          }
+
+          const markdown = ctx.get(serializerCtx)(view.state.doc)
+          onMarkdownChange(convertInternalMathBlocksToExternal(markdown))
+        }
+      })
+    })
+  })
+}
+
 export class MilkdownSessionController {
   readonly #root: HTMLElement
   readonly #shell: HTMLElement
@@ -69,8 +154,13 @@ export class MilkdownSessionController {
   #slashMenu: SlashMenuProvider | null = null
   #blockHandle: BlockHandleProvider | null = null
   #selectionToolbar: SelectionToolbarProvider | null = null
+  #imagePopover: ImagePopoverProvider | null = null
   #shortcutToggleScheduled = false
   #pendingMilkdownDestroy: Promise<void> = Promise.resolve()
+  #immediateMarkdownPlugin = createImmediateMarkdownPlugin((markdown) => {
+    this.#emitMarkdownChange(markdown)
+    this.#refreshWysiwygInteractions()
+  })
 
   constructor({
     root,
@@ -90,6 +180,9 @@ export class MilkdownSessionController {
     this.#shell = document.createElement('div')
     this.#shell.className = 'md-editor'
     this.#shell.addEventListener('keydown', this.#handleShellKeydown, true)
+    this.#shell.addEventListener('paste', this.#handleShellPaste, true)
+    this.#shell.addEventListener('drop', this.#handleShellDrop, true)
+    this.#shell.addEventListener('dragover', this.#handleShellDragOver, true)
     this.#root.innerHTML = ''
     this.#root.append(this.#shell)
   }
@@ -175,13 +268,18 @@ export class MilkdownSessionController {
       return
     }
 
-    this.#milkdown.action(replaceAll(markdown, true))
+    this.#milkdown.action(replaceAll(convertExternalMathBlocksToInternal(markdown), true))
     this.#refreshWysiwygInteractions()
   }
 
   runCommand(command: EditorCommand) {
     if (command === 'toggle-global-source-mode') {
       this.toggleGlobalSourceMode()
+      return true
+    }
+
+    if (command === 'image') {
+      void this.#runImageCommand()
       return true
     }
 
@@ -282,7 +380,8 @@ export class MilkdownSessionController {
     if (
       this.#slashMenu?.handleKey(key) ||
       this.#blockHandle?.handleKey(key) ||
-      this.#selectionToolbar?.handleKey(key)
+      this.#selectionToolbar?.handleKey(key) ||
+      this.#imagePopover?.handleKey(key)
     ) {
       return true
     }
@@ -315,6 +414,9 @@ export class MilkdownSessionController {
 
   async destroy() {
     this.#shell.removeEventListener('keydown', this.#handleShellKeydown, true)
+    this.#shell.removeEventListener('paste', this.#handleShellPaste, true)
+    this.#shell.removeEventListener('drop', this.#handleShellDrop, true)
+    this.#shell.removeEventListener('dragover', this.#handleShellDragOver, true)
     this.#sourceEditor?.destroy()
     this.#sourceEditor = null
     this.#destroyWysiwygInteractions()
@@ -327,6 +429,7 @@ export class MilkdownSessionController {
     this.#milkdown = null
 
     if (activeMilkdown) {
+      await waitForNextTick()
       await activeMilkdown.destroy()
     }
 
@@ -362,6 +465,24 @@ export class MilkdownSessionController {
     })
   }
 
+  #handleShellPaste = (event: Event) => {
+    void this.#handleTransferEvent(event, 'clipboardData')
+  }
+
+  #handleShellDrop = (event: Event) => {
+    void this.#handleTransferEvent(event, 'dataTransfer')
+  }
+
+  #handleShellDragOver = (event: Event) => {
+    const transfer = 'dataTransfer' in event ? (event as DragEvent).dataTransfer : null
+
+    if (extractImageFiles(transfer).length === 0) {
+      return
+    }
+
+    event.preventDefault()
+  }
+
   #emitMarkdownChange(markdown: string) {
     this.#markdown = markdown
     this.#mapper.update(markdown)
@@ -373,7 +494,9 @@ export class MilkdownSessionController {
       return this.#markdown
     }
 
-    const markdown = this.#normalizeSerializedMarkdown(this.#milkdown.action(getMarkdown()))
+    const markdown = convertInternalMathBlocksToExternal(
+      this.#normalizeSerializedMarkdown(this.#milkdown.action(getMarkdown()))
+    )
     this.#markdown = markdown
     this.#mapper.update(markdown)
     return markdown
@@ -386,6 +509,160 @@ export class MilkdownSessionController {
     this.#sourceEditor?.setMarkdown(markdown)
     this.#sourceEditor?.setSelection(selection.anchor, selection.head)
     this.#emitMarkdownChange(markdown)
+  }
+
+  async #handleTransferEvent(
+    event: Event,
+    transferKey: 'clipboardData' | 'dataTransfer'
+  ) {
+    if (!this.#persistImageAsset) {
+      return
+    }
+
+    const transfer =
+      transferKey === 'clipboardData'
+        ? ((event as ClipboardEvent).clipboardData as FileTransferLike | null | undefined)
+        : ((event as DragEvent).dataTransfer as FileTransferLike | null | undefined)
+    const files = extractImageFiles(transfer)
+
+    if (files.length === 0) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    const dropPosition =
+      transferKey === 'dataTransfer' && this.#mode === 'wysiwyg' && this.#milkdown
+        ? this.#milkdown.action((ctx) =>
+            this.#resolveDropPosition(ctx.get(editorViewCtx), event as DragEvent)
+          )
+        : null
+    const images = await this.#persistImages(files)
+
+    if (images.length === 0) {
+      return
+    }
+
+    if (this.#mode === 'global-source') {
+      this.#insertImagesIntoSource(images)
+      return
+    }
+
+    this.#insertImagesIntoWysiwyg(images, dropPosition)
+  }
+
+  async #persistImages(files: File[]) {
+    const persisted: PersistedImage[] = []
+
+    for (const file of files) {
+      try {
+        const src = await this.#persistImageAsset?.(file)
+
+        if (!src) {
+          continue
+        }
+
+        persisted.push({
+          src,
+          alt: imageAltFromFileName(file.name)
+        })
+      } catch (error) {
+        console.error('[editor-web] 图片持久化失败', error)
+      }
+    }
+
+    return persisted
+  }
+
+  #insertImagesIntoSource(images: PersistedImage[]) {
+    const selection = this.getSelectionOffsets()
+    const { from, to } = normalizeSelection(selection)
+    const insertBody = images.map(imageMarkdownFromAsset).join('\n\n')
+    const prefix = this.#markdown.slice(0, from)
+    const suffix = this.#markdown.slice(to)
+    const needsLeadingGap = prefix.length > 0 && !prefix.endsWith('\n') ? '\n\n' : ''
+    const needsTrailingGap = suffix.length > 0 && !suffix.startsWith('\n') ? '\n\n' : ''
+    const insert = `${needsLeadingGap}${insertBody}${needsTrailingGap}`
+    const nextMarkdown = prefix + insert + suffix
+    const nextSelection = {
+      anchor: from + insert.length,
+      head: from + insert.length
+    }
+
+    this.#applySourceEdit(nextMarkdown, nextSelection)
+  }
+
+  #resolveCurrentBlock(view: EditorView) {
+    const { $from } = view.state.selection
+
+    for (let depth = $from.depth; depth > 0; depth -= 1) {
+      const node = $from.node(depth)
+
+      if (!node.isBlock) {
+        continue
+      }
+
+      return {
+        node,
+        from: $from.before(depth),
+        to: $from.after(depth)
+      }
+    }
+
+    return null
+  }
+
+  #insertImagesIntoWysiwyg(images: PersistedImage[], position: number | null = null) {
+    if (!this.#milkdown || !this.#milkdownMounted) {
+      return
+    }
+
+    this.#milkdown.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const block =
+        position == null
+          ? this.#resolveCurrentBlock(view)
+          : this.#resolveBlockAtPosition(view, position)
+
+      if (!block) {
+        return false
+      }
+
+      const paragraphType = paragraphSchema.type(ctx)
+      const imageType = imageSchema.type(ctx)
+      const imageBlocks = images.map(({ src, alt }) =>
+        paragraphType.create(null, imageType.create({ src, alt, title: '' }))
+      )
+      const shouldReplaceCurrentBlock =
+        block.node.type.name === 'paragraph' && block.node.childCount === 0
+      const hasFollowingBlock = shouldReplaceCurrentBlock
+        ? block.to < view.state.doc.content.size
+        : block.to < view.state.doc.content.size
+      const trailingParagraph = hasFollowingBlock ? null : paragraphType.createAndFill()
+      const nodes = trailingParagraph ? [...imageBlocks, trailingParagraph] : imageBlocks
+      const fragment = Fragment.fromArray(nodes)
+      const insertionStart = shouldReplaceCurrentBlock ? block.from : block.to
+      const imageContentSize = imageBlocks.reduce((total, node) => total + node.nodeSize, 0)
+      let transaction = view.state.tr
+
+      if (shouldReplaceCurrentBlock) {
+        transaction = transaction.replaceWith(block.from, block.to, fragment)
+      } else {
+        transaction = transaction.insert(block.to, fragment)
+      }
+
+      transaction = transaction.setSelection(
+        TextSelection.create(
+          transaction.doc,
+          trailingParagraph ? insertionStart + imageContentSize + 1 : insertionStart + imageContentSize
+        )
+      )
+      view.dispatch(transaction.scrollIntoView())
+      this.#syncMarkdownFromMilkdown()
+      this.#refreshWysiwygInteractions()
+      return true
+    })
   }
 
   #ensureWysiwygInteractions() {
@@ -426,9 +703,30 @@ export class MilkdownSessionController {
       })
     }
 
+    if (!this.#imagePopover) {
+      this.#imagePopover = new ImagePopoverProvider({
+        root: this.#shell,
+        onApply: (state) => {
+          this.#updateImageNode(state.pos, {
+            src: state.src,
+            alt: state.alt,
+            title: state.title
+          })
+        },
+        onReplace: (state) => {
+          void this.#replaceImageNode(state.pos, {
+            src: state.src,
+            alt: state.alt,
+            title: state.title
+          })
+        }
+      })
+    }
+
     this.#slashMenu.attach(view)
     this.#blockHandle.attach(view)
     this.#selectionToolbar.attach(view)
+    this.#imagePopover.attach(view)
   }
 
   #refreshWysiwygInteractions() {
@@ -442,19 +740,280 @@ export class MilkdownSessionController {
     this.#slashMenu?.update(view)
     this.#blockHandle?.update(view)
     this.#selectionToolbar?.update(view)
+    this.#imagePopover?.update(view)
   }
 
   #destroyWysiwygInteractions() {
     this.#slashMenu?.destroy()
     this.#blockHandle?.destroy()
     this.#selectionToolbar?.destroy()
+    this.#imagePopover?.destroy()
     this.#slashMenu = null
     this.#blockHandle = null
     this.#selectionToolbar = null
+    this.#imagePopover = null
   }
 
   #normalizeSerializedMarkdown(markdown: string) {
     return markdown.replace(/\n$/, '')
+  }
+
+  #resolveTaskListItemPosition(view: EditorView, taskItem: HTMLElement) {
+    const anchor = taskItem.firstElementChild ?? taskItem
+    const position = view.posAtDOM(anchor, 0)
+    const resolvedPosition = view.state.doc.resolve(position)
+
+    for (let depth = resolvedPosition.depth; depth > 0; depth -= 1) {
+      const node = resolvedPosition.node(depth)
+
+      if (node.type.name === 'list_item' && node.attrs.checked != null) {
+        return resolvedPosition.before(depth)
+      }
+    }
+
+    return null
+  }
+
+  #resolveImageNodePosition(view: EditorView, imageElement: HTMLElement) {
+    try {
+      return view.posAtDOM(imageElement, 0)
+    } catch {
+      return null
+    }
+  }
+
+  #handleTaskListClick = (view: EditorView, event: Event) => {
+    if (!(event.target instanceof Element)) {
+      return false
+    }
+
+    const taskItem = event.target.closest<HTMLElement>("li[data-item-type='task']")
+
+    if (!taskItem || !view.dom.contains(taskItem)) {
+      return false
+    }
+
+    const position = this.#resolveTaskListItemPosition(view, taskItem)
+
+    if (position == null) {
+      return false
+    }
+
+    const node = view.state.doc.nodeAt(position)
+
+    if (!node || node.type.name !== 'list_item' || node.attrs.checked == null) {
+      return false
+    }
+
+    view.dispatch(
+      view.state.tr.setNodeMarkup(position, undefined, {
+        ...node.attrs,
+        checked: !Boolean(node.attrs.checked)
+      })
+    )
+    this.#refreshWysiwygInteractions()
+    event.preventDefault()
+    return true
+  }
+
+  #handleImageSelectionClick = (view: EditorView, event: Event) => {
+    if (!(event.target instanceof Element)) {
+      return false
+    }
+
+    const imageElement = event.target.closest<HTMLElement>('img')
+
+    if (!imageElement || !view.dom.contains(imageElement)) {
+      return false
+    }
+
+    const position = this.#resolveImageNodePosition(view, imageElement)
+
+    if (position == null) {
+      return false
+    }
+
+    view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, position)))
+    this.#refreshWysiwygInteractions()
+    event.preventDefault()
+    return true
+  }
+
+  #resolveBlockAtPosition(view: EditorView, position: number) {
+    const resolved = view.state.doc.resolve(
+      Math.min(Math.max(position, 0), view.state.doc.content.size)
+    )
+
+    for (let depth = resolved.depth; depth > 0; depth -= 1) {
+      const node = resolved.node(depth)
+
+      if (!node.isBlock) {
+        continue
+      }
+
+      return {
+        node,
+        from: resolved.before(depth),
+        to: resolved.after(depth)
+      }
+    }
+
+    return null
+  }
+
+  #resolveDropPosition(view: EditorView, event: DragEvent) {
+    const coords =
+      Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+        ? view.posAtCoords({
+            left: event.clientX,
+            top: event.clientY
+          })
+        : null
+
+    if (coords?.pos != null) {
+      return coords.pos
+    }
+
+    if (!(event.target instanceof Element)) {
+      return null
+    }
+
+    const block = event.target.closest<HTMLElement>(blockSelector)
+
+    if (!block || !view.dom.contains(block)) {
+      return null
+    }
+
+    return this.#resolveImageNodePosition(view, block)
+  }
+
+  async #pickImageFileInternal() {
+    if (this.#pickImageFile) {
+      return this.#pickImageFile()
+    }
+
+    return new Promise<File | null>((resolve) => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = 'image/*'
+      input.hidden = true
+
+      const finalize = (file: File | null) => {
+        input.remove()
+        resolve(file)
+      }
+
+      input.addEventListener(
+        'change',
+        () => {
+          finalize(input.files?.[0] ?? null)
+        },
+        { once: true }
+      )
+
+      document.body.append(input)
+      input.click()
+    })
+  }
+
+  async #runImageCommand() {
+    const file = await this.#pickImageFileInternal()
+
+    if (!file) {
+      return
+    }
+
+    const [image] = await this.#persistImages([file])
+
+    if (!image) {
+      return
+    }
+
+    if (this.#mode === 'global-source') {
+      this.#insertImagesIntoSource([image])
+      return
+    }
+
+    const selectedImage = this.#getSelectedImageState()
+
+    if (selectedImage) {
+      this.#updateImageNode(selectedImage.pos, {
+        src: image.src,
+        alt: selectedImage.alt.length > 0 ? selectedImage.alt : image.alt,
+        title: selectedImage.title
+      })
+      return
+    }
+
+    this.#insertImagesIntoWysiwyg([image])
+  }
+
+  #getSelectedImageState() {
+    if (!this.#milkdown || !this.#milkdownMounted) {
+      return null
+    }
+
+    return this.#milkdown.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const { selection } = view.state
+
+      if (!(selection instanceof NodeSelection) || selection.node.type.name !== 'image') {
+        return null
+      }
+
+      return {
+        pos: selection.from,
+        src: String(selection.node.attrs.src ?? ''),
+        alt: String(selection.node.attrs.alt ?? ''),
+        title: String(selection.node.attrs.title ?? '')
+      }
+    })
+  }
+
+  #updateImageNode(position: number, attrs: ImageAttributes) {
+    if (!this.#milkdown || !this.#milkdownMounted) {
+      return false
+    }
+
+    return this.#milkdown.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const node = view.state.doc.nodeAt(position)
+
+      if (!node || node.type.name !== 'image') {
+        return false
+      }
+
+      const transaction = view.state.tr.setNodeMarkup(position, undefined, {
+        ...node.attrs,
+        ...attrs
+      })
+
+      transaction.setSelection(NodeSelection.create(transaction.doc, position))
+      view.dispatch(transaction)
+      this.#syncMarkdownFromMilkdown()
+      this.#refreshWysiwygInteractions()
+      return true
+    })
+  }
+
+  async #replaceImageNode(position: number, attrs: ImageAttributes) {
+    const file = await this.#pickImageFileInternal()
+
+    if (!file) {
+      return
+    }
+
+    const [image] = await this.#persistImages([file])
+
+    if (!image) {
+      return
+    }
+
+    this.#updateImageNode(position, {
+      src: image.src,
+      alt: attrs.alt.length > 0 ? attrs.alt : image.alt,
+      title: attrs.title
+    })
   }
 
   async #mountWysiwyg() {
@@ -467,9 +1026,14 @@ export class MilkdownSessionController {
     const editor = Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, host)
-        ctx.set(defaultValueCtx, this.#markdown)
+        ctx.set(defaultValueCtx, convertExternalMathBlocksToInternal(this.#markdown))
         ctx.set(editorViewOptionsCtx, {
-          editable: () => true
+          editable: () => true,
+          handleDOMEvents: {
+            click: (view, event) =>
+              this.#handleTaskListClick(view, event) ||
+              this.#handleImageSelectionClick(view, event)
+          }
         })
         ctx.update(indentConfig.key, (value) => ({
           ...value,
@@ -483,13 +1047,10 @@ export class MilkdownSessionController {
       .use(trailing)
       .use(clipboard)
       .use(gfm)
+      .use(mathCodeBlockView)
+      .use(this.#immediateMarkdownPlugin)
       .config((ctx) => {
         const listeners = ctx.get(listenerCtx)
-
-        listeners.markdownUpdated((_, markdown) => {
-          this.#emitMarkdownChange(markdown)
-          this.#refreshWysiwygInteractions()
-        })
 
         listeners.blur(() => {
           this.#selection = this.getSelectionOffsets()
@@ -527,7 +1088,9 @@ export class MilkdownSessionController {
     host?.remove()
 
     if (activeMilkdown) {
-      const destroyPromise = activeMilkdown.destroy().catch(() => undefined)
+      const destroyPromise = waitForNextTick()
+        .then(() => activeMilkdown.destroy())
+        .catch(() => undefined)
       this.#pendingMilkdownDestroy = this.#pendingMilkdownDestroy.then(async () => {
         await destroyPromise
       })
