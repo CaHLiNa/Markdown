@@ -1,11 +1,24 @@
-import type { MarkdownBlock } from './markdown-renderer'
+export type EditorBlockType =
+  | 'heading'
+  | 'paragraph'
+  | 'blockquote'
+  | 'list'
+  | 'table'
+  | 'code'
+  | 'math'
+  | 'hr'
 
 export type EditorSelectionState = {
   anchor: number
   head: number
 }
 
-export type EditorActiveBlockState = Pick<MarkdownBlock, 'type' | 'text' | 'from' | 'to'>
+export type EditorActiveBlockState = {
+  type: EditorBlockType
+  text: string
+  from: number
+  to: number
+}
 
 export type EditorRuntimeState = {
   markdown: string

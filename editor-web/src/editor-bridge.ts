@@ -5,7 +5,6 @@ import {
   type EditorPresentation
 } from './editor-presentation'
 import type { EditorRuntimeState } from './editor-state'
-import { renderMarkdownDocument } from './markdown-renderer'
 import { createNativeMarkdownSync, type NativeMarkdownSync } from './native-markdown-sync'
 
 type QueuedBridgeAction =
@@ -58,6 +57,23 @@ const normalizeNonNegativeInteger = (value: unknown) => {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : null
+}
+
+const escapeHtml = (value: string) => {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+const renderFallbackHTML = (markdown: string) => {
+  if (markdown.trim().length === 0) {
+    return ''
+  }
+
+  return `<pre>${escapeHtml(markdown)}</pre>`
 }
 
 export type EditorBridgeController = {
@@ -154,7 +170,7 @@ export const createEditorBridge = ({
       return editor.getRenderedHTML()
     }
 
-    return renderMarkdownDocument(markdown)
+    return renderFallbackHTML(markdown)
   }
 
   const getEditorState = () => {

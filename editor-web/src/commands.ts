@@ -1,4 +1,6 @@
 export type EditorCommand =
+  | 'undo'
+  | 'redo'
   | 'toggle-global-source-mode'
   | 'paragraph'
   | 'heading-1'

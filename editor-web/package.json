@@ -12,30 +12,15 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@codemirror/commands": "^6.10.2",
-    "@codemirror/lang-markdown": "^6.5.0",
-    "@codemirror/language": "^6.12.2",
-    "@codemirror/state": "^6.5.4",
-    "@codemirror/view": "^6.39.16",
-    "@floating-ui/dom": "^1.7.6",
-    "@milkdown/kit": "^7.19.0",
-    "@milkdown/plugin-math": "^7.5.9",
     "katex": "^0.16.37",
-    "prosemirror-virtual-cursor": "^0.4.2",
-    "rehype-katex": "^7.0.1",
-    "rehype-stringify": "^10.0.1",
-    "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0",
-    "remark-parse": "^11.0.0",
-    "remark-rehype": "^11.1.2",
-    "unified": "^11.0.5",
-    "unist-util-visit": "^5.1.0"
+    "vditor": "^3.11.2"
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
     "jsdom": "^28.1.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
+    "vite-plugin-static-copy": "^3.2.0",
     "vitest": "^4.0.18"
   }
 }

@@ -1,7 +1,6 @@
 import './style.css'
 import 'katex/dist/katex.min.css'
-import '@milkdown/kit/prose/view/style/prosemirror.css'
-import '@milkdown/kit/prose/tables/style/tables.css'
+import 'vditor/dist/index.css'
 
 import {
   installNativeBridge,

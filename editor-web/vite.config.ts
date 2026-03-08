@@ -1,3 +1,4 @@
+import { viteStaticCopy } from 'vite-plugin-static-copy'
 import { defineConfig } from 'vitest/config'
 
 const resolveVendorChunk = (id: string) => {
@@ -11,46 +12,8 @@ const resolveVendorChunk = (id: string) => {
     return 'vendor-katex'
   }
 
-  if (
-    normalized.includes('/node_modules/@milkdown/') ||
-    normalized.includes('/node_modules/remark-math/') ||
-    normalized.includes('/node_modules/@types/katex/') ||
-    normalized.includes('/node_modules/unified/') ||
-    normalized.includes('/node_modules/mdast-util-') ||
-    normalized.includes('/node_modules/rehype-') ||
-    normalized.includes('/node_modules/remark-') ||
-    normalized.includes('/node_modules/remark-rehype/') ||
-    normalized.includes('/node_modules/micromark') ||
-    normalized.includes('/node_modules/unist-util-') ||
-    normalized.includes('/node_modules/vfile/') ||
-    normalized.includes('/node_modules/hast-util-') ||
-    normalized.includes('/node_modules/property-information/') ||
-    normalized.includes('/node_modules/space-separated-tokens/') ||
-    normalized.includes('/node_modules/comma-separated-tokens/') ||
-    normalized.includes('/node_modules/trim-lines/')
-  ) {
-    return 'vendor-milkdown'
-  }
-
-  if (
-    normalized.includes('/node_modules/prosemirror-') ||
-    normalized.includes('/node_modules/prosekit/')
-  ) {
-    return 'vendor-prosemirror'
-  }
-
-  if (
-    normalized.includes('/node_modules/@codemirror/') ||
-    normalized.includes('/node_modules/@lezer/') ||
-    normalized.includes('/node_modules/crelt/') ||
-    normalized.includes('/node_modules/w3c-keyname/') ||
-    normalized.includes('/node_modules/style-mod/')
-  ) {
-    return 'vendor-codemirror'
-  }
-
-  if (normalized.includes('/node_modules/@floating-ui/')) {
-    return 'vendor-floating-ui'
+  if (normalized.includes('/node_modules/vditor/')) {
+    return 'vendor-vditor'
   }
 
   return undefined
@@ -58,6 +21,16 @@ const resolveVendorChunk = (id: string) => {
 
 export default defineConfig({
   base: './',
+  plugins: [
+    viteStaticCopy({
+      targets: [
+        {
+          src: 'node_modules/vditor/dist/**/*',
+          dest: 'vditor/dist'
+        }
+      ]
+    })
+  ],
   build: {
     assetsDir: '.',
     chunkSizeWarningLimit: 550,
@@ -73,6 +46,7 @@ export default defineConfig({
     }
   },
   test: {
+    include: ['src/**/*.test.ts'],
     environment: 'jsdom',
     globals: true
   }
