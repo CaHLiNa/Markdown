@@ -1,29 +1,16 @@
 import { viteStaticCopy } from 'vite-plugin-static-copy'
 import { defineConfig } from 'vitest/config'
 
-const resolveVendorChunk = (id: string) => {
-  const normalized = id.replace(/\\/g, '/')
-
-  if (!normalized.includes('/node_modules/')) {
-    return undefined
-  }
-
-  if (normalized.includes('/node_modules/katex/')) {
-    return 'vendor-katex'
-  }
-
-  if (normalized.includes('/node_modules/vditor/')) {
-    return 'vendor-vditor'
-  }
-
-  return undefined
-}
-
 export default defineConfig({
   base: './',
   plugins: [
     viteStaticCopy({
       targets: [
+        {
+          src: 'src/runtime-index.html',
+          dest: '.',
+          rename: 'index.html'
+        },
         {
           src: 'node_modules/vditor/dist/js/lute/lute.min.js',
           dest: 'vditor/dist/js/lute'
@@ -79,13 +66,17 @@ export default defineConfig({
     assetsDir: '.',
     chunkSizeWarningLimit: 1500,
     emptyOutDir: true,
+    lib: {
+      entry: 'src/main.ts',
+      name: 'MarkdownEditorWeb',
+      formats: ['iife'],
+      fileName: () => 'index.js',
+      cssFileName: 'index'
+    },
     outDir: '../Markdown/Editor',
     rollupOptions: {
       output: {
-        assetFileNames: '[name][extname]',
-        chunkFileNames: '[name].js',
-        entryFileNames: 'index.js',
-        manualChunks: resolveVendorChunk
+        assetFileNames: '[name][extname]'
       }
     }
   },

@@ -1,6 +1,7 @@
 import Vditor from 'vditor'
 
 import type { EditorCommand } from './commands'
+import { setEditorDebugPhase } from './editor-debug'
 import { isBackgroundFocusTarget } from './editor-focus'
 import {
   extractMarkdownBlocks,
@@ -671,6 +672,7 @@ export const createMarkdownEditor = async ({
   persistImageAsset,
   pickImageFile
 }: CreateMarkdownEditorOptions): Promise<MarkdownEditor> => {
+  setEditorDebugPhase('create-editor-start')
   const mountRoot = resolveRoot(root)
   const host = document.createElement('div')
   host.className = 'editor-host'
@@ -1102,6 +1104,7 @@ export const createMarkdownEditor = async ({
     value: '',
     width: '100%',
     after() {
+      setEditorDebugPhase('vditor-after')
       instance?.focus()
 
       if (initialMarkdown.length > 0) {
@@ -1132,9 +1135,11 @@ export const createMarkdownEditor = async ({
 
     vditorOptions.after = () => {
       originalAfter?.()
+      setEditorDebugPhase('vditor-ready')
       resolve(instance as Vditor)
     }
 
+    setEditorDebugPhase('vditor-constructing', window.location.href)
     instance = new Vditor(host, vditorOptions)
   })
 

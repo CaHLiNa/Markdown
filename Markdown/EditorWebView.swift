@@ -29,6 +29,7 @@ struct EditorWebView: NSViewRepresentable {
     static let contentChangedMessageName = "editorContentChanged"
     static let readyMessageName = "editorReady"
     static let imageAssetRequestMessageName = "editorImageAssetRequest"
+    static let consoleMessageName = "editorConsole"
 
     @Binding var markdown: String
     let controller: Controller
@@ -66,6 +67,14 @@ struct EditorWebView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: Self.contentChangedMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.readyMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.imageAssetRequestMessageName)
+        configuration.userContentController.add(context.coordinator, name: Self.consoleMessageName)
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: Self.consoleForwardingScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -88,6 +97,7 @@ struct EditorWebView: NSViewRepresentable {
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: contentChangedMessageName)
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: readyMessageName)
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: imageAssetRequestMessageName)
+        nsView.configuration.userContentController.removeScriptMessageHandler(forName: consoleMessageName)
         nsView.navigationDelegate = nil
         coordinator.parent.controller.detach(webView: nsView)
         nsView.stopLoading()
@@ -124,6 +134,70 @@ struct EditorWebView: NSViewRepresentable {
 
         return String(jsonArray.dropFirst().dropLast())
     }
+
+    static let consoleForwardingScript = """
+    (() => {
+      const handler = window.webkit?.messageHandlers?.editorConsole;
+
+      if (!handler || window.__editorConsoleForwardingInstalled) {
+        return;
+      }
+
+      window.__editorConsoleForwardingInstalled = true;
+
+      const normalize = (value) => {
+        if (typeof value === 'string') {
+          return value;
+        }
+
+        if (value instanceof Error) {
+          return value.stack || value.message || String(value);
+        }
+
+        try {
+          return JSON.stringify(value);
+        } catch {
+          return String(value);
+        }
+      };
+
+      const post = (level, values) => {
+        try {
+          const result = handler.postMessage({
+            level,
+            message: values.map(normalize).join(' ')
+          });
+
+          if (result && typeof result === 'object' && typeof result.catch === 'function') {
+            result.catch(() => {});
+          }
+        } catch {}
+      };
+
+      for (const level of ['log', 'info', 'warn', 'error']) {
+        const original = console[level]?.bind(console);
+
+        console[level] = (...values) => {
+          post(level, values);
+          original?.(...values);
+        };
+      }
+
+      window.addEventListener('error', (event) => {
+        post('error', [
+          event.message,
+          event.filename,
+          event.lineno,
+          event.colno,
+          event.error
+        ]);
+      });
+
+      window.addEventListener('unhandledrejection', (event) => {
+        post('error', ['Unhandled promise rejection', event.reason]);
+      });
+    })();
+    """
 
     struct Presentation: Equatable {
         var theme: String
@@ -468,6 +542,7 @@ struct EditorWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             NSLog("[EditorWebView] didFinish url=%@", webView.url?.absoluteString ?? "<nil>")
+            logRuntimeDiagnostics(in: webView, label: "didFinish")
         }
 
         func userContentController(
@@ -500,6 +575,16 @@ struct EditorWebView: NSViewRepresentable {
 
             if message.name == EditorWebView.imageAssetRequestMessageName {
                 handleImageAssetRequest(message)
+                return
+            }
+
+            if
+                message.name == EditorWebView.consoleMessageName,
+                let body = message.body as? [String: Any],
+                let level = body["level"] as? String,
+                let messageText = body["message"] as? String
+            {
+                NSLog("[EditorWebView][JS][%@] %@", level.uppercased(), messageText)
             }
         }
 
@@ -593,8 +678,7 @@ struct EditorWebView: NSViewRepresentable {
         }
 
         private static func editorIndexURL() -> URL? {
-            Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "Editor")
-                ?? Bundle.main.url(forResource: "index", withExtension: "html")
+            EditorRuntimeStager.resolvedIndexURL()
         }
 
         private func loadInlineFallbackIfNeeded(in webView: WKWebView) {
@@ -641,18 +725,18 @@ struct EditorWebView: NSViewRepresentable {
             renderedHTML = replaceFirstMatch(
                 in: renderedHTML,
                 pattern: #"<script[^>]*src="\./index\.js"[^>]*></script>"#,
-                replacement: inlineModuleScript(for: script)
+                replacement: inlineScript(for: script)
             )
 
             return renderedHTML
         }
 
-        private static func inlineModuleScript(for script: String) -> String {
+        private static func inlineScript(for script: String) -> String {
             let escapedSource = script
                 .replacingOccurrences(of: "</script", with: "<\\/script")
 
             return """
-            <script type="module">
+            <script>
             \(escapedSource)
             </script>
             """
@@ -668,6 +752,7 @@ struct EditorWebView: NSViewRepresentable {
                     return
                 }
 
+                self.logRuntimeDiagnostics(in: webView, label: "ready-timeout")
                 NSLog("[EditorWebView] editor ready timeout, switching to inline fallback")
                 self.loadInlineFallbackIfNeeded(in: webView)
             }
@@ -679,6 +764,52 @@ struct EditorWebView: NSViewRepresentable {
         private func cancelReadyFallback() {
             readyFallbackWorkItem?.cancel()
             readyFallbackWorkItem = nil
+        }
+
+        private func logRuntimeDiagnostics(in webView: WKWebView, label: String) {
+            let script = """
+            (() => {
+                const debugState = window.__editorDebugState ?? null;
+                const app = document.querySelector('#app');
+                const handlers = window.webkit?.messageHandlers
+                    ? Object.keys(window.webkit.messageHandlers)
+                    : [];
+
+                return JSON.stringify({
+                    label: \(EditorWebView.javaScriptStringLiteral(for: label)),
+                    href: window.location.href,
+                    readyState: document.readyState,
+                    hasAppRoot: !!app,
+                    appChildCount: app?.childElementCount ?? 0,
+                    appHTML: typeof app?.innerHTML === 'string' ? app.innerHTML.slice(0, 240) : '',
+                    loadMarkdownType: typeof window.loadMarkdown,
+                    runEditorCommandType: typeof window.runEditorCommand,
+                    getEditorStateType: typeof window.getEditorState,
+                    setEditorAppearanceType: typeof window.setEditorAppearance,
+                    consoleForwardingInstalled: !!window.__editorConsoleForwardingInstalled,
+                    handlerNames: handlers,
+                    debugState
+                });
+            })();
+            """
+
+            webView.evaluateJavaScript(script) { result, error in
+                if let error {
+                    NSLog(
+                        "[EditorWebView] runtime diagnostics failed label=%@ error=%@",
+                        label,
+                        error.localizedDescription
+                    )
+                    return
+                }
+
+                guard let json = result as? String else {
+                    NSLog("[EditorWebView] runtime diagnostics unavailable label=%@", label)
+                    return
+                }
+
+                NSLog("[EditorWebView] runtime diagnostics %@", json)
+            }
         }
 
         private static func replaceFirstMatch(
@@ -725,6 +856,7 @@ struct EditorWebView: NSViewRepresentable {
         </body>
         </html>
         """
+
     }
 
     private struct PendingScript {

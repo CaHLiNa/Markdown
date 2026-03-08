@@ -7,13 +7,17 @@ import {
   postEditorReadyToNative,
   postMarkdownToNative
 } from './bridge'
+import { setEditorDebugPhase } from './editor-debug'
 import { createEditorBridge } from './editor-bridge'
 import { createMarkdownEditor, type MarkdownEditor } from './editor'
 import { type EditorPresentation } from './editor-presentation'
 
+setEditorDebugPhase('module-loaded')
+
 const app = document.querySelector<HTMLDivElement>('#app')
 
 if (!app) {
+  setEditorDebugPhase('missing-app-root', '#app not found', 'missing-app-root')
   throw new Error('缺少用于挂载编辑器的 #app 容器。')
 }
 
@@ -43,6 +47,7 @@ const bridge = createEditorBridge({
 })
 
 bridge.install()
+setEditorDebugPhase('bridge-installed')
 
 window.addEventListener('blur', () => {
   bridge.flush()
@@ -63,6 +68,8 @@ window.addEventListener('beforeunload', () => {
 })
 
 const bootEditor = async () => {
+  setEditorDebugPhase('boot-start')
+
   editor = await createMarkdownEditor({
     root: app,
     initialMarkdown: bridge.currentMarkdown,
@@ -72,11 +79,19 @@ const bootEditor = async () => {
     }
   })
 
+  setEditorDebugPhase('editor-created')
   bridge.attachEditor(editor)
+  setEditorDebugPhase('bridge-attached')
   postEditorReadyToNative()
+  setEditorDebugPhase('ready-posted')
 }
 
 void bootEditor().catch((error: unknown) => {
+  setEditorDebugPhase(
+    'boot-failed',
+    error instanceof Error ? error.message : String(error),
+    error instanceof Error ? error.stack ?? error.message : String(error)
+  )
   console.error('[editor-web] 编辑器初始化失败', error)
   app.innerHTML = `
     <div class="editor-error">

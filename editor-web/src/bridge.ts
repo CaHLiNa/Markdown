@@ -1,9 +1,9 @@
 type EditorContentChangedHandler = {
-  postMessage: (markdown: string) => void
+  postMessage: (markdown: string) => void | Promise<void>
 }
 
 type EditorReadyHandler = {
-  postMessage: (payload: { ready: true }) => void
+  postMessage: (payload: { ready: true }) => void | Promise<void>
 }
 
 type EditorImageAssetRequest = {
@@ -14,7 +14,7 @@ type EditorImageAssetRequest = {
 }
 
 type EditorImageAssetRequestHandler = {
-  postMessage: (payload: EditorImageAssetRequest) => void
+  postMessage: (payload: EditorImageAssetRequest) => void | Promise<void>
 }
 
 type EditorImageAssetResponse = {
@@ -89,11 +89,43 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
 }
 
 export const postMarkdownToNative = (markdown: string) => {
-  window.webkit?.messageHandlers?.editorContentChanged?.postMessage(markdown)
+  const handler = window.webkit?.messageHandlers?.editorContentChanged
+
+  if (!handler) {
+    return
+  }
+
+  try {
+    const result = handler.postMessage(markdown)
+
+    if (result && typeof result === 'object' && 'catch' in result) {
+      void (result as Promise<void>).catch((error: unknown) => {
+        console.error('[editor-web] 向 Native 同步 Markdown 失败', error)
+      })
+    }
+  } catch (error) {
+    console.error('[editor-web] 向 Native 同步 Markdown 失败', error)
+  }
 }
 
 export const postEditorReadyToNative = () => {
-  window.webkit?.messageHandlers?.editorReady?.postMessage({ ready: true })
+  const handler = window.webkit?.messageHandlers?.editorReady
+
+  if (!handler) {
+    return
+  }
+
+  try {
+    const result = handler.postMessage({ ready: true })
+
+    if (result && typeof result === 'object' && 'catch' in result) {
+      void (result as Promise<void>).catch((error: unknown) => {
+        console.error('[editor-web] 向 Native 发送 editorReady 失败', error)
+      })
+    }
+  } catch (error) {
+    console.error('[editor-web] 向 Native 发送 editorReady 失败', error)
+  }
 }
 
 const installImageAssetResolver = () => {
@@ -134,13 +166,24 @@ export const persistImageAssetInNative = async (file: File): Promise<string | nu
 
   return new Promise((resolve, reject) => {
     pendingImageAssetRequests.set(requestID, { resolve, reject })
+    try {
+      const result = handler.postMessage({
+        requestID,
+        filename: file.name,
+        mimeType: file.type,
+        base64Data
+      })
 
-    handler.postMessage({
-      requestID,
-      filename: file.name,
-      mimeType: file.type,
-      base64Data
-    })
+      if (result && typeof result === 'object' && 'catch' in result) {
+        void (result as Promise<void>).catch((error: unknown) => {
+          pendingImageAssetRequests.delete(requestID)
+          reject(error instanceof Error ? error : new Error(String(error)))
+        })
+      }
+    } catch (error) {
+      pendingImageAssetRequests.delete(requestID)
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
   })
 }
 
