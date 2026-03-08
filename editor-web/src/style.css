@@ -169,7 +169,17 @@ body {
 .vditor-reset li {
   font-family: var(--editor-font-family);
   font-size: var(--editor-font-size);
-  line-height: var(--editor-line-height);
+  line-height: clamp(1.52, calc(var(--editor-line-height) * 0.9), 1.68);
+}
+
+.vditor-ir p,
+.vditor-reset p {
+  margin: 0 0 0.18rem;
+}
+
+.vditor-ir p + p,
+.vditor-reset p + p {
+  margin-top: 0.02rem;
 }
 
 .vditor-ir ul,
