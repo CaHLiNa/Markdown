@@ -1901,7 +1901,10 @@ export const createMarkdownEditor = async ({
       button.innerHTML = TABLE_TOOLBAR_ICONS[icon]
       button.addEventListener('pointerdown', (event) => {
         markTableToolbarInteraction()
-        event.preventDefault()
+
+        if (event.button === 0) {
+          event.preventDefault()
+        }
       })
     }
 
@@ -1944,19 +1947,11 @@ export const createMarkdownEditor = async ({
     entryButton.addEventListener('click', () => {
       openEntryGridPopover()
     })
-    entryButton.addEventListener('pointerup', (event) => {
-      if (event.button !== 2) {
-        return
-      }
-
+    entryButton.addEventListener('contextmenu', (event) => {
       markTableToolbarInteraction()
       event.preventDefault()
       event.stopPropagation()
       openEntryContextMenu()
-    })
-    entryButton.addEventListener('contextmenu', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
     })
 
     configureIconButton(deleteButton, 'trash', '删除整个表格')
@@ -2345,7 +2340,10 @@ export const createMarkdownEditor = async ({
     },
     blur() {
       currentSelection = getSelectionOffsets()
-      hideTableToolbar()
+
+      if (!suppressTableToolbarSelectionChange) {
+        hideTableToolbar()
+      }
     }
   }
 
