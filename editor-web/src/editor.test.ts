@@ -310,7 +310,7 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
-  test('shows a selection format toolbar and applies toolbar commands', async () => {
+  test('shows only high-frequency actions in the primary selection toolbar and reveals secondary actions behind more', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 
     const root = document.querySelector<HTMLElement>('#app')
@@ -327,11 +327,47 @@ describe('createMarkdownEditor', () => {
     editor.setSelectionInParagraph(0, 0, 5)
 
     const toolbar = root.querySelector<HTMLElement>('.cm-format-toolbar')
-    const highlightButton = root.querySelector<HTMLButtonElement>(
-      '[data-editor-command="highlight"]'
+    const boldButton = root.querySelector<HTMLButtonElement>(
+      '.cm-format-toolbar-primary [data-editor-command="bold"]'
     )
+    const primaryCommands = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.cm-format-toolbar-primary [data-editor-command]')
+    ).map((button) => button.dataset.editorCommand)
+    const moreButton = root.querySelector<HTMLButtonElement>('[data-format-more-trigger="true"]')
+    const secondaryMenu = root.querySelector<HTMLElement>('.cm-format-toolbar-secondary')
 
     expect(toolbar).not.toBeNull()
+    expect(primaryCommands).toEqual(['bold', 'italic', 'link', 'inline-code'])
+    expect(root.querySelector('.cm-format-toolbar-primary [data-editor-command="image"]')).toBeNull()
+    expect(boldButton?.title).toBe('粗体')
+    expect(boldButton?.getAttribute('aria-label')).toBe('粗体')
+    expect(
+      boldButton
+        ?.querySelector('.cm-command-button-text')
+        ?.classList.contains('cm-command-button-text--sr-only')
+    ).toBe(true)
+    expect(secondaryMenu?.hidden).toBe(true)
+    expect(moreButton?.textContent).toBe('⋯')
+    expect(moreButton?.title).toBe('更多格式')
+    expect(moreButton?.getAttribute('aria-label')).toBe('更多格式')
+
+    moreButton?.click()
+
+    const secondaryCommands = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.cm-format-toolbar-secondary [data-editor-command]')
+    ).map((button) => button.dataset.editorCommand)
+    const highlightButton = root.querySelector<HTMLButtonElement>(
+      '.cm-format-toolbar-secondary [data-editor-command="highlight"]'
+    )
+
+    expect(secondaryMenu?.hidden).toBe(false)
+    expect(secondaryCommands).toEqual([
+      'underline',
+      'highlight',
+      'strikethrough',
+      'inline-math',
+      'clear-format'
+    ])
 
     highlightButton?.click()
 
@@ -340,7 +376,7 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
-  test('shows a quick insert menu for @ triggers and opens the table picker for table insertion', async () => {
+  test('uses grouped quick insert results for @ queries and runs the first filtered command on Enter', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 
     const root = document.querySelector<HTMLElement>('#app')
@@ -351,21 +387,38 @@ describe('createMarkdownEditor', () => {
 
     const editor = await createMarkdownEditor({
       root,
-      initialMarkdown: '@'
+      initialMarkdown: '@ta'
     })
 
-    editor.setSelectionInParagraph(0, 1)
+    editor.setSelectionInParagraph(0, 3)
 
     const quickInsert = root.querySelector<HTMLElement>('.cm-quick-insert')
-    const tableButton = root.querySelector<HTMLButtonElement>(
-      '.cm-quick-insert [data-editor-command="table"]'
-    )
+    const query = root.querySelector<HTMLElement>('.cm-quick-insert-query')
+    const sectionLabels = Array.from(
+      root.querySelectorAll<HTMLElement>('.cm-quick-insert [data-command-section-label]')
+    ).map((element) => element.textContent?.trim())
+    const quickInsertCommands = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.cm-quick-insert [data-editor-command]')
+    ).map((button) => button.dataset.editorCommand)
     const tablePanel = root.querySelector<HTMLElement>('[data-floating-panel="table"]')
+    const editorElement = root.querySelector<HTMLElement>('.cm-editor')
 
     expect(quickInsert).not.toBeNull()
+    expect(query?.textContent).toContain('@ta')
+    expect(sectionLabels).toContain('常用')
+    expect(quickInsertCommands[0]).toBe('table')
+    expect(quickInsertCommands).toContain('task-list')
 
-    tableButton?.click()
+    editorElement?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true
+      })
+    )
+
     expect(tablePanel?.hidden).toBe(false)
+    expect(quickInsert?.hidden).toBe(true)
 
     const rowInput = root.querySelector<HTMLInputElement>('[data-table-field="rows"]')
     const columnInput = root.querySelector<HTMLInputElement>('[data-table-field="columns"]')
@@ -415,7 +468,7 @@ describe('createMarkdownEditor', () => {
     await editor.destroy()
   })
 
-  test('shows a block menu for the active block and runs block actions from it', async () => {
+  test('shows a block gutter for the active block and opens grouped block actions from it', async () => {
     document.body.innerHTML = '<div id="app"></div>'
 
     const root = document.querySelector<HTMLElement>('#app')
@@ -431,16 +484,95 @@ describe('createMarkdownEditor', () => {
 
     editor.setSelectionInParagraph(0, 0)
 
+    const gutter = root.querySelector<HTMLElement>('.cm-block-gutter')
+    const gutterActions = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.cm-block-gutter [data-block-gutter-action]')
+    ).map((button) => button.dataset.blockGutterAction)
+    const menuButton = root.querySelector<HTMLButtonElement>('[data-block-gutter-action="menu"]')
+
+    expect(gutter).not.toBeNull()
+    expect(gutterActions).toEqual(['insert', 'menu'])
+
+    menuButton?.click()
+
     const blockMenu = root.querySelector<HTMLElement>('.cm-block-menu')
+    const sectionLabels = Array.from(
+      root.querySelectorAll<HTMLElement>('.cm-block-menu [data-command-section-label]')
+    ).map((element) => element.textContent?.trim())
     const duplicateButton = root.querySelector<HTMLButtonElement>(
       '.cm-block-menu [data-editor-command="duplicate-block"]'
     )
 
-    expect(blockMenu).not.toBeNull()
+    expect(blockMenu?.hidden).toBe(false)
+    expect(sectionLabels).toEqual(['类型切换', '块操作', '危险操作'])
 
     duplicateButton?.click()
 
     expect(editor.getMarkdown()).toBe('# 标题\n\n正文\n\n正文')
+
+    await editor.destroy()
+  })
+
+  test('opens a shared insert menu from the block gutter and inserts after the active block', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for block gutter insert test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '# 标题\n\n正文'
+    })
+
+    editor.setSelectionInParagraph(0, 0)
+
+    const insertButton = root.querySelector<HTMLButtonElement>('[data-block-gutter-action="insert"]')
+    insertButton?.click()
+
+    const insertMenu = root.querySelector<HTMLElement>('.cm-block-insert-menu')
+    const sectionLabels = Array.from(
+      root.querySelectorAll<HTMLElement>('.cm-block-insert-menu [data-command-section-label]')
+    ).map((element) => element.textContent?.trim())
+    const headingButton = root.querySelector<HTMLButtonElement>(
+      '.cm-block-insert-menu [data-editor-command="heading-2"]'
+    )
+
+    expect(insertMenu?.hidden).toBe(false)
+    expect(sectionLabels).toEqual(['常用', '文本结构', '更多块类型'])
+
+    headingButton?.click()
+
+    expect(editor.getMarkdown()).toBe('# 标题\n\n正文\n\n## 标题')
+
+    await editor.destroy()
+  })
+
+  test('closes other primary floating surfaces when a popover opens', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for floating surface exclusivity test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: '@ta'
+    })
+
+    editor.setSelectionInParagraph(0, 3)
+
+    const quickInsert = root.querySelector<HTMLElement>('.cm-quick-insert')
+
+    expect(quickInsert?.hidden).toBe(false)
+    expect(editor.runCommand('image')).toBe(true)
+
+    expect(root.querySelector<HTMLElement>('[data-floating-panel="image"]')?.hidden).toBe(false)
+    expect(quickInsert?.hidden).toBe(true)
 
     await editor.destroy()
   })
@@ -846,6 +978,90 @@ describe('createMarkdownEditor', () => {
     submitButton.click()
 
     expect(editor.getMarkdown()).toBe('[OpenAI 官网](https://openai.com "OpenAI")')
+
+    await editor.destroy()
+  })
+
+  test('turns the primary link action into edit mode for parsed links', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for link edit affordance test.')
+    }
+
+    const markdown = '[OpenAI](https://openai.com)'
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: markdown
+    })
+
+    editor.setSelectionInParagraph(0, 0, markdown.length)
+
+    const linkButton = root.querySelector<HTMLButtonElement>(
+      '.cm-format-toolbar-primary [data-editor-command="link"]'
+    )
+
+    expect(linkButton?.textContent).toContain('编辑')
+
+    linkButton?.click()
+
+    const urlField = root.querySelector<HTMLInputElement>('[data-link-field="url"]')
+    expect(urlField?.value).toBe('https://openai.com')
+
+    await editor.destroy()
+  })
+
+  test('renders preview image and table toolbars with grouped stable actions', async () => {
+    document.body.innerHTML = '<div id="app"></div>'
+
+    const root = document.querySelector<HTMLElement>('#app')
+
+    if (!root) {
+      throw new Error('Missing root element for preview toolbar grouping test.')
+    }
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown:
+        '# 标题\n\n![示意图](note.assets/diagram.png)\n\n| 姓名 | 城市 |\n| --- | --- |\n| Alice | 上海 |'
+    })
+
+    editor.setSelectionInBlock('heading', 0, 0)
+
+    const imageTools = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.cm-image-toolbar [data-image-tool]')
+    ).map((button) => button.dataset.imageTool)
+    const imageToolTitles = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.cm-image-toolbar [data-image-tool]')
+    ).map((button) => button.title)
+    const tableGroups = Array.from(
+      root.querySelectorAll<HTMLElement>('.cm-table-toolbar-group')
+    ).map((group) =>
+      Array.from(group.querySelectorAll<HTMLButtonElement>('[data-table-tool]')).map(
+        (button) => button.dataset.tableTool
+      )
+    )
+    const tableToolLabels = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.cm-table-toolbar [data-table-tool]')
+    ).map((button) => button.getAttribute('aria-label'))
+
+    expect(imageTools).toEqual(['edit', 'replace', 'reload', 'delete'])
+    expect(imageToolTitles).toEqual(['编辑图片', '替换图片', '重新加载图片', '删除图片'])
+    expect(tableGroups).toEqual([
+      ['add-row', 'delete-row', 'add-column', 'delete-column'],
+      ['align-left', 'align-center', 'align-right']
+    ])
+    expect(tableToolLabels).toEqual([
+      '插入下一行',
+      '删除当前行',
+      '插入下一列',
+      '删除当前列',
+      '左对齐',
+      '居中对齐',
+      '右对齐'
+    ])
 
     await editor.destroy()
   })

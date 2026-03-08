@@ -24,10 +24,13 @@ import {
   renderMarkdownDocument
 } from './markdown-renderer'
 import {
-  blockMenuCommands,
+  blockInsertSections,
+  blockMenuSections,
+  commandMatchesQuery,
   editorCommandRegistry,
-  formatToolbarCommands,
-  quickInsertCommands,
+  formatToolbarPrimaryCommands,
+  formatToolbarSecondaryCommands,
+  quickInsertSections,
   type EditorCommand
 } from './commands'
 import {
@@ -92,6 +95,19 @@ type EmojiTrigger = {
   from: number
   to: number
   query: string
+}
+
+type QuickInsertTrigger = {
+  from: number
+  to: number
+  query: string
+}
+
+type SelectionUIContext = {
+  activeFormats: EditorCommand[]
+  selectedTextLength: number
+  isLinkSelection: boolean
+  activeBlockType: MarkdownBlock['type'] | null
 }
 
 class PreviewBlockWidget extends WidgetType {
@@ -637,6 +653,33 @@ const getActiveEmojiTrigger = (view: EditorView): EmojiTrigger | null => {
     query: lineText.slice(colonIndex + 1, aliasEnd)
   }
 }
+
+const getActiveQuickInsertTrigger = (view: EditorView): QuickInsertTrigger | null => {
+  const selection = view.state.selection.main
+
+  if (!selection.empty) {
+    return null
+  }
+
+  const line = view.state.doc.lineAt(selection.from)
+  const prefix = line.text.slice(0, selection.from - line.from)
+  const match = /^(\s*)@([a-z0-9-]*)$/i.exec(prefix)
+
+  if (!match) {
+    return null
+  }
+
+  const leadingWhitespace = match[1]?.length ?? 0
+  const query = match[2] ?? ''
+
+  return {
+    from: line.from + leadingWhitespace,
+    to: line.to,
+    query
+  }
+}
+
+const normalizeCommandSearchText = (value: string) => value.trim().toLowerCase()
 
 const revealOffsetRange = (view: EditorView, offset: number, length = 0) => {
   const documentLength = view.state.doc.length
@@ -1579,8 +1622,9 @@ const replaceWithStandaloneMarkdownBlock = (
   const currentText = getDocumentText(view)
   const previousCharacter = from > 0 ? currentText.slice(from - 1, from) : ''
   const nextCharacter = to < currentText.length ? currentText.slice(to, to + 1) : ''
-  const leadingBreak = currentText.length > 0 && previousCharacter !== '\n' ? '\n\n' : ''
-  const trailingBreak = currentText.length > 0 && nextCharacter !== '\n' ? '\n\n' : ''
+  const leadingBreak = currentText.length > 0 && from > 0 && previousCharacter !== '\n' ? '\n\n' : ''
+  const trailingBreak =
+    currentText.length > 0 && to < currentText.length && nextCharacter !== '\n' ? '\n\n' : ''
   const replacement = `${leadingBreak}${markdownText}${trailingBreak}`
   const anchor = from + leadingBreak.length + selectionAnchorOffset
   const head = from + leadingBreak.length + selectionHeadOffset
@@ -1784,14 +1828,22 @@ const pickImageFileFromSystem = () => {
 
 const createImageToolButton = (
   label: string,
+  iconText: string,
   action: string,
   onClick: (event: MouseEvent) => void
 ) => {
   const button = document.createElement('button')
+  const { icon, text } = createCompactPreviewToolContent(iconText, label)
+
   button.type = 'button'
   button.className = 'cm-image-tool-button'
   button.dataset.imageTool = action
-  button.textContent = label
+  button.title = label
+  button.setAttribute('aria-label', label)
+  if (action === 'delete') {
+    button.classList.add('is-danger')
+  }
+  button.append(icon, text)
   button.addEventListener('mousedown', (event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -1826,7 +1878,7 @@ const attachImageToolbar = (
     image.dataset.editorImageSource = image.getAttribute('src') ?? image.src
   }
 
-  const replaceButton = createImageToolButton('替换', 'replace', (event) => {
+  const replaceButton = createImageToolButton('替换图片', '⇆', 'replace', (event) => {
     event.preventDefault()
     event.stopPropagation()
 
@@ -1858,19 +1910,19 @@ const attachImageToolbar = (
     replaceButton.disabled = true
   }
 
-  const editButton = createImageToolButton('编辑', 'edit', (event) => {
+  const editButton = createImageToolButton('编辑图片', '✎', 'edit', (event) => {
     event.preventDefault()
     event.stopPropagation()
     imageTools.openImageEditor?.(block, imageBlock)
   })
 
-  const reloadButton = createImageToolButton('重载', 'reload', (event) => {
+  const reloadButton = createImageToolButton('重新加载图片', '↻', 'reload', (event) => {
     event.preventDefault()
     event.stopPropagation()
     reloadPreviewImage(root)
   })
 
-  const deleteButton = createImageToolButton('删除', 'delete', (event) => {
+  const deleteButton = createImageToolButton('删除图片', '⌫', 'delete', (event) => {
     event.preventDefault()
     event.stopPropagation()
     removeStandaloneImageBlock(view, block)
@@ -1927,14 +1979,22 @@ const attachImageToolbar = (
 
 const createTableToolButton = (
   label: string,
+  iconText: string,
   action: string,
   onClick: (event: MouseEvent) => void
 ) => {
   const button = document.createElement('button')
+  const { icon, text } = createCompactPreviewToolContent(iconText, label)
+
   button.type = 'button'
   button.className = 'cm-table-tool-button'
   button.dataset.tableTool = action
-  button.textContent = label
+  button.title = label
+  button.setAttribute('aria-label', label)
+  if (action.startsWith('delete')) {
+    button.classList.add('is-danger')
+  }
+  button.append(icon, text)
   button.addEventListener('mousedown', (event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -1970,10 +2030,10 @@ const formatTableToolbarContext = (
 ) => {
   const rowLabel =
     row === 0
-      ? '标题行'
-      : `第 ${Math.min(row, table.rows.length)} 行`
+      ? '表头'
+      : `${Math.min(row, table.rows.length)} 行`
 
-  return `${rowLabel} · 第 ${column + 1} 列`
+  return `${rowLabel} · ${column + 1} 列`
 }
 
 const attachTableToolbar = (
@@ -2106,7 +2166,7 @@ const attachTableToolbar = (
     updateToolbarState()
   }
 
-  const addColumnButton = createTableToolButton('列+', 'add-column', (event) => {
+  const addColumnButton = createTableToolButton('插入下一列', '+列', 'add-column', (event) => {
     event.preventDefault()
     event.stopPropagation()
 
@@ -2128,7 +2188,7 @@ const attachTableToolbar = (
     updateMarkdownTableBlock(view, block, nextTable)
   })
 
-  const deleteColumnButton = createTableToolButton('删列', 'delete-column', (event) => {
+  const deleteColumnButton = createTableToolButton('删除当前列', '-列', 'delete-column', (event) => {
     event.preventDefault()
     event.stopPropagation()
 
@@ -2146,7 +2206,7 @@ const attachTableToolbar = (
     updateMarkdownTableBlock(view, block, nextTable)
   })
 
-  const addRowButton = createTableToolButton('行+', 'add-row', (event) => {
+  const addRowButton = createTableToolButton('插入下一行', '+行', 'add-row', (event) => {
     event.preventDefault()
     event.stopPropagation()
 
@@ -2165,7 +2225,7 @@ const attachTableToolbar = (
     )
   })
 
-  const deleteRowButton = createTableToolButton('删行', 'delete-row', (event) => {
+  const deleteRowButton = createTableToolButton('删除当前行', '-行', 'delete-row', (event) => {
     event.preventDefault()
     event.stopPropagation()
 
@@ -2191,7 +2251,10 @@ const attachTableToolbar = (
     label: string,
     alignment: MarkdownTableAlignment
   ) => {
-    return createTableToolButton(label, `align-${alignment || 'default'}`, (event) => {
+    const iconText =
+      alignment === 'left' ? '左' : alignment === 'center' ? '中' : alignment === 'right' ? '右' : '·'
+
+    return createTableToolButton(label, iconText, `align-${alignment || 'default'}`, (event) => {
       event.preventDefault()
       event.stopPropagation()
 
@@ -2211,9 +2274,9 @@ const attachTableToolbar = (
     })
   }
 
-  const alignLeftButton = createAlignButton('左', 'left')
-  const alignCenterButton = createAlignButton('中', 'center')
-  const alignRightButton = createAlignButton('右', 'right')
+  const alignLeftButton = createAlignButton('左对齐', 'left')
+  const alignCenterButton = createAlignButton('居中对齐', 'center')
+  const alignRightButton = createAlignButton('右对齐', 'right')
 
   const updateToolbarState = () => {
     contextLabel.textContent = formatTableToolbarContext(hoverState.row, hoverState.column, table)
@@ -2600,15 +2663,186 @@ const runSourceCommand = (view: EditorView, command: EditorCommand) => {
   }
 }
 
-const createFloatingCommandButton = (
+type InsertCommandTemplate = {
+  markdown: string
+  anchor: number
+  head: number
+}
+
+const createInsertCommandTemplate = (
+  command: EditorCommand
+): InsertCommandTemplate | null => {
+  switch (command) {
+    case 'paragraph':
+      return {
+        markdown: '',
+        anchor: 0,
+        head: 0
+      }
+    case 'heading-1':
+      return {
+        markdown: '# 标题',
+        anchor: '# '.length,
+        head: '# 标题'.length
+      }
+    case 'heading-2':
+      return {
+        markdown: '## 标题',
+        anchor: '## '.length,
+        head: '## 标题'.length
+      }
+    case 'heading-3':
+      return {
+        markdown: '### 标题',
+        anchor: '### '.length,
+        head: '### 标题'.length
+      }
+    case 'blockquote':
+      return {
+        markdown: '> 引用',
+        anchor: '> '.length,
+        head: '> 引用'.length
+      }
+    case 'bullet-list':
+      return {
+        markdown: '- 列表项',
+        anchor: '- '.length,
+        head: '- 列表项'.length
+      }
+    case 'ordered-list':
+      return {
+        markdown: '1. 列表项',
+        anchor: '1. '.length,
+        head: '1. 列表项'.length
+      }
+    case 'task-list':
+      return {
+        markdown: '- [ ] 待办',
+        anchor: '- [ ] '.length,
+        head: '- [ ] 待办'.length
+      }
+    case 'horizontal-rule':
+      return {
+        markdown: '---',
+        anchor: 0,
+        head: 3
+      }
+    case 'front-matter':
+      return {
+        markdown: '---\ntitle: 标题\ntags: []\n---',
+        anchor: '---\ntitle: '.length,
+        head: '---\ntitle: 标题'.length
+      }
+    case 'code-block':
+      return {
+        markdown: '```\n代码\n```',
+        anchor: '```\n'.length,
+        head: '```\n代码'.length
+      }
+    case 'math-block':
+      return {
+        markdown: '$$\na^2 + b^2 = c^2\n$$',
+        anchor: '$$\n'.length,
+        head: '$$\na^2 + b^2 = c^2'.length
+      }
+    default:
+      return null
+  }
+}
+
+const replaceRangeWithInsertCommand = (
+  view: EditorView,
+  from: number,
+  to: number,
+  command: EditorCommand
+) => {
+  const template = createInsertCommandTemplate(command)
+
+  if (!template) {
+    return false
+  }
+
+  return replaceWithStandaloneMarkdownBlock(
+    view,
+    from,
+    to,
+    template.markdown,
+    template.anchor,
+    template.head
+  )
+}
+
+const replaceActiveBlockWithCommand = (
+  view: EditorView,
+  block: MarkdownBlock,
+  command: EditorCommand
+) => {
+  updateSelection(view, block.from, block.to)
+  return runSourceCommand(view, command)
+}
+
+const createCommandButtonContent = (
   command: EditorCommand,
-  onClick: (command: EditorCommand) => void
+  label = editorCommandRegistry[command].label,
+  options: {
+    compact?: boolean
+  } = {}
+) => {
+  const definition = editorCommandRegistry[command]
+
+  const icon = document.createElement('span')
+  icon.className = 'cm-command-button-icon'
+  icon.textContent = definition.icon
+  icon.setAttribute('aria-hidden', 'true')
+
+  const text = document.createElement('span')
+  text.className = 'cm-command-button-text'
+  text.textContent = label
+
+  if (options.compact) {
+    text.classList.add('cm-command-button-text--sr-only')
+  }
+
+  return { icon, text }
+}
+
+const createSurfaceCommandButton = (
+  command: EditorCommand,
+  options: {
+    variant: 'toolbar' | 'list'
+    label?: string
+    active?: boolean
+    onClick: (command: EditorCommand) => void
+  }
 ) => {
   const button = document.createElement('button')
+  const definition = editorCommandRegistry[command]
+  const label = options.label ?? definition.label
+  const compact = options.variant === 'toolbar'
+  const { icon, text } = createCommandButtonContent(command, label, {
+    compact
+  })
+
   button.type = 'button'
-  button.className = 'cm-floating-command-button'
+  button.className =
+    options.variant === 'toolbar'
+      ? 'cm-surface-command-button cm-surface-command-button--toolbar'
+      : 'cm-surface-command-button cm-surface-command-button--list'
   button.dataset.editorCommand = command
-  button.textContent = editorCommandRegistry[command].label
+  button.dataset.commandLabel = label
+  button.dataset.commandVariant = options.variant
+  button.title = label
+  button.setAttribute('aria-label', label)
+
+  if (definition.destructive) {
+    button.classList.add('is-danger')
+  }
+
+  if (options.active) {
+    button.classList.add('is-active')
+  }
+
+  button.append(icon, text)
   button.addEventListener('mousedown', (event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -2616,9 +2850,30 @@ const createFloatingCommandButton = (
   button.addEventListener('click', (event) => {
     event.preventDefault()
     event.stopPropagation()
-    onClick(command)
+    options.onClick(command)
   })
   return button
+}
+
+const createSectionLabel = (label: string) => {
+  const element = document.createElement('div')
+  element.className = 'cm-command-section-label'
+  element.dataset.commandSectionLabel = label
+  element.textContent = label
+  return element
+}
+
+const createCompactPreviewToolContent = (iconText: string, label: string) => {
+  const icon = document.createElement('span')
+  icon.className = 'cm-preview-tool-button-icon'
+  icon.textContent = iconText
+  icon.setAttribute('aria-hidden', 'true')
+
+  const text = document.createElement('span')
+  text.className = 'cm-command-button-text cm-command-button-text--sr-only'
+  text.textContent = label
+
+  return { icon, text }
 }
 
 const positionFloatingElement = (
@@ -2661,8 +2916,22 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
   const formatToolbar = document.createElement('div')
   formatToolbar.className = 'cm-floating-ui cm-format-toolbar'
 
+  const formatToolbarPrimary = document.createElement('div')
+  formatToolbarPrimary.className = 'cm-format-toolbar-primary'
+
+  const formatToolbarSecondary = document.createElement('div')
+  formatToolbarSecondary.className = 'cm-format-toolbar-secondary'
+
+  formatToolbar.append(formatToolbarPrimary, formatToolbarSecondary)
+
   const quickInsertMenu = document.createElement('div')
   quickInsertMenu.className = 'cm-floating-ui cm-quick-insert'
+
+  const blockGutter = document.createElement('div')
+  blockGutter.className = 'cm-block-gutter'
+
+  const blockInsertMenu = document.createElement('div')
+  blockInsertMenu.className = 'cm-floating-ui cm-block-insert-menu'
 
   const blockMenu = document.createElement('div')
   blockMenu.className = 'cm-floating-ui cm-block-menu'
@@ -2686,6 +2955,8 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
   rootElement.append(
     formatToolbar,
     quickInsertMenu,
+    blockGutter,
+    blockInsertMenu,
     blockMenu,
     linkPopover,
     imagePopover,
@@ -2727,38 +2998,143 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     activeIndex: number
   }
 
+  type QuickInsertState = {
+    from: number
+    to: number
+    query: string
+    activeIndex: number
+  }
+
   let linkState: LinkPopoverState | null = null
   let imageState: ImagePopoverState | null = null
   let tableState: TablePopoverState | null = null
   let emojiState: EmojiPopoverState | null = null
+  let quickInsertState: QuickInsertState | null = null
+  let formatSecondaryOpen = false
+  let blockSurfaceMode: 'insert' | 'menu' | null = null
+  let lastBlockInsertCommand: EditorCommand = 'heading-1'
 
-  const hide = (element: HTMLElement) => {
+  const hide = (element: HTMLElement, clear = false) => {
     element.hidden = true
-    element.replaceChildren()
+    if (clear) {
+      element.replaceChildren()
+    }
   }
 
   const show = (element: HTMLElement) => {
     element.hidden = false
   }
 
+  const getSelectionUIContext = (): SelectionUIContext => {
+    const selection = view.state.selection.main
+    const selectedText = view.state.doc.sliceString(selection.from, selection.to)
+    const activeBlock = getActiveBlock(view)
+
+    return {
+      activeFormats: formatToolbarPrimaryCommands.filter((command) => {
+        if (selection.empty) {
+          return false
+        }
+
+        switch (command) {
+          case 'bold':
+            return selectedText.startsWith('**') && selectedText.endsWith('**')
+          case 'italic':
+            return selectedText.startsWith('*') && selectedText.endsWith('*')
+          case 'inline-code':
+            return selectedText.startsWith('`') && selectedText.endsWith('`')
+          case 'link':
+            return parseMarkdownLink(selectedText) != null
+          default:
+            return false
+        }
+      }),
+      selectedTextLength: selectedText.length,
+      isLinkSelection: parseMarkdownLink(selectedText) != null,
+      activeBlockType: activeBlock?.type ?? null
+    }
+  }
+
   const closeLinkPopover = () => {
     linkState = null
-    hide(linkPopover)
+    hide(linkPopover, true)
   }
 
   const closeImagePopover = () => {
     imageState = null
-    hide(imagePopover)
+    hide(imagePopover, true)
   }
 
   const closeTablePopover = () => {
     tableState = null
-    hide(tablePopover)
+    hide(tablePopover, true)
   }
 
   const closeEmojiPopover = () => {
     emojiState = null
-    hide(emojiPopover)
+    hide(emojiPopover, true)
+  }
+
+  const closeQuickInsertMenu = () => {
+    quickInsertState = null
+    hide(quickInsertMenu, true)
+  }
+
+  const closeFormatSecondary = () => {
+    formatSecondaryOpen = false
+    hide(formatToolbarSecondary, true)
+  }
+
+  const closeBlockInsertMenu = () => {
+    if (blockSurfaceMode === 'insert') {
+      blockSurfaceMode = null
+    }
+    hide(blockInsertMenu, true)
+  }
+
+  const closeBlockActionMenu = () => {
+    if (blockSurfaceMode === 'menu') {
+      blockSurfaceMode = null
+    }
+    hide(blockMenu, true)
+  }
+
+  const closePrimarySurfaces = (
+    except:
+      | 'quick-insert'
+      | 'format-secondary'
+      | 'block-insert'
+      | 'block-menu'
+      | 'link'
+      | 'image'
+      | 'table'
+      | 'emoji'
+      | null = null
+  ) => {
+    if (except !== 'quick-insert') {
+      closeQuickInsertMenu()
+    }
+    if (except !== 'format-secondary') {
+      closeFormatSecondary()
+    }
+    if (except !== 'block-insert') {
+      closeBlockInsertMenu()
+    }
+    if (except !== 'block-menu') {
+      closeBlockActionMenu()
+    }
+    if (except !== 'link') {
+      closeLinkPopover()
+    }
+    if (except !== 'image') {
+      closeImagePopover()
+    }
+    if (except !== 'table') {
+      closeTablePopover()
+    }
+    if (except !== 'emoji') {
+      closeEmojiPopover()
+    }
   }
 
   const createFloatingField = (
@@ -2849,6 +3225,64 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     return { field, input }
   }
 
+  const positionBlockSurface = (element: HTMLElement, block: MarkdownBlock) => {
+    const coords = view.coordsAtPos(block.from)
+    const rootRect = rootElement.getBoundingClientRect()
+
+    if (!coords) {
+      element.style.left = '56px'
+      element.style.top = '12px'
+      return
+    }
+
+    element.style.left = `${Math.max(56, coords.left - rootRect.left + 20)}px`
+    element.style.top = `${Math.max(12, coords.top - rootRect.top - 4)}px`
+  }
+
+  const positionBlockGutter = (block: MarkdownBlock) => {
+    const coords = view.coordsAtPos(block.from)
+    const rootRect = rootElement.getBoundingClientRect()
+
+    if (!coords) {
+      blockGutter.style.left = '12px'
+      blockGutter.style.top = '12px'
+      return
+    }
+
+    blockGutter.style.left = `${Math.max(12, coords.left - rootRect.left - 48)}px`
+    blockGutter.style.top = `${Math.max(12, coords.top - rootRect.top - 2)}px`
+  }
+
+  const buildQuickInsertSections = (query: string) => {
+    const filteredSections = quickInsertSections
+      .map((section) => ({
+        ...section,
+        commands: section.commands.filter((command) => commandMatchesQuery(command, query))
+      }))
+      .filter((section) => section.commands.length > 0)
+
+    return {
+      sections: filteredSections,
+      items: filteredSections.flatMap((section) => section.commands)
+    }
+  }
+
+  const buildBlockInsertSections = () => {
+    return blockInsertSections.map((section) => {
+      if (!section.commands.includes(lastBlockInsertCommand)) {
+        return section
+      }
+
+      return {
+        ...section,
+        commands: [
+          lastBlockInsertCommand,
+          ...section.commands.filter((command) => command !== lastBlockInsertCommand)
+        ]
+      }
+    })
+  }
+
   const applyEmojiPopover = (item?: EmojiOption) => {
     const selectedItem = item ?? (emojiState ? emojiState.items[emojiState.activeIndex] : null)
 
@@ -2892,7 +3326,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
 
   const renderEmojiPopover = () => {
     if (!emojiState || emojiState.items.length === 0) {
-      hide(emojiPopover)
+      hide(emojiPopover, true)
       return
     }
 
@@ -2955,9 +3389,20 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     show(emojiPopover)
   }
 
+  const moveEmojiSelection = (direction: 1 | -1) => {
+    if (!emojiState || emojiState.items.length === 0) {
+      return false
+    }
+
+    emojiState.activeIndex =
+      (emojiState.activeIndex + direction + emojiState.items.length) % emojiState.items.length
+    renderEmojiPopover()
+    return true
+  }
+
   const renderTablePopover = () => {
     if (!tableState) {
-      hide(tablePopover)
+      hide(tablePopover, true)
       return
     }
 
@@ -3080,162 +3525,6 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     })
   }
 
-  const moveEmojiSelection = (direction: 1 | -1) => {
-    if (!emojiState || emojiState.items.length === 0) {
-      return false
-    }
-
-    emojiState.activeIndex =
-      (emojiState.activeIndex + direction + emojiState.items.length) % emojiState.items.length
-    renderEmojiPopover()
-    return true
-  }
-
-  const renderLinkPopover = () => {
-    if (!linkState) {
-      hide(linkPopover)
-      return
-    }
-
-    linkPopover.replaceChildren()
-    const form = document.createElement('form')
-    form.className = 'cm-floating-form'
-    form.addEventListener('submit', (event) => {
-      event.preventDefault()
-      applyLinkPopover()
-    })
-
-    const textField = createFloatingField(
-      'linkField',
-      'text',
-      '文本',
-      linkState.values.text,
-      (value) => {
-        if (!linkState) {
-          return
-        }
-
-        linkState.values.text = value
-      }
-    )
-    const urlField = createFloatingField(
-      'linkField',
-      'url',
-      '地址',
-      linkState.values.url,
-      (value) => {
-        if (!linkState) {
-          return
-        }
-
-        linkState.values.url = value
-      }
-    )
-    const titleField = createFloatingField(
-      'linkField',
-      'title',
-      '标题',
-      linkState.values.title,
-      (value) => {
-        if (!linkState) {
-          return
-        }
-
-        linkState.values.title = value
-      }
-    )
-
-    const actions = document.createElement('div')
-    actions.className = 'cm-floating-actions'
-    const cancelButton = createFloatingActionButton('取消', 'floatingCancel', 'link', closeLinkPopover)
-    const submitButton = createFloatingActionButton('应用', 'floatingSubmit', 'link', applyLinkPopover)
-    submitButton.type = 'submit'
-    actions.append(cancelButton, submitButton)
-
-    form.append(textField.field, urlField.field, titleField.field, actions)
-    linkPopover.append(form)
-    positionFloatingElement(linkPopover, rootElement, view, linkState.from, linkState.to)
-    show(linkPopover)
-    queueMicrotask(() => {
-      urlField.input.focus()
-      urlField.input.select()
-    })
-  }
-
-  const renderImagePopover = () => {
-    if (!imageState) {
-      hide(imagePopover)
-      return
-    }
-
-    imagePopover.replaceChildren()
-    const form = document.createElement('form')
-    form.className = 'cm-floating-form'
-    form.addEventListener('submit', (event) => {
-      event.preventDefault()
-      applyImagePopover()
-    })
-
-    const altField = createFloatingField(
-      'imageField',
-      'alt',
-      'Alt',
-      imageState.values.alt,
-      (value) => {
-        if (!imageState) {
-          return
-        }
-
-        imageState.values.alt = value
-      }
-    )
-    const pathField = createFloatingField(
-      'imageField',
-      'path',
-      '路径',
-      imageState.values.path,
-      (value) => {
-        if (!imageState) {
-          return
-        }
-
-        imageState.values.path = value
-      }
-    )
-    const titleField = createFloatingField(
-      'imageField',
-      'title',
-      '标题',
-      imageState.values.title,
-      (value) => {
-        if (!imageState) {
-          return
-        }
-
-        imageState.values.title = value
-      }
-    )
-
-    const actions = document.createElement('div')
-    actions.className = 'cm-floating-actions'
-    const cancelButton = createFloatingActionButton('取消', 'floatingCancel', 'image', closeImagePopover)
-    const submitButton = createFloatingActionButton('应用', 'floatingSubmit', 'image', applyImagePopover)
-    submitButton.type = 'submit'
-    actions.append(cancelButton, submitButton)
-
-    form.append(altField.field, pathField.field, titleField.field, actions)
-    imagePopover.append(form)
-    positionFloatingElement(imagePopover, rootElement, view, imageState.from, imageState.to, {
-      above: false,
-      offsetY: 4
-    })
-    show(imagePopover)
-    queueMicrotask(() => {
-      pathField.input.focus()
-      pathField.input.select()
-    })
-  }
-
   const applyLinkPopover = () => {
     if (!linkState) {
       return
@@ -3303,10 +3592,141 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     view.focus()
   }
 
+  const renderLinkPopover = () => {
+    if (!linkState) {
+      hide(linkPopover, true)
+      return
+    }
+
+    linkPopover.replaceChildren()
+    const form = document.createElement('form')
+    form.className = 'cm-floating-form'
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      applyLinkPopover()
+    })
+
+    const textField = createFloatingField(
+      'linkField',
+      'text',
+      '文本',
+      linkState.values.text,
+      (value) => {
+        if (linkState) {
+          linkState.values.text = value
+        }
+      }
+    )
+    const urlField = createFloatingField(
+      'linkField',
+      'url',
+      '地址',
+      linkState.values.url,
+      (value) => {
+        if (linkState) {
+          linkState.values.url = value
+        }
+      }
+    )
+    const titleField = createFloatingField(
+      'linkField',
+      'title',
+      '标题',
+      linkState.values.title,
+      (value) => {
+        if (linkState) {
+          linkState.values.title = value
+        }
+      }
+    )
+
+    const actions = document.createElement('div')
+    actions.className = 'cm-floating-actions'
+    const cancelButton = createFloatingActionButton('取消', 'floatingCancel', 'link', closeLinkPopover)
+    const submitButton = createFloatingActionButton('应用', 'floatingSubmit', 'link', applyLinkPopover)
+    submitButton.type = 'submit'
+    actions.append(cancelButton, submitButton)
+
+    form.append(textField.field, urlField.field, titleField.field, actions)
+    linkPopover.append(form)
+    positionFloatingElement(linkPopover, rootElement, view, linkState.from, linkState.to)
+    show(linkPopover)
+    queueMicrotask(() => {
+      urlField.input.focus()
+      urlField.input.select()
+    })
+  }
+
+  const renderImagePopover = () => {
+    if (!imageState) {
+      hide(imagePopover, true)
+      return
+    }
+
+    imagePopover.replaceChildren()
+    const form = document.createElement('form')
+    form.className = 'cm-floating-form'
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      applyImagePopover()
+    })
+
+    const altField = createFloatingField(
+      'imageField',
+      'alt',
+      'Alt',
+      imageState.values.alt,
+      (value) => {
+        if (imageState) {
+          imageState.values.alt = value
+        }
+      }
+    )
+    const pathField = createFloatingField(
+      'imageField',
+      'path',
+      '路径',
+      imageState.values.path,
+      (value) => {
+        if (imageState) {
+          imageState.values.path = value
+        }
+      }
+    )
+    const titleField = createFloatingField(
+      'imageField',
+      'title',
+      '标题',
+      imageState.values.title,
+      (value) => {
+        if (imageState) {
+          imageState.values.title = value
+        }
+      }
+    )
+
+    const actions = document.createElement('div')
+    actions.className = 'cm-floating-actions'
+    const cancelButton = createFloatingActionButton('取消', 'floatingCancel', 'image', closeImagePopover)
+    const submitButton = createFloatingActionButton('应用', 'floatingSubmit', 'image', applyImagePopover)
+    submitButton.type = 'submit'
+    actions.append(cancelButton, submitButton)
+
+    form.append(altField.field, pathField.field, titleField.field, actions)
+    imagePopover.append(form)
+    positionFloatingElement(imagePopover, rootElement, view, imageState.from, imageState.to, {
+      above: false,
+      offsetY: 4
+    })
+    show(imagePopover)
+    queueMicrotask(() => {
+      pathField.input.focus()
+      pathField.input.select()
+    })
+  }
+
   const openLinkPopover = () => {
-    closeImagePopover()
-    closeTablePopover()
-    closeEmojiPopover()
+    closePrimarySurfaces('link')
     const selection = view.state.selection.main
     const selectedText = view.state.doc.sliceString(selection.from, selection.to)
     const parsedLink = selectedText.length > 0 ? parseMarkdownLink(selectedText) : null
@@ -3330,9 +3750,7 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     imageBlock: StandaloneImageBlock | null,
     fallbackAlt = '图片描述'
   ) => {
-    closeLinkPopover()
-    closeTablePopover()
-    closeEmojiPopover()
+    closePrimarySurfaces('image')
     imageState = {
       from,
       to,
@@ -3346,15 +3764,11 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     return true
   }
 
-  const openTablePopover = () => {
-    closeLinkPopover()
-    closeImagePopover()
-    closeEmojiPopover()
-
-    const selection = view.state.selection.main
+  const openTablePopoverAtRange = (from: number, to: number) => {
+    closePrimarySurfaces('table')
     tableState = {
-      from: selection.from,
-      to: selection.to,
+      from,
+      to,
       values: {
         rows: defaultTablePickerSize.rows,
         columns: defaultTablePickerSize.columns
@@ -3362,6 +3776,11 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     }
     renderTablePopover()
     return true
+  }
+
+  const openTablePopover = () => {
+    const selection = view.state.selection.main
+    return openTablePopoverAtRange(selection.from, selection.to)
   }
 
   const openImagePopover = () => {
@@ -3392,30 +3811,340 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       case 'table':
         return openTablePopover()
       default:
-        closeLinkPopover()
-        closeImagePopover()
-        closeTablePopover()
-        closeEmojiPopover()
+        closePrimarySurfaces()
         return runSourceCommand(view, command)
     }
   }
 
   const runQuickInsertCommand = (command: EditorCommand) => {
-    const selection = view.state.selection.main
-    const line = view.state.doc.lineAt(selection.from)
-
-    if (line.text.trim() === '@') {
-      replaceRange(view, line.from, line.to, '', line.from)
+    if (!quickInsertState) {
+      return false
     }
 
-    runCommand(command)
-    view.focus()
+    const { from, to } = quickInsertState
+
+    switch (command) {
+      case 'table':
+        return openTablePopoverAtRange(from, to)
+      case 'image':
+        return openImagePopoverForRange(from, to, null)
+      default: {
+        const didInsert = replaceRangeWithInsertCommand(view, from, to, command)
+        if (!didInsert) {
+          return false
+        }
+
+        closeQuickInsertMenu()
+        view.focus()
+        return true
+      }
+    }
+  }
+
+  const runBlockInsertCommand = (command: EditorCommand, block: MarkdownBlock) => {
+    lastBlockInsertCommand = command
+
+    switch (command) {
+      case 'table':
+        return openTablePopoverAtRange(block.to, block.to)
+      case 'image':
+        return openImagePopoverForRange(block.to, block.to, null)
+      default: {
+        const didInsert = replaceRangeWithInsertCommand(view, block.to, block.to, command)
+        if (!didInsert) {
+          return false
+        }
+
+        closeBlockInsertMenu()
+        view.focus()
+        return true
+      }
+    }
+  }
+
+  const renderQuickInsertMenu = () => {
+    if (!quickInsertState) {
+      hide(quickInsertMenu, true)
+      return
+    }
+
+    const { sections, items } = buildQuickInsertSections(quickInsertState.query)
+
+    if (items.length === 0) {
+      closeQuickInsertMenu()
+      return
+    }
+
+    quickInsertState.activeIndex = Math.max(0, Math.min(quickInsertState.activeIndex, items.length - 1))
+    quickInsertMenu.replaceChildren()
+
+    const header = document.createElement('div')
+    header.className = 'cm-command-panel-header'
+
+    const query = document.createElement('span')
+    query.className = 'cm-quick-insert-query'
+    query.textContent = `@${quickInsertState.query}`
+
+    const hint = document.createElement('span')
+    hint.className = 'cm-command-panel-hint'
+    hint.textContent = 'Enter 执行'
+
+    header.append(query, hint)
+    quickInsertMenu.append(header)
+
+    let itemIndex = 0
+
+    sections.forEach((section) => {
+      quickInsertMenu.append(createSectionLabel(section.label))
+
+      const sectionBody = document.createElement('div')
+      sectionBody.className = 'cm-command-section'
+
+      section.commands.forEach((command) => {
+        const active = itemIndex === quickInsertState?.activeIndex
+        const button = createSurfaceCommandButton(command, {
+          variant: 'list',
+          active,
+          onClick: (nextCommand) => {
+            runQuickInsertCommand(nextCommand)
+          }
+        })
+        sectionBody.append(button)
+        itemIndex += 1
+      })
+
+      quickInsertMenu.append(sectionBody)
+    })
+
+    positionFloatingElement(quickInsertMenu, rootElement, view, quickInsertState.from, quickInsertState.to, {
+      above: false,
+      offsetY: 8
+    })
+    show(quickInsertMenu)
+  }
+
+  const moveQuickInsertSelection = (direction: 1 | -1) => {
+    if (!quickInsertState) {
+      return false
+    }
+
+    const { items } = buildQuickInsertSections(quickInsertState.query)
+
+    if (items.length === 0) {
+      return false
+    }
+
+    quickInsertState.activeIndex =
+      (quickInsertState.activeIndex + direction + items.length) % items.length
+    renderQuickInsertMenu()
+    return true
+  }
+
+  const applyQuickInsertSelection = () => {
+    if (!quickInsertState) {
+      return false
+    }
+
+    const { items } = buildQuickInsertSections(quickInsertState.query)
+    const command = items[quickInsertState.activeIndex]
+
+    if (!command) {
+      return false
+    }
+
+    return runQuickInsertCommand(command)
+  }
+
+  const renderFormatToolbar = () => {
+    const selection = view.state.selection.main
+
+    if (selection.empty) {
+      closeFormatSecondary()
+      hide(formatToolbar)
+      return
+    }
+
+    const context = getSelectionUIContext()
+    formatToolbarPrimary.replaceChildren()
+
+    formatToolbarPrimaryCommands.forEach((command) => {
+      const label =
+        command === 'link' && context.isLinkSelection ? '编辑链接' : editorCommandRegistry[command].label
+      const button = createSurfaceCommandButton(command, {
+        variant: 'toolbar',
+        label,
+        active: context.activeFormats.includes(command),
+        onClick: (nextCommand) => {
+          runCommand(nextCommand)
+        }
+      })
+      formatToolbarPrimary.append(button)
+    })
+
+    const moreButton = document.createElement('button')
+    moreButton.type = 'button'
+    moreButton.className = 'cm-format-more-trigger'
+    moreButton.dataset.formatMoreTrigger = 'true'
+    moreButton.textContent = '⋯'
+    moreButton.title = '更多格式'
+    moreButton.setAttribute('aria-label', '更多格式')
+    moreButton.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+    })
+    moreButton.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      formatSecondaryOpen = !formatSecondaryOpen
+      if (formatSecondaryOpen) {
+        closePrimarySurfaces('format-secondary')
+      }
+      renderFormatToolbar()
+    })
+    formatToolbarPrimary.append(moreButton)
+
+    formatToolbarSecondary.replaceChildren()
+
+    if (formatSecondaryOpen) {
+      formatToolbarSecondaryCommands.forEach((command) => {
+        formatToolbarSecondary.append(
+          createSurfaceCommandButton(command, {
+            variant: 'toolbar',
+            onClick: (nextCommand) => {
+              runCommand(nextCommand)
+            }
+          })
+        )
+      })
+      show(formatToolbarSecondary)
+    } else {
+      hide(formatToolbarSecondary)
+    }
+
+    positionFloatingElement(formatToolbar, rootElement, view, selection.from, selection.to)
+    show(formatToolbar)
+  }
+
+  const renderBlockGutter = (block: MarkdownBlock) => {
+    blockGutter.replaceChildren()
+
+    const insertButton = document.createElement('button')
+    insertButton.type = 'button'
+    insertButton.className = 'cm-block-gutter-button'
+    insertButton.dataset.blockGutterAction = 'insert'
+    insertButton.textContent = '+'
+    insertButton.title = '在当前块后插入'
+    insertButton.setAttribute('aria-label', '在当前块后插入')
+    insertButton.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+    })
+    insertButton.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      closePrimarySurfaces('block-insert')
+      blockSurfaceMode = 'insert'
+      renderBlockInsertMenu(block)
+    })
+
+    const menuButton = document.createElement('button')
+    menuButton.type = 'button'
+    menuButton.className = 'cm-block-gutter-button'
+    menuButton.dataset.blockGutterAction = 'menu'
+    menuButton.textContent = '⋯'
+    menuButton.title = '块操作菜单'
+    menuButton.setAttribute('aria-label', '块操作菜单')
+    menuButton.addEventListener('mousedown', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+    })
+    menuButton.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      closePrimarySurfaces('block-menu')
+      blockSurfaceMode = 'menu'
+      renderBlockActionMenu(block)
+    })
+
+    blockGutter.append(insertButton, menuButton)
+    positionBlockGutter(block)
+    show(blockGutter)
+  }
+
+  const renderBlockInsertMenu = (block: MarkdownBlock) => {
+    if (blockSurfaceMode !== 'insert') {
+      hide(blockInsertMenu, true)
+      return
+    }
+
+    const sections = buildBlockInsertSections()
+    blockInsertMenu.replaceChildren()
+
+    const header = document.createElement('div')
+    header.className = 'cm-command-panel-header'
+    header.textContent = '插入到当前块之后'
+    blockInsertMenu.append(header)
+
+    sections.forEach((section) => {
+      blockInsertMenu.append(createSectionLabel(section.label))
+      const sectionBody = document.createElement('div')
+      sectionBody.className = 'cm-command-section'
+
+      section.commands.forEach((command) => {
+        sectionBody.append(
+          createSurfaceCommandButton(command, {
+            variant: 'list',
+            onClick: (nextCommand) => {
+              runBlockInsertCommand(nextCommand, block)
+            }
+          })
+        )
+      })
+
+      blockInsertMenu.append(sectionBody)
+    })
+
+    positionBlockSurface(blockInsertMenu, block)
+    show(blockInsertMenu)
+  }
+
+  const renderBlockActionMenu = (block: MarkdownBlock) => {
+    if (blockSurfaceMode !== 'menu') {
+      hide(blockMenu, true)
+      return
+    }
+
+    blockMenu.replaceChildren()
+
+    blockMenuSections.forEach((section) => {
+      blockMenu.append(createSectionLabel(section.label))
+
+      const sectionBody = document.createElement('div')
+      sectionBody.className = 'cm-command-section'
+
+      section.commands.forEach((command) => {
+        sectionBody.append(
+          createSurfaceCommandButton(command, {
+            variant: 'list',
+            onClick: (nextCommand) => {
+              replaceActiveBlockWithCommand(view, block, nextCommand)
+              closeBlockActionMenu()
+              view.focus()
+            }
+          })
+        )
+      })
+
+      blockMenu.append(sectionBody)
+    })
+
+    positionBlockSurface(blockMenu, block)
+    show(blockMenu)
   }
 
   const sync = () => {
     const selection = view.state.selection.main
     const activeBlock = getActiveBlock(view)
-    const line = view.state.doc.lineAt(selection.from)
 
     if (linkState) {
       if (selection.from !== linkState.from || selection.to !== linkState.to) {
@@ -3433,17 +4162,13 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     }
 
     if (tableState) {
-      if (selection.from !== tableState.from || selection.to !== tableState.to) {
-        closeTablePopover()
-      } else {
-        positionFloatingElement(tablePopover, rootElement, view, tableState.from, tableState.to, {
-          above: false,
-          offsetY: 8
-        })
-      }
+      positionFloatingElement(tablePopover, rootElement, view, tableState.from, tableState.to, {
+        above: false,
+        offsetY: 8
+      })
     }
 
-    if (linkState || imageState || tableState) {
+    if (linkState || imageState || tableState || blockSurfaceMode) {
       closeEmojiPopover()
     } else {
       const emojiTrigger = getActiveEmojiTrigger(view)
@@ -3473,69 +4198,68 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       }
     }
 
-    if (!selection.empty) {
-      formatToolbar.replaceChildren(
-        ...formatToolbarCommands.map((command) =>
-          createFloatingCommandButton(command, (nextCommand) => {
-            runCommand(nextCommand)
-            sync()
-            if (nextCommand !== 'link' && nextCommand !== 'image') {
-              view.focus()
-            }
-          })
-        )
-      )
-      positionFloatingElement(formatToolbar, rootElement, view, selection.from, selection.to)
-      show(formatToolbar)
+    const quickInsertTrigger =
+      !linkState && !imageState && !tableState && !emojiState && !blockSurfaceMode
+        ? getActiveQuickInsertTrigger(view)
+        : null
+
+    if (quickInsertTrigger) {
+      quickInsertState = {
+        from: quickInsertTrigger.from,
+        to: quickInsertTrigger.to,
+        query: normalizeCommandSearchText(quickInsertTrigger.query),
+        activeIndex:
+          quickInsertState?.query === normalizeCommandSearchText(quickInsertTrigger.query)
+            ? quickInsertState.activeIndex
+            : 0
+      }
+      renderQuickInsertMenu()
     } else {
-      hide(formatToolbar)
+      closeQuickInsertMenu()
     }
 
-    if (line.text.trim() === '@') {
-      quickInsertMenu.replaceChildren(
-        ...quickInsertCommands.map((command) =>
-          createFloatingCommandButton(command, (nextCommand) => {
-            runQuickInsertCommand(nextCommand)
-            sync()
-          })
-        )
-      )
-      positionFloatingElement(quickInsertMenu, rootElement, view, line.from, line.to, {
-        above: false
-      })
-      show(quickInsertMenu)
-    } else {
-      hide(quickInsertMenu)
-    }
+    renderFormatToolbar()
 
-    if (activeBlock && selection.empty && !emojiState && !tableState) {
-      blockMenu.replaceChildren(
-        ...blockMenuCommands
-          .filter((command) => ['duplicate-block', 'new-paragraph', 'delete-block'].includes(command))
-          .map((command) =>
-            createFloatingCommandButton(command, (nextCommand) => {
-              runCommand(nextCommand)
-              sync()
-              view.focus()
-            })
-          )
-      )
-      positionFloatingElement(blockMenu, rootElement, view, activeBlock.from, activeBlock.from, {
-        offsetX: -96
-      })
-      show(blockMenu)
+    const showBlockControls =
+      !!activeBlock &&
+      selection.empty &&
+      !quickInsertState &&
+      !emojiState &&
+      !linkState &&
+      !imageState &&
+      !tableState
+
+    if (showBlockControls && activeBlock) {
+      renderBlockGutter(activeBlock)
+
+      if (blockSurfaceMode === 'insert') {
+        renderBlockInsertMenu(activeBlock)
+      } else {
+        hide(blockInsertMenu, true)
+      }
+
+      if (blockSurfaceMode === 'menu') {
+        renderBlockActionMenu(activeBlock)
+      } else {
+        hide(blockMenu, true)
+      }
     } else {
-      hide(blockMenu)
+      hide(blockGutter, true)
+      closeBlockInsertMenu()
+      closeBlockActionMenu()
     }
   }
 
   hide(formatToolbar)
-  hide(quickInsertMenu)
-  hide(blockMenu)
-  hide(linkPopover)
-  hide(imagePopover)
-  hide(tablePopover)
-  hide(emojiPopover)
+  hide(formatToolbarSecondary)
+  hide(quickInsertMenu, true)
+  hide(blockGutter, true)
+  hide(blockInsertMenu, true)
+  hide(blockMenu, true)
+  hide(linkPopover, true)
+  hide(imagePopover, true)
+  hide(tablePopover, true)
+  hide(emojiPopover, true)
 
   return {
     runCommand,
@@ -3543,14 +4267,42 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
       openImagePopoverForRange(block.from, block.to, imageBlock)
     },
     handleKeydown(event: KeyboardEvent) {
-      if (tableState && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        if (event.key === 'Escape') {
-          closeTablePopover()
-          return true
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        return false
+      }
+
+      if (quickInsertState) {
+        switch (event.key) {
+          case 'ArrowDown':
+            return moveQuickInsertSelection(1)
+          case 'ArrowUp':
+            return moveQuickInsertSelection(-1)
+          case 'Enter':
+          case 'Tab':
+            return applyQuickInsertSelection()
+          case 'Escape':
+            closeQuickInsertMenu()
+            return true
         }
       }
 
-      if (!emojiState || event.metaKey || event.ctrlKey || event.altKey) {
+      if (tableState && event.key === 'Escape') {
+        closeTablePopover()
+        return true
+      }
+
+      if (blockSurfaceMode && event.key === 'Escape') {
+        closeBlockInsertMenu()
+        closeBlockActionMenu()
+        return true
+      }
+
+      if (formatSecondaryOpen && event.key === 'Escape') {
+        closeFormatSecondary()
+        return true
+      }
+
+      if (!emojiState) {
         return false
       }
 
@@ -3573,6 +4325,8 @@ const mountFloatingControls = (rootElement: HTMLElement, view: EditorView) => {
     destroy() {
       formatToolbar.remove()
       quickInsertMenu.remove()
+      blockGutter.remove()
+      blockInsertMenu.remove()
       blockMenu.remove()
       linkPopover.remove()
       imagePopover.remove()

@@ -31,15 +31,11 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8CF4859C2F5C458500A74B00 /* Markdown */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = Markdown;
 			sourceTree = "<group>";
 		};
 		A322C46DF1816E0EA2CD345F /* Tests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = Tests;
 			sourceTree = "<group>";
 		};
