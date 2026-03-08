@@ -34,6 +34,7 @@ struct ContentView: View {
         static let tabStripHeight: CGFloat = 38
         static let tabCellMinWidth: CGFloat = 84
         static let tabCellMaxWidth: CGFloat = 168
+        static let tabListButtonWidth: CGFloat = 34
         static let tabAddButtonWidth: CGFloat = 36
         static let editorTopInset: CGFloat = 54
         static let editorLeadingInset: CGFloat = 84
@@ -614,15 +615,28 @@ struct ContentView: View {
 
     private var tabStrip: some View {
         HStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 0) {
-                    ForEach(documentController.tabs) { tab in
-                        tabCell(tab)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 0) {
+                        ForEach(documentController.tabs) { tab in
+                            tabCell(tab)
+                                .id(tab.id)
+                        }
                     }
-
-                    Spacer(minLength: 0)
+                }
+                .onAppear {
+                    scrollActiveTab(using: proxy, animated: false)
+                }
+                .onChange(of: documentController.activeTabID) { _, _ in
+                    scrollActiveTab(using: proxy)
                 }
             }
+
+            Rectangle()
+                .fill(palette.separator)
+                .frame(width: 1)
+
+            tabListButton
 
             Rectangle()
                 .fill(palette.separator)
@@ -632,6 +646,20 @@ struct ContentView: View {
         }
         .frame(height: Metrics.tabStripHeight)
         .background(palette.editorChrome)
+    }
+
+    private func scrollActiveTab(using proxy: ScrollViewProxy, animated: Bool = true) {
+        let activeTabID = documentController.activeTabID
+
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    proxy.scrollTo(activeTabID, anchor: .center)
+                }
+            } else {
+                proxy.scrollTo(activeTabID, anchor: .center)
+            }
+        }
     }
 
     private func tabCell(_ tab: EditorTab) -> some View {
@@ -690,6 +718,42 @@ struct ContentView: View {
         .background(palette.editorChrome)
         .contentShape(Rectangle())
         .help("新建标签页")
+    }
+
+    private var tabListButton: some View {
+        Menu {
+            ForEach(documentController.tabs) { tab in
+                Button {
+                    documentController.selectTab(tab.id)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(tab.compactTitle(maxLength: 44))
+
+                        Spacer(minLength: 8)
+
+                        if tab.isDirty {
+                            Circle()
+                                .fill(palette.accentText)
+                                .frame(width: 6, height: 6)
+                        }
+
+                        if tab.id == documentController.activeTabID {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "rectangle.stack")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(palette.secondaryText)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .menuStyle(.borderlessButton)
+        .frame(width: Metrics.tabListButtonWidth, height: Metrics.tabStripHeight)
+        .background(palette.editorChrome)
+        .contentShape(Rectangle())
+        .help("显示所有标签页")
     }
 
     private var editorSurface: some View {

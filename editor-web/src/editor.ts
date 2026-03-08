@@ -3,7 +3,12 @@ import type Vditor from 'vditor'
 import type { EditorCommand } from './commands'
 import { setEditorDebugPhase } from './editor-debug'
 import { isBackgroundFocusTarget } from './editor-focus'
-import { getCommandClickLinkHref, resolveLinkURL, shouldActivateLinkOnCommandClick } from './editor-link'
+import {
+  getCommandClickLinkHref,
+  normalizeTableLinkSpacing,
+  resolveLinkURL,
+  shouldActivateLinkOnCommandClick
+} from './editor-link'
 import {
   extractMarkdownBlocks,
   findHeadingOffset,
@@ -72,6 +77,37 @@ type VditorConstructor = typeof import('vditor')['default']
 
 type VditorGlobalScope = typeof globalThis & {
   VDITOR_VERSION?: string
+}
+
+type EditorVisualMode = 'ir' | 'sv'
+
+type VditorRuntime = Vditor['vditor'] & {
+  currentMode?: string
+  ir?: {
+    element: HTMLPreElement
+    preventInput?: boolean
+  }
+  sv?: {
+    element: HTMLPreElement
+    preventInput?: boolean
+  }
+  preview?: {
+    element: HTMLElement
+  }
+  lute?: Vditor['vditor']['lute'] & {
+    SetLinkBase?: (value: string) => void
+    SetVditorIR?: (enabled: boolean) => void
+    SetVditorSV?: (enabled: boolean) => void
+    SetVditorWYSIWYG?: (enabled: boolean) => void
+  }
+  options?: {
+    preview?: {
+      mode?: 'both' | 'editor'
+      markdown?: {
+        linkBase?: string
+      }
+    }
+  }
 }
 
 type TableContext = {
@@ -996,6 +1032,7 @@ export const createMarkdownEditor = async ({
   let currentMarkdown = initialMarkdown
   let currentDocumentBaseURL = initialDocumentBaseURL
   let appliedDocumentBaseURL: string | null = null
+  let currentMode: EditorVisualMode = 'ir'
   let currentSelection: SelectionOffsets = {
     anchor: 0,
     head: 0
@@ -1024,6 +1061,10 @@ export const createMarkdownEditor = async ({
     return instance
   }
 
+  const getRuntime = () => {
+    return getInstance().vditor as VditorRuntime
+  }
+
   const withSuppressedInput = (callback: () => void) => {
     suppressInputDepth += 1
 
@@ -1040,7 +1081,37 @@ export const createMarkdownEditor = async ({
     return instance?.getValue() ?? currentMarkdown
   }
 
+  const getIRRoot = () => {
+    const ir = getRuntime().ir
+
+    if (!ir) {
+      throw new Error('Vditor IR mode is unavailable.')
+    }
+
+    return ir.element
+  }
+
+  const getSVRoot = () => {
+    const sv = getRuntime().sv
+
+    if (!sv) {
+      throw new Error('Vditor source mode is unavailable.')
+    }
+
+    return sv.element
+  }
+
+  const normalizeTableLinkSpacingInIR = () => {
+    if (!instance || currentMode !== 'ir') {
+      return false
+    }
+
+    return normalizeTableLinkSpacing(getIRRoot())
+  }
+
   const syncMarkdownFromEditor = (emit: boolean) => {
+    normalizeTableLinkSpacingInIR()
+
     const nextMarkdown = readMarkdown()
 
     if (nextMarkdown === currentMarkdown) {
@@ -1054,14 +1125,46 @@ export const createMarkdownEditor = async ({
     }
   }
 
-  const getIRRoot = () => {
-    const ir = getInstance().vditor.ir
+  const mapSourceDomPointToMarkdownOffset = (root: HTMLElement, node: Node, offset: number) => {
+    const range = document.createRange()
+    range.selectNodeContents(root)
+    range.setEnd(node, clampDomOffset(node, offset))
+    return clampMarkdownOffset(readMarkdown(), range.toString().length)
+  }
 
-    if (!ir) {
-      throw new Error('Vditor IR mode is unavailable.')
+  const mapMarkdownOffsetToSourceDomPoint = (root: HTMLElement, offset: number) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    let remaining = clampMarkdownOffset(readMarkdown(), offset)
+    let currentNode = walker.nextNode()
+    let lastTextNode: Text | null = null
+
+    while (currentNode) {
+      const textNode = currentNode as Text
+      const length = textNode.data.length
+      lastTextNode = textNode
+
+      if (remaining <= length) {
+        return {
+          node: textNode,
+          offset: remaining
+        }
+      }
+
+      remaining -= length
+      currentNode = walker.nextNode()
     }
 
-    return ir.element
+    if (lastTextNode) {
+      return {
+        node: lastTextNode,
+        offset: lastTextNode.data.length
+      }
+    }
+
+    return {
+      node: root,
+      offset: root.childNodes.length
+    }
   }
 
   const getSelectionOffsets = (): SelectionOffsets => {
@@ -1071,13 +1174,7 @@ export const createMarkdownEditor = async ({
       return currentSelection
     }
 
-    const ir = editor.vditor.ir
-
-    if (!ir) {
-      return currentSelection
-    }
-
-    const rootElement = ir.element
+    const rootElement = currentMode === 'sv' ? getSVRoot() : getIRRoot()
     const selection = window.getSelection()
 
     if (
@@ -1090,20 +1187,26 @@ export const createMarkdownEditor = async ({
       return currentSelection
     }
 
-    const anchor = mapDomPointToMarkdownOffset(
-      rootElement,
-      editor.vditor.lute,
-      selection.anchorNode,
-      selection.anchorOffset,
-      ANCHOR_MARKER
-    )
-    const head = mapDomPointToMarkdownOffset(
-      rootElement,
-      editor.vditor.lute,
-      selection.focusNode,
-      selection.focusOffset,
-      HEAD_MARKER
-    )
+    const anchor =
+      currentMode === 'sv'
+        ? mapSourceDomPointToMarkdownOffset(rootElement, selection.anchorNode, selection.anchorOffset)
+        : mapDomPointToMarkdownOffset(
+            rootElement,
+            editor.vditor.lute,
+            selection.anchorNode,
+            selection.anchorOffset,
+            ANCHOR_MARKER
+          )
+    const head =
+      currentMode === 'sv'
+        ? mapSourceDomPointToMarkdownOffset(rootElement, selection.focusNode, selection.focusOffset)
+        : mapDomPointToMarkdownOffset(
+            rootElement,
+            editor.vditor.lute,
+            selection.focusNode,
+            selection.focusOffset,
+            HEAD_MARKER
+          )
 
     if (anchor == null || head == null) {
       return currentSelection
@@ -1122,21 +1225,30 @@ export const createMarkdownEditor = async ({
     }
 
     const markdown = readMarkdown()
-    const anchorPoint = mapMarkdownOffsetToDomPoint(
-      markdown,
-      clampMarkdownOffset(markdown, anchor),
-      editor.vditor.lute,
-      ANCHOR_MARKER
-    )
-    const headPoint = mapMarkdownOffsetToDomPoint(
-      markdown,
-      clampMarkdownOffset(markdown, head),
-      editor.vditor.lute,
-      HEAD_MARKER
-    )
-
-    const liveAnchorPoint = resolveLivePoint(getIRRoot(), anchorPoint)
-    const liveHeadPoint = resolveLivePoint(getIRRoot(), headPoint)
+    const liveAnchorPoint =
+      currentMode === 'sv'
+        ? mapMarkdownOffsetToSourceDomPoint(getSVRoot(), clampMarkdownOffset(markdown, anchor))
+        : resolveLivePoint(
+            getIRRoot(),
+            mapMarkdownOffsetToDomPoint(
+              markdown,
+              clampMarkdownOffset(markdown, anchor),
+              editor.vditor.lute,
+              ANCHOR_MARKER
+            )
+          )
+    const liveHeadPoint =
+      currentMode === 'sv'
+        ? mapMarkdownOffsetToSourceDomPoint(getSVRoot(), clampMarkdownOffset(markdown, head))
+        : resolveLivePoint(
+            getIRRoot(),
+            mapMarkdownOffsetToDomPoint(
+              markdown,
+              clampMarkdownOffset(markdown, head),
+              editor.vditor.lute,
+              HEAD_MARKER
+            )
+          )
 
     if (!applySelectionPoints(liveAnchorPoint, liveHeadPoint)) {
       return false
@@ -1161,6 +1273,8 @@ export const createMarkdownEditor = async ({
     withSuppressedInput(() => {
       editor.setValue(markdown, clearStack)
     })
+
+    normalizeTableLinkSpacingInIR()
 
     currentMarkdown = markdown
 
@@ -1208,6 +1322,8 @@ export const createMarkdownEditor = async ({
       editor.setValue(currentMarkdown, false)
     })
 
+    normalizeTableLinkSpacingInIR()
+
     scheduleSelectionFromOffsets(selection.anchor, selection.head)
   }
 
@@ -1222,6 +1338,10 @@ export const createMarkdownEditor = async ({
   }
 
   const getSelectionRangeWithinIR = () => {
+    if (currentMode !== 'ir') {
+      return null
+    }
+
     const selection = window.getSelection()
 
     if (!selection || selection.rangeCount === 0) {
@@ -2366,6 +2486,67 @@ export const createMarkdownEditor = async ({
     return true
   }
 
+  const setEditorMode = (nextMode: EditorVisualMode) => {
+    const editor = getInstance()
+    const runtime = getRuntime()
+
+    if (currentMode === nextMode) {
+      editor.focus()
+      return true
+    }
+
+    const selection = getSelectionOffsets()
+    const markdown = readMarkdown()
+
+    withSuppressedInput(() => {
+      if (nextMode === 'sv') {
+        hideTableToolbar()
+        hideTableToolbarPopover()
+        runtime.preview?.element && (runtime.preview.element.style.display = 'none')
+        runtime.sv?.element && (runtime.sv.element.style.display = 'block')
+
+        if (runtime.ir?.element.parentElement) {
+          runtime.ir.element.parentElement.style.display = 'none'
+        }
+
+        runtime.lute?.SetVditorIR?.(false)
+        runtime.lute?.SetVditorWYSIWYG?.(false)
+        runtime.lute?.SetVditorSV?.(true)
+        runtime.currentMode = 'sv'
+        currentMode = 'sv'
+        editor.setValue(markdown, false)
+      } else {
+        runtime.preview?.element && (runtime.preview.element.style.display = 'none')
+        runtime.sv?.element && (runtime.sv.element.style.display = 'none')
+
+        if (runtime.ir?.element.parentElement) {
+          runtime.ir.element.parentElement.style.display = 'block'
+        }
+
+        runtime.lute?.SetVditorIR?.(true)
+        runtime.lute?.SetVditorWYSIWYG?.(false)
+        runtime.lute?.SetVditorSV?.(false)
+        runtime.currentMode = 'ir'
+        currentMode = 'ir'
+        editor.setValue(markdown, false)
+        normalizeTableLinkSpacingInIR()
+      }
+    })
+
+    scheduleSelectionFromOffsets(selection.anchor, selection.head)
+    window.requestAnimationFrame(() => {
+      editor.focus()
+      currentSelection = getSelectionOffsets()
+      scheduleTableToolbarRefresh()
+    })
+
+    return true
+  }
+
+  const toggleGlobalSourceMode = () => {
+    return setEditorMode(currentMode === 'sv' ? 'ir' : 'sv')
+  }
+
   const focusDocumentEnd = () => {
     const editor = getInstance()
     const endOffset = readMarkdown().length
@@ -2389,7 +2570,7 @@ export const createMarkdownEditor = async ({
       case 'redo':
         return runHistoryCommand('redo')
       case 'toggle-global-source-mode':
-        return false
+        return toggleGlobalSourceMode()
       case 'paragraph':
         return applyTransform(applyParagraphTransform(markdown, selection))
       case 'heading-1':
@@ -2608,6 +2789,8 @@ export const createMarkdownEditor = async ({
     instance = new VditorConstructor(host, vditorOptions)
   })
 
+  currentMode = getRuntime().currentMode === 'sv' ? 'sv' : 'ir'
+
   const handleBackgroundPointerDown = (event: PointerEvent) => {
     if (event.button !== 0 || !isBackgroundFocusTarget(event.target)) {
       return
@@ -2693,7 +2876,7 @@ export const createMarkdownEditor = async ({
 
       return {
         markdown,
-        mode: 'wysiwyg',
+        mode: currentMode === 'sv' ? 'global-source' : 'wysiwyg',
         activeBlock: activeBlock
           ? {
               type: activeBlock.type,
