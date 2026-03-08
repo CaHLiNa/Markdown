@@ -29,10 +29,12 @@ struct EditorWebView: NSViewRepresentable {
     static let contentChangedMessageName = "editorContentChanged"
     static let readyMessageName = "editorReady"
     static let imageAssetRequestMessageName = "editorImageAssetRequest"
+    static let openLinkMessageName = "editorOpenLink"
     static let consoleMessageName = "editorConsole"
 
     @Binding var markdown: String
     let controller: Controller
+    var documentBaseURL: URL?
     var presentation: Presentation
     var revealRequest: EditorRevealRequest?
     var onContentChanged: ((String) -> Void)?
@@ -41,6 +43,7 @@ struct EditorWebView: NSViewRepresentable {
     init(
         markdown: Binding<String>,
         controller: Controller,
+        documentBaseURL: URL? = nil,
         presentation: Presentation = .default,
         revealRequest: EditorRevealRequest? = nil,
         onContentChanged: ((String) -> Void)? = nil,
@@ -48,6 +51,7 @@ struct EditorWebView: NSViewRepresentable {
     ) {
         _markdown = markdown
         self.controller = controller
+        self.documentBaseURL = documentBaseURL
         self.presentation = presentation
         self.revealRequest = revealRequest
         self.onContentChanged = onContentChanged
@@ -67,6 +71,7 @@ struct EditorWebView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: Self.contentChangedMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.readyMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.imageAssetRequestMessageName)
+        configuration.userContentController.add(context.coordinator, name: Self.openLinkMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.consoleMessageName)
         configuration.userContentController.addUserScript(
             WKUserScript(
@@ -89,6 +94,7 @@ struct EditorWebView: NSViewRepresentable {
         context.coordinator.parent = self
         controller.attach(webView: nsView)
         context.coordinator.syncMarkdownToJavaScript()
+        context.coordinator.syncDocumentBaseURLToJavaScript()
         context.coordinator.syncPresentationToJavaScript()
         context.coordinator.syncRevealRequestToJavaScript()
     }
@@ -97,6 +103,7 @@ struct EditorWebView: NSViewRepresentable {
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: contentChangedMessageName)
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: readyMessageName)
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: imageAssetRequestMessageName)
+        nsView.configuration.userContentController.removeScriptMessageHandler(forName: openLinkMessageName)
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: consoleMessageName)
         nsView.navigationDelegate = nil
         coordinator.parent.controller.detach(webView: nsView)
@@ -308,6 +315,19 @@ struct EditorWebView: NSViewRepresentable {
             evaluateJavaScript(script, completion: completion)
         }
 
+        func setDocumentBaseURL(
+            _ documentBaseURL: URL?,
+            completion: ((Result<Any?, Error>) -> Void)? = nil
+        ) {
+            let literal = documentBaseURL.map { EditorWebView.javaScriptStringLiteral(for: $0.absoluteString) } ?? "null"
+            let script = """
+            if (typeof window.setEditorDocumentBaseURL === 'function') {
+                window.setEditorDocumentBaseURL(\(literal));
+            }
+            """
+            evaluateJavaScript(script, completion: completion)
+        }
+
         func revealHeading(_ title: String, completion: ((Result<Any?, Error>) -> Void)? = nil) {
             let literal = EditorWebView.javaScriptStringLiteral(for: title)
             let script = """
@@ -454,6 +474,7 @@ struct EditorWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: EditorWebView
         private var lastSyncedMarkdown: String?
+        private var lastSyncedDocumentBaseURL: URL?
         private var lastSyncedPresentation: Presentation?
         private var lastRevealRequestID: UUID?
         private var didAttemptInlineFallback = false
@@ -474,7 +495,7 @@ struct EditorWebView: NSViewRepresentable {
             didAttemptInlineFallback = false
             didReceiveEditorReady = false
             cancelReadyFallback()
-            let readAccessURL = indexURL.deletingLastPathComponent()
+            let readAccessURL = URL(fileURLWithPath: "/", isDirectory: true)
             scheduleReadyFallback(for: webView)
             webView.loadFileURL(indexURL, allowingReadAccessTo: readAccessURL)
         }
@@ -486,6 +507,15 @@ struct EditorWebView: NSViewRepresentable {
 
             lastSyncedMarkdown = parent.markdown
             parent.controller.loadMarkdown(parent.markdown)
+        }
+
+        func syncDocumentBaseURLToJavaScript() {
+            guard parent.documentBaseURL != lastSyncedDocumentBaseURL else {
+                return
+            }
+
+            lastSyncedDocumentBaseURL = parent.documentBaseURL
+            parent.controller.setDocumentBaseURL(parent.documentBaseURL)
         }
 
         func syncPresentationToJavaScript() {
@@ -575,6 +605,7 @@ struct EditorWebView: NSViewRepresentable {
                 cancelReadyFallback()
                 parent.controller.markPageReady()
                 syncMarkdownToJavaScript()
+                syncDocumentBaseURLToJavaScript()
                 syncPresentationToJavaScript()
                 syncRevealRequestToJavaScript()
                 return
@@ -582,6 +613,11 @@ struct EditorWebView: NSViewRepresentable {
 
             if message.name == EditorWebView.imageAssetRequestMessageName {
                 handleImageAssetRequest(message)
+                return
+            }
+
+            if message.name == EditorWebView.openLinkMessageName {
+                handleOpenLink(message)
                 return
             }
 
@@ -636,6 +672,30 @@ struct EditorWebView: NSViewRepresentable {
             ) { [weak self] result in
                 self?.resolveImageAssetRequest(id: requestID, result: result)
             }
+        }
+
+        private func handleOpenLink(_ message: WKScriptMessage) {
+            guard let href = message.body as? String,
+                  let url = resolvedEditorLinkURL(for: href)
+            else {
+                return
+            }
+
+            NSWorkspace.shared.open(url)
+        }
+
+        private func resolvedEditorLinkURL(for href: String) -> URL? {
+            let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !trimmed.isEmpty else {
+                return nil
+            }
+
+            if let documentBaseURL = parent.documentBaseURL {
+                return URL(string: trimmed, relativeTo: documentBaseURL)?.absoluteURL
+            }
+
+            return URL(string: trimmed)
         }
 
         private func resolveImageAssetRequest(id: String, result: Result<String, Error>) {

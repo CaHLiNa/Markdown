@@ -17,6 +17,10 @@ type EditorImageAssetRequestHandler = {
   postMessage: (payload: EditorImageAssetRequest) => void | Promise<void>
 }
 
+type EditorOpenLinkHandler = {
+  postMessage: (href: string) => void | Promise<void>
+}
+
 type EditorImageAssetResponse = {
   path?: string
   error?: string
@@ -39,11 +43,13 @@ declare global {
     revealOffset?: (offset: unknown, length?: unknown) => boolean
     getRenderedHTML?: () => string
     setEditorAppearance?: (appearance: EditorAppearance) => void
+    setEditorDocumentBaseURL?: (url: unknown) => void
     webkit?: {
       messageHandlers?: {
         editorContentChanged?: EditorContentChangedHandler
         editorReady?: EditorReadyHandler
         editorImageAssetRequest?: EditorImageAssetRequestHandler
+        editorOpenLink?: EditorOpenLinkHandler
       }
     }
   }
@@ -125,6 +131,29 @@ export const postEditorReadyToNative = () => {
     }
   } catch (error) {
     console.error('[editor-web] 向 Native 发送 editorReady 失败', error)
+  }
+}
+
+export const postLinkToNative = (href: string) => {
+  const handler = window.webkit?.messageHandlers?.editorOpenLink
+
+  if (!handler || href.length === 0) {
+    return false
+  }
+
+  try {
+    const result = handler.postMessage(href)
+
+    if (result && typeof result === 'object' && 'catch' in result) {
+      void (result as Promise<void>).catch((error: unknown) => {
+        console.error('[editor-web] 向 Native 打开链接失败', error)
+      })
+    }
+
+    return true
+  } catch (error) {
+    console.error('[editor-web] 向 Native 打开链接失败', error)
+    return false
   }
 }
 

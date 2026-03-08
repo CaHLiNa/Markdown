@@ -700,6 +700,7 @@ struct ContentView: View {
             EditorWebView(
                 markdown: markdownBinding,
                 controller: documentController.editorController,
+                documentBaseURL: documentController.currentFileURL?.deletingLastPathComponent(),
                 presentation: documentController.currentPresentation,
                 revealRequest: documentController.revealRequest,
                 onImageAssetRequest: documentController.persistImageAsset

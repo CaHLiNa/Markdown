@@ -6,6 +6,7 @@ import type { MarkdownEditor } from './editor'
 const createEditorDouble = () => {
   return {
     loadMarkdown: vi.fn(),
+    setDocumentBaseURL: vi.fn(),
     setPresentation: vi.fn(),
     getMarkdown: vi.fn(() => ''),
     getRenderedHTML: vi.fn(() => '<p>rendered</p>'),

@@ -3,6 +3,7 @@ import type Vditor from 'vditor'
 import type { EditorCommand } from './commands'
 import { setEditorDebugPhase } from './editor-debug'
 import { isBackgroundFocusTarget } from './editor-focus'
+import { getCommandClickLinkHref, resolveLinkURL, shouldActivateLinkOnCommandClick } from './editor-link'
 import {
   extractMarkdownBlocks,
   findHeadingOffset,
@@ -18,7 +19,9 @@ declare const __VDITOR_VERSION__: string
 type CreateMarkdownEditorOptions = {
   root: Root
   initialMarkdown?: string
+  initialDocumentBaseURL?: string | null
   onMarkdownChange?: (markdown: string) => void
+  openLink?: (href: string) => void
   persistImageAsset?: (file: File) => Promise<string | null>
   pickImageFile?: () => Promise<File | null>
 }
@@ -109,6 +112,7 @@ type TableContextMenuAction =
 
 export type MarkdownEditor = {
   loadMarkdown: (markdown: string) => void
+  setDocumentBaseURL: (baseURL: string | null) => void
   setPresentation: (presentation: EditorPresentation) => void
   getMarkdown: () => string
   getRenderedHTML: () => string
@@ -975,7 +979,9 @@ export { type EditorCommand }
 export const createMarkdownEditor = async ({
   root,
   initialMarkdown = '',
+  initialDocumentBaseURL = null,
   onMarkdownChange,
+  openLink,
   persistImageAsset,
   pickImageFile
 }: CreateMarkdownEditorOptions): Promise<MarkdownEditor> => {
@@ -988,12 +994,15 @@ export const createMarkdownEditor = async ({
 
   let instance: Vditor | null = null
   let currentMarkdown = initialMarkdown
+  let currentDocumentBaseURL = initialDocumentBaseURL
+  let appliedDocumentBaseURL: string | null = null
   let currentSelection: SelectionOffsets = {
     anchor: 0,
     head: 0
   }
   let suppressInputDepth = 0
   let removeBackgroundPointerListener: (() => void) | null = null
+  let removeLinkActivationListener: (() => void) | null = null
   let removeTableToolbarListeners: (() => void) | null = null
   let tableToolbarRefreshFrame = 0
   let tableToolbar: HTMLDivElement | null = null
@@ -1158,6 +1167,48 @@ export const createMarkdownEditor = async ({
     if (emit) {
       onMarkdownChange?.(markdown)
     }
+  }
+
+  const applyDocumentBaseURL = (baseURL: string | null, refresh = true) => {
+    currentDocumentBaseURL = baseURL
+
+    if (!instance || appliedDocumentBaseURL === currentDocumentBaseURL) {
+      return
+    }
+
+    const editor = getInstance()
+    const runtime = editor.vditor as Vditor['vditor'] & {
+      lute?: {
+        SetLinkBase?: (value: string) => void
+      }
+      options?: {
+        preview?: {
+          markdown?: {
+            linkBase?: string
+          }
+        }
+      }
+    }
+    const nextLinkBase = currentDocumentBaseURL ?? ''
+
+    runtime.lute?.SetLinkBase?.(nextLinkBase)
+    appliedDocumentBaseURL = currentDocumentBaseURL
+
+    if (runtime.options?.preview?.markdown) {
+      runtime.options.preview.markdown.linkBase = nextLinkBase
+    }
+
+    if (!refresh) {
+      return
+    }
+
+    const selection = getSelectionOffsets()
+
+    withSuppressedInput(() => {
+      editor.setValue(currentMarkdown, false)
+    })
+
+    scheduleSelectionFromOffsets(selection.anchor, selection.head)
   }
 
   const applyTransform = (transform: MarkdownTransform | null) => {
@@ -2460,6 +2511,7 @@ export const createMarkdownEditor = async ({
         codeBlockPreview: true,
         footnotes: true,
         gfmAutoLink: true,
+        linkBase: currentDocumentBaseURL ?? '',
         mathBlockPreview: true,
         sanitize: false
       },
@@ -2510,6 +2562,7 @@ export const createMarkdownEditor = async ({
     after() {
       setEditorDebugPhase('vditor-after')
       instance?.focus()
+      applyDocumentBaseURL(currentDocumentBaseURL, false)
 
       if (initialMarkdown.length > 0) {
         applyMarkdown(initialMarkdown, { clearStack: true })
@@ -2564,9 +2617,37 @@ export const createMarkdownEditor = async ({
     focusDocumentEnd()
   }
 
+  const handleLinkActivationClick = (event: MouseEvent) => {
+    if (!shouldActivateLinkOnCommandClick(event)) {
+      return
+    }
+
+    const href = getCommandClickLinkHref(event.target)
+
+    if (!href) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    const resolvedHref = resolveLinkURL(href, currentDocumentBaseURL)
+
+    if (openLink) {
+      openLink(resolvedHref)
+      return
+    }
+
+    window.open(resolvedHref, '_blank', 'noopener,noreferrer')
+  }
+
   host.addEventListener('pointerdown', handleBackgroundPointerDown)
+  host.addEventListener('click', handleLinkActivationClick, true)
   removeBackgroundPointerListener = () => {
     host.removeEventListener('pointerdown', handleBackgroundPointerDown)
+  }
+  removeLinkActivationListener = () => {
+    host.removeEventListener('click', handleLinkActivationClick, true)
   }
 
   removeTableToolbarListeners = installTableToolbar()
@@ -2591,6 +2672,9 @@ export const createMarkdownEditor = async ({
         head: 0
       }
       scheduleSelectionFromOffsets(0, 0)
+    },
+    setDocumentBaseURL(baseURL: string | null) {
+      applyDocumentBaseURL(baseURL)
     },
     setPresentation,
     getMarkdown() {
@@ -2675,6 +2759,8 @@ export const createMarkdownEditor = async ({
     async destroy() {
       removeBackgroundPointerListener?.()
       removeBackgroundPointerListener = null
+      removeLinkActivationListener?.()
+      removeLinkActivationListener = null
       removeTableToolbarListeners?.()
       removeTableToolbarListeners = null
       instance?.destroy()

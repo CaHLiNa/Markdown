@@ -4,11 +4,13 @@ import './style.css'
 import {
   installNativeBridge,
   persistImageAssetInNative,
+  postLinkToNative,
   postEditorReadyToNative,
   postMarkdownToNative
 } from './bridge'
 import { setEditorDebugPhase } from './editor-debug'
 import { createEditorBridge } from './editor-bridge'
+import { normalizeDocumentBaseURL } from './editor-link'
 import { createMarkdownEditor, type MarkdownEditor } from './editor'
 import { type EditorPresentation } from './editor-presentation'
 
@@ -22,6 +24,12 @@ if (!app) {
 }
 
 let editor: MarkdownEditor | null = null
+let currentDocumentBaseURL: string | null = null
+
+window.setEditorDocumentBaseURL = (value: unknown) => {
+  currentDocumentBaseURL = normalizeDocumentBaseURL(value)
+  editor?.setDocumentBaseURL(currentDocumentBaseURL)
+}
 
 const applyAppearance = (appearance: EditorPresentation) => {
   document.documentElement.dataset.editorTheme = appearance.theme
@@ -73,6 +81,14 @@ const bootEditor = async () => {
   editor = await createMarkdownEditor({
     root: app,
     initialMarkdown: bridge.currentMarkdown,
+    initialDocumentBaseURL: currentDocumentBaseURL,
+    openLink(href) {
+      const openedInNative = postLinkToNative(href)
+
+      if (!openedInNative) {
+        window.open(href, '_blank', 'noopener,noreferrer')
+      }
+    },
     persistImageAsset: persistImageAssetInNative,
     onMarkdownChange(markdown) {
       bridge.handleEditorMarkdownChange(markdown)
@@ -80,6 +96,7 @@ const bootEditor = async () => {
   })
 
   setEditorDebugPhase('editor-created')
+  editor.setDocumentBaseURL(currentDocumentBaseURL)
   bridge.attachEditor(editor)
   setEditorDebugPhase('bridge-attached')
   postEditorReadyToNative()
