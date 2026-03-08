@@ -84,6 +84,8 @@ type TableToolbarAction =
   | 'align-right'
   | 'delete-table'
 
+type TableToolbarIcon = 'table' | 'align-left' | 'align-center' | 'align-right' | 'trash'
+
 type TableToolbarPopoverKind = 'grid' | 'menu'
 
 type TableContextMenuView = 'root' | 'table' | 'autofill'
@@ -130,15 +132,56 @@ const DEFAULT_TABLE_SNIPPET = '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1
 const TABLE_TOOLBAR_MIN_WIDTH = 176
 const TABLE_GRID_MIN_SIZE = 8
 const TABLE_GRID_BUFFER = 4
+const TABLE_TOOLBAR_ICONS: Record<TableToolbarIcon, string> = {
+  table: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="6" height="6" rx="0.75"></rect>
+      <rect x="14.5" y="3.5" width="6" height="6" rx="0.75"></rect>
+      <rect x="3.5" y="14.5" width="6" height="6" rx="0.75"></rect>
+      <rect x="14.5" y="14.5" width="6" height="6" rx="0.75"></rect>
+    </svg>
+  `,
+  'align-left': `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 6.5H20"></path>
+      <path d="M4 11.5H15.5"></path>
+      <path d="M4 16.5H18"></path>
+    </svg>
+  `,
+  'align-center': `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 6.5H20"></path>
+      <path d="M6.25 11.5H17.75"></path>
+      <path d="M5 16.5H19"></path>
+    </svg>
+  `,
+  'align-right': `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 6.5H20"></path>
+      <path d="M8.5 11.5H20"></path>
+      <path d="M6 16.5H20"></path>
+    </svg>
+  `,
+  trash: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5.5 7H18.5"></path>
+      <path d="M9 7V5.25C9 4.56 9.56 4 10.25 4H13.75C14.44 4 15 4.56 15 5.25V7"></path>
+      <path d="M8 10V18"></path>
+      <path d="M12 10V18"></path>
+      <path d="M16 10V18"></path>
+      <path d="M7.25 7L8 19C8.05 19.72 8.65 20.28 9.37 20.28H14.63C15.35 20.28 15.95 19.72 16 19L16.75 7"></path>
+    </svg>
+  `
+}
 
 const TABLE_TOOLBAR_ALIGNMENT_ACTIONS: Array<{
   action: TableToolbarAction
-  icon: string
+  icon: TableToolbarIcon
   title: string
 }> = [
-  { action: 'align-left', icon: 'vditor-icon-align-left', title: '当前列左对齐' },
-  { action: 'align-center', icon: 'vditor-icon-align-center', title: '当前列居中' },
-  { action: 'align-right', icon: 'vditor-icon-align-right', title: '当前列右对齐' }
+  { action: 'align-left', icon: 'align-left', title: '当前列左对齐' },
+  { action: 'align-center', icon: 'align-center', title: '当前列居中' },
+  { action: 'align-right', icon: 'align-right', title: '当前列右对齐' }
 ]
 
 const TABLE_CONTEXT_MENU_ITEMS: Record<
@@ -757,6 +800,155 @@ const applyDeleteBlockTransform = (
   }
 }
 
+type MarkdownTableModel = {
+  header: string[]
+  aligns: Array<TableAlignment | null>
+  rows: string[][]
+}
+
+type MarkdownTableTarget = {
+  rowIndex: number
+  columnIndex: number
+}
+
+const splitMarkdownTableRow = (line: string) => {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim())
+}
+
+const parseMarkdownTableAlignment = (cell: string): TableAlignment | null => {
+  const value = cell.trim()
+  const hasLeading = value.startsWith(':')
+  const hasTrailing = value.endsWith(':')
+
+  if (hasLeading && hasTrailing) {
+    return 'center'
+  }
+
+  if (hasTrailing) {
+    return 'right'
+  }
+
+  if (hasLeading) {
+    return 'left'
+  }
+
+  return null
+}
+
+const formatMarkdownTableAlignment = (align: TableAlignment | null) => {
+  switch (align) {
+    case 'left':
+      return ':---'
+    case 'center':
+      return ':---:'
+    case 'right':
+      return '---:'
+    default:
+      return '---'
+  }
+}
+
+const normalizeMarkdownTableRow = (cells: string[], columnCount: number) => {
+  const normalized = cells.slice(0, columnCount)
+
+  while (normalized.length < columnCount) {
+    normalized.push('')
+  }
+
+  return normalized
+}
+
+const parseMarkdownTable = (blockText: string): MarkdownTableModel | null => {
+  const lines = blockText.split('\n')
+
+  if (lines.length < 2) {
+    return null
+  }
+
+  const rawHeader = splitMarkdownTableRow(lines[0] ?? '')
+  const rawAligns = splitMarkdownTableRow(lines[1] ?? '').map(parseMarkdownTableAlignment)
+  const rawRows = lines.slice(2).map(splitMarkdownTableRow)
+  const columnCount = Math.max(rawHeader.length, rawAligns.length, ...rawRows.map((row) => row.length))
+
+  if (columnCount === 0) {
+    return null
+  }
+
+  return {
+    header: normalizeMarkdownTableRow(rawHeader, columnCount),
+    aligns: normalizeMarkdownTableRow(
+      rawAligns.map((align) => align ?? ''),
+      columnCount
+    ).map((align) => (align === 'left' || align === 'center' || align === 'right' ? align : null)),
+    rows: rawRows.map((row) => normalizeMarkdownTableRow(row, columnCount))
+  }
+}
+
+const stringifyMarkdownTable = (table: MarkdownTableModel) => {
+  const columnCount = Math.max(table.header.length, table.aligns.length, ...table.rows.map((row) => row.length))
+  const header = normalizeMarkdownTableRow(table.header, columnCount)
+  const aligns = normalizeMarkdownTableRow(
+    table.aligns.map((align) => align ?? ''),
+    columnCount
+  ).map((align) => (align === 'left' || align === 'center' || align === 'right' ? align : null))
+  const rows = table.rows.map((row) => normalizeMarkdownTableRow(row, columnCount))
+  const formatRow = (cells: string[]) => `| ${cells.join(' | ')} |`
+
+  return [
+    formatRow(header),
+    `| ${aligns.map(formatMarkdownTableAlignment).join(' | ')} |`,
+    ...rows.map(formatRow)
+  ].join('\n')
+}
+
+const getMarkdownTableCellOffset = (table: MarkdownTableModel, target: MarkdownTableTarget) => {
+  const lines = stringifyMarkdownTable(table).split('\n')
+  const rowLineIndex = clamp(target.rowIndex, 0, lines.length - 1)
+  const cells = splitMarkdownTableRow(lines[rowLineIndex] ?? '')
+  const targetColumn = clamp(target.columnIndex, 0, Math.max(0, cells.length - 1))
+  let offset = 2
+
+  for (let index = 0; index < targetColumn; index += 1) {
+    offset += (cells[index]?.length ?? 0) + 3
+  }
+
+  return offset
+}
+
+const updateMarkdownTable = (
+  markdown: string,
+  selection: NormalizedSelection,
+  updater: (table: MarkdownTableModel) => MarkdownTableTarget
+): MarkdownTransform | null => {
+  const block = getActiveBlock(markdown, selection.start)
+
+  if (!block || block.type !== 'table') {
+    return null
+  }
+
+  const table = parseMarkdownTable(block.text)
+
+  if (!table) {
+    return null
+  }
+
+  const target = updater(table)
+  const replacement = stringifyMarkdownTable(table)
+  const cellOffset = getMarkdownTableCellOffset(table, target)
+  const selectionOffset = block.from + cellOffset
+
+  return {
+    markdown: replaceRange(markdown, block.from, block.to, replacement),
+    selectionStart: selectionOffset,
+    selectionEnd: selectionOffset
+  }
+}
+
 const exportMarkdownJSON = (instance: Vditor, markdown: string): JSONNode => {
   try {
     return JSON.parse(instance.exportJSON(markdown)) as JSONNode
@@ -800,6 +992,9 @@ export const createMarkdownEditor = async ({
   let tableToolbarPopoverKind: TableToolbarPopoverKind | null = null
   let tableContextMenuView: TableContextMenuView = 'root'
   let tableGridPointerDown = false
+  let activeTableContext: TableContext | null = null
+  let tableToolbarInteractionTimer = 0
+  let suppressTableToolbarSelectionChange = false
   const tableToolbarButtons = new Map<TableToolbarAction, HTMLButtonElement>()
 
   const getInstance = () => {
@@ -1011,25 +1206,45 @@ export const createMarkdownEditor = async ({
     return getTableContextFromRange(range)
   }
 
+  const isLiveTableContext = (context: TableContext | null): context is TableContext => {
+    return (
+      !!context &&
+      context.tableElement.isConnected &&
+      context.cellElement.isConnected &&
+      context.tableElement.contains(context.cellElement)
+    )
+  }
+
+  const retainTableContext = (context: TableContext | null) => {
+    activeTableContext = isLiveTableContext(context) ? context : null
+    return activeTableContext
+  }
+
+  const getRetainedTableContext = () => {
+    return isLiveTableContext(activeTableContext) ? activeTableContext : null
+  }
+
+  const getResolvedTableContext = () => {
+    return getCurrentTableContext() ?? getRetainedTableContext()
+  }
+
+  const markTableToolbarInteraction = () => {
+    suppressTableToolbarSelectionChange = true
+
+    if (tableToolbarInteractionTimer !== 0) {
+      window.clearTimeout(tableToolbarInteractionTimer)
+    }
+
+    tableToolbarInteractionTimer = window.setTimeout(() => {
+      suppressTableToolbarSelectionChange = false
+      tableToolbarInteractionTimer = 0
+    }, 120)
+  }
+
   const readTableAlignment = (cellElement: HTMLTableCellElement) => {
     const align = cellElement.getAttribute('align')
 
     return align === 'center' || align === 'right' ? align : 'left'
-  }
-
-  const createTableCell = (
-    tagName: 'th' | 'td',
-    align: 'left' | 'center' | 'right' | null,
-    html = ' '
-  ) => {
-    const cellElement = document.createElement(tagName)
-
-    if (align) {
-      cellElement.setAttribute('align', align)
-    }
-
-    cellElement.innerHTML = html.trim().length > 0 ? html : ' '
-    return cellElement
   }
 
   const setSelectionInTableCell = (cellElement: HTMLTableCellElement, collapseToEnd = false) => {
@@ -1047,24 +1262,8 @@ export const createMarkdownEditor = async ({
     selection.addRange(range)
   }
 
-  const syncAfterTableMutation = (focusCell: HTMLTableCellElement | null, collapseToEnd = false) => {
-    if (focusCell?.isConnected) {
-      setSelectionInTableCell(focusCell, collapseToEnd)
-    } else {
-      getInstance().focus()
-    }
-
-    syncMarkdownFromEditor(true)
-    currentSelection = getSelectionOffsets()
-    scheduleTableToolbarRefresh()
-  }
-
   const normalizeVisualText = (value: string) => {
     return value.replace(/\s+/g, ' ').trim()
-  }
-
-  const isBlankTableCell = (cellElement: HTMLTableCellElement) => {
-    return normalizeVisualText(cellElement.textContent ?? '') === ''
   }
 
   const getCurrentTableDimensions = (tableElement: HTMLTableElement) => {
@@ -1076,34 +1275,6 @@ export const createMarkdownEditor = async ({
 
   const getAllTableCells = (tableElement: HTMLTableElement) => {
     return Array.from(tableElement.rows, (row) => Array.from(row.cells) as HTMLTableCellElement[]).flat()
-  }
-
-  const setSelectionInParagraphElement = (paragraphElement: HTMLParagraphElement) => {
-    const selection = window.getSelection()
-
-    if (!selection) {
-      return
-    }
-
-    const range = document.createRange()
-    range.setStart(paragraphElement, 0)
-    range.collapse(true)
-    selection.removeAllRanges()
-    selection.addRange(range)
-  }
-
-  const createEmptyParagraphElement = () => {
-    const paragraphElement = document.createElement('p')
-    paragraphElement.setAttribute('data-block', '0')
-    paragraphElement.append(document.createElement('br'))
-    return paragraphElement
-  }
-
-  const syncAfterParagraphInsertion = (paragraphElement: HTMLParagraphElement) => {
-    setSelectionInParagraphElement(paragraphElement)
-    syncMarkdownFromEditor(true)
-    currentSelection = getSelectionOffsets()
-    hideTableToolbar()
   }
 
   const isWholeTableSelection = (context: TableContext) => {
@@ -1142,115 +1313,128 @@ export const createMarkdownEditor = async ({
     return alignments.every((align) => align === alignments[0]) ? alignments[0] : null
   }
 
+  const applyCurrentTableTransform = (
+    _context: TableContext,
+    updater: (table: MarkdownTableModel) => MarkdownTableTarget
+  ) => {
+    const markdown = readMarkdown()
+    const selection = normalizeSelection(getSelectionOffsets())
+
+    return applyTransform(updateMarkdownTable(markdown, selection, updater))
+  }
+
   const expandTableToDimensions = (context: TableContext, requestedRows: number, requestedColumns: number) => {
     const { rows: currentRows, columns: currentColumns } = getCurrentTableDimensions(context.tableElement)
     const targetRows = Math.max(requestedRows, currentRows)
     const targetColumns = Math.max(requestedColumns, currentColumns)
-    const rows = Array.from(context.tableElement.rows)
-    const columnAlignments = Array.from({ length: targetColumns }, (_, columnIndex) => {
-      for (const row of rows) {
-        const align = row.cells[columnIndex]?.getAttribute('align')
 
-        if (align === 'left' || align === 'center' || align === 'right') {
-          return align
-        }
+    return applyCurrentTableTransform(context, (table) => {
+      table.header = normalizeMarkdownTableRow(table.header, targetColumns)
+      table.aligns = normalizeMarkdownTableRow(
+        table.aligns.map((align) => align ?? ''),
+        targetColumns
+      ).map((align) => (align === 'left' || align === 'center' || align === 'right' ? align : null))
+      table.rows = table.rows.map((row) => normalizeMarkdownTableRow(row, targetColumns))
+
+      while (table.rows.length < targetRows - 1) {
+        table.rows.push(Array.from({ length: targetColumns }, () => ''))
       }
 
-      return null
+      return {
+        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, targetRows - 1),
+        columnIndex: clamp(context.cellElement.cellIndex, 0, targetColumns - 1)
+      }
     })
-
-    for (const row of rows) {
-      const tagName = row.parentElement?.tagName === 'THEAD' ? 'th' : 'td'
-
-      while (row.cells.length < targetColumns) {
-        row.append(createTableCell(tagName, columnAlignments[row.cells.length] ?? null))
-      }
-    }
-
-    const tbody = context.tableElement.tBodies[0] ?? context.tableElement.createTBody()
-
-    while (context.tableElement.rows.length < targetRows) {
-      const nextRow = document.createElement('tr')
-
-      for (let columnIndex = 0; columnIndex < targetColumns; columnIndex += 1) {
-        nextRow.append(createTableCell('td', columnAlignments[columnIndex] ?? null))
-      }
-
-      tbody.append(nextRow)
-    }
-
-    return context.cellElement
   }
 
-  const insertParagraphNearTable = (context: TableContext, position: 'above' | 'below') => {
-    const paragraphElement = createEmptyParagraphElement()
+  const insertParagraphNearTable = (_context: TableContext, position: 'above' | 'below') => {
+    const markdown = readMarkdown()
+    const selection = normalizeSelection(getSelectionOffsets())
+    const block = getActiveBlock(markdown, selection.start)
 
-    if (position === 'above') {
-      context.tableElement.insertAdjacentElement('beforebegin', paragraphElement)
-    } else {
-      context.tableElement.insertAdjacentElement('afterend', paragraphElement)
+    if (!block || block.type !== 'table') {
+      return false
     }
 
-    syncAfterParagraphInsertion(paragraphElement)
-    return true
+    if (position === 'above') {
+      return applyTransform({
+        markdown: insertAt(markdown, block.from, '\n\n'),
+        selectionStart: block.from,
+        selectionEnd: block.from
+      })
+    }
+
+    return applyTransform({
+      markdown: insertAt(markdown, block.to, '\n\n'),
+      selectionStart: block.to + 2,
+      selectionEnd: block.to + 2
+    })
   }
 
   const fillTableBlanksFromHeaderRow = (context: TableContext) => {
-    const rows = Array.from(context.tableElement.rows)
-
-    if (rows.length < 2) {
-      return context.cellElement
-    }
-
-    const headerHTML = Array.from(rows[0].cells, (cell) => cell.innerHTML)
-
-    for (const row of rows.slice(1)) {
-      for (let columnIndex = 0; columnIndex < row.cells.length; columnIndex += 1) {
-        const cellElement = row.cells[columnIndex] as HTMLTableCellElement
-
-        if (isBlankTableCell(cellElement) && (headerHTML[columnIndex] ?? '').trim().length > 0) {
-          cellElement.innerHTML = headerHTML[columnIndex]
+    return applyCurrentTableTransform(context, (table) => {
+      if (table.rows.length === 0) {
+        return {
+          rowIndex: 0,
+          columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
         }
       }
-    }
 
-    return context.cellElement
+      table.rows = table.rows.map((row) =>
+        row.map((cell, columnIndex) =>
+          cell.trim().length === 0 && (table.header[columnIndex] ?? '').trim().length > 0
+            ? table.header[columnIndex] ?? ''
+            : cell
+        )
+      )
+
+      return {
+        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
+        columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+      }
+    })
   }
 
   const fillTableBlanksFromFirstColumn = (context: TableContext) => {
-    for (const row of Array.from(context.tableElement.rows)) {
-      const seedHTML = row.cells[0]?.innerHTML ?? ''
+    return applyCurrentTableTransform(context, (table) => {
+      table.rows = table.rows.map((row) => {
+        const seed = row[0] ?? ''
 
-      if (seedHTML.trim().length === 0) {
-        continue
-      }
-
-      for (const cellElement of Array.from(row.cells).slice(1) as HTMLTableCellElement[]) {
-        if (isBlankTableCell(cellElement)) {
-          cellElement.innerHTML = seedHTML
+        if (seed.trim().length === 0) {
+          return row
         }
-      }
-    }
 
-    return context.cellElement
+        return row.map((cell, columnIndex) => {
+          if (columnIndex === 0 || cell.trim().length > 0) {
+            return cell
+          }
+
+          return seed
+        })
+      })
+
+      return {
+        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
+        columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+      }
+    })
   }
 
   const applyTableAlignment = (context: TableContext, align: TableAlignment) => {
-    if (isWholeTableSelection(context)) {
-      for (const cellElement of getAllTableCells(context.tableElement)) {
-        cellElement.setAttribute('align', align)
+    return applyCurrentTableTransform(context, (table) => {
+      const targetColumn = clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+
+      if (isWholeTableSelection(context)) {
+        table.aligns = Array.from({ length: table.header.length }, () => align)
+      } else {
+        table.aligns[targetColumn] = align
       }
 
-      return context.cellElement
-    }
-
-    const targetColumn = context.cellElement.cellIndex
-
-    for (const row of Array.from(context.tableElement.rows)) {
-      row.cells[targetColumn]?.setAttribute('align', align)
-    }
-
-    return (context.cellElement.parentElement as HTMLTableRowElement).cells[targetColumn] as HTMLTableCellElement
+      return {
+        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
+        columnIndex: targetColumn
+      }
+    })
   }
 
   const deleteCurrentTable = () => {
@@ -1332,10 +1516,7 @@ export const createMarkdownEditor = async ({
       }
 
       hideTableToolbarPopover()
-      const focusCell = expandTableToDimensions(context, selectedRows, selectedColumns)
-      window.requestAnimationFrame(() => {
-        syncAfterTableMutation(focusCell)
-      })
+      void expandTableToDimensions(context, selectedRows, selectedColumns)
     }
 
     const updateSelection = (rows: number, columns: number) => {
@@ -1364,6 +1545,7 @@ export const createMarkdownEditor = async ({
         cellElement.dataset.rows = String(rowIndex)
         cellElement.dataset.columns = String(columnIndex)
         cellElement.addEventListener('pointerdown', (event) => {
+          markTableToolbarInteraction()
           event.preventDefault()
           tableGridPointerDown = true
           updateSelection(rowIndex, columnIndex)
@@ -1415,6 +1597,7 @@ export const createMarkdownEditor = async ({
       backButton.className = 'editor-table-toolbar__menu-button editor-table-toolbar__menu-button--back'
       backButton.textContent = '返回'
       backButton.addEventListener('pointerdown', (event) => {
+        markTableToolbarInteraction()
         event.preventDefault()
       })
       backButton.addEventListener('click', () => {
@@ -1452,6 +1635,7 @@ export const createMarkdownEditor = async ({
       }
 
       button.addEventListener('pointerdown', (event) => {
+        markTableToolbarInteraction()
         event.preventDefault()
       })
       button.addEventListener('click', () => {
@@ -1466,6 +1650,7 @@ export const createMarkdownEditor = async ({
 
   const hideTableToolbar = () => {
     hideTableToolbarPopover()
+    activeTableContext = null
 
     if (!tableToolbar) {
       return
@@ -1505,7 +1690,8 @@ export const createMarkdownEditor = async ({
       return
     }
 
-    const context = getCurrentTableContext()
+    const currentContext = getCurrentTableContext()
+    const context = retainTableContext(currentContext) ?? getRetainedTableContext()
 
     if (!context) {
       hideTableToolbar()
@@ -1543,47 +1729,40 @@ export const createMarkdownEditor = async ({
   }
 
   const runTableToolbarAction = (action: TableToolbarAction) => {
-    const context = getCurrentTableContext()
+    const context = getResolvedTableContext()
 
     if (!context) {
       hideTableToolbar()
       return false
     }
 
+    retainTableContext(context)
     hideTableToolbarPopover()
 
     if (action === 'delete-table') {
+      setSelectionInTableCell(context.cellElement)
       return deleteCurrentTable()
     }
 
-    let focusCell: HTMLTableCellElement | null = null
-
     switch (action) {
       case 'align-left':
-        focusCell = applyTableAlignment(context, 'left')
-        break
+        return applyTableAlignment(context, 'left')
       case 'align-center':
-        focusCell = applyTableAlignment(context, 'center')
-        break
+        return applyTableAlignment(context, 'center')
       case 'align-right':
-        focusCell = applyTableAlignment(context, 'right')
-        break
+        return applyTableAlignment(context, 'right')
     }
-
-    window.requestAnimationFrame(() => {
-      syncAfterTableMutation(focusCell)
-    })
-
-    return true
   }
 
   const runTableContextMenuAction = (action: TableContextMenuAction) => {
-    const context = getCurrentTableContext()
+    const context = getResolvedTableContext()
 
     if (!context) {
       hideTableToolbar()
       return false
     }
+
+    retainTableContext(context)
 
     switch (action) {
       case 'open-table-submenu':
@@ -1601,20 +1780,12 @@ export const createMarkdownEditor = async ({
       case 'open-grid-popover':
         renderTableGridPopover(context)
         return true
-      case 'autofill-from-header': {
+      case 'autofill-from-header':
         hideTableToolbarPopover()
-        window.requestAnimationFrame(() => {
-          syncAfterTableMutation(fillTableBlanksFromHeaderRow(context))
-        })
-        return true
-      }
-      case 'autofill-from-first-column': {
+        return fillTableBlanksFromHeaderRow(context)
+      case 'autofill-from-first-column':
         hideTableToolbarPopover()
-        window.requestAnimationFrame(() => {
-          syncAfterTableMutation(fillTableBlanksFromFirstColumn(context))
-        })
-        return true
-      }
+        return fillTableBlanksFromFirstColumn(context)
       case 'delete-table':
         hideTableToolbarPopover()
         return deleteCurrentTable()
@@ -1648,7 +1819,7 @@ export const createMarkdownEditor = async ({
 
     const configureIconButton = (
       button: HTMLButtonElement,
-      icon: string,
+      icon: TableToolbarIcon,
       title: string
     ) => {
       button.type = 'button'
@@ -1657,16 +1828,21 @@ export const createMarkdownEditor = async ({
       button.setAttribute('aria-pressed', 'false')
       button.setAttribute('aria-label', title)
       button.title = title
-      button.innerHTML = `<svg viewBox="0 0 32 32" aria-hidden="true"><use xlink:href="#${icon}"></use></svg>`
+      button.innerHTML = TABLE_TOOLBAR_ICONS[icon]
       button.addEventListener('pointerdown', (event) => {
-        event.preventDefault()
+        markTableToolbarInteraction()
+
+        if (event.button === 0) {
+          event.preventDefault()
+        }
       })
     }
 
-    configureIconButton(entryButton, 'vditor-icon-table', '表格工具')
+    configureIconButton(entryButton, 'table', '表格工具')
     entryButton.setAttribute('aria-haspopup', 'menu')
     entryButton.addEventListener('click', () => {
-      const context = getCurrentTableContext()
+      markTableToolbarInteraction()
+      const context = getResolvedTableContext()
 
       if (!context) {
         hideTableToolbar()
@@ -1681,10 +1857,11 @@ export const createMarkdownEditor = async ({
       renderTableGridPopover(context)
     })
     entryButton.addEventListener('contextmenu', (event) => {
+      markTableToolbarInteraction()
       event.preventDefault()
       event.stopPropagation()
 
-      const context = getCurrentTableContext()
+      const context = getResolvedTableContext()
 
       if (!context) {
         hideTableToolbar()
@@ -1699,7 +1876,7 @@ export const createMarkdownEditor = async ({
       renderTableContextMenu('root')
     })
 
-    configureIconButton(deleteButton, 'vditor-icon-trashcan', '删除整个表格')
+    configureIconButton(deleteButton, 'trash', '删除整个表格')
     deleteButton.addEventListener('click', () => {
       void runTableToolbarAction('delete-table')
     })
@@ -1707,7 +1884,7 @@ export const createMarkdownEditor = async ({
     const appendAlignmentButton = (
       container: HTMLElement,
       action: Extract<TableToolbarAction, 'align-left' | 'align-center' | 'align-right'>,
-      icon: string,
+      icon: TableToolbarIcon,
       title: string
     ) => {
       const button = document.createElement('button')
@@ -1731,6 +1908,11 @@ export const createMarkdownEditor = async ({
     host.append(toolbarElement)
 
     const handleSelectionChange = () => {
+      if (suppressTableToolbarSelectionChange) {
+        scheduleTableToolbarRefresh()
+        return
+      }
+
       hideTableToolbarPopover()
       scheduleTableToolbarRefresh()
     }
@@ -1776,6 +1958,11 @@ export const createMarkdownEditor = async ({
       if (tableToolbarRefreshFrame !== 0) {
         window.cancelAnimationFrame(tableToolbarRefreshFrame)
         tableToolbarRefreshFrame = 0
+      }
+
+      if (tableToolbarInteractionTimer !== 0) {
+        window.clearTimeout(tableToolbarInteractionTimer)
+        tableToolbarInteractionTimer = 0
       }
 
       document.removeEventListener('selectionchange', handleSelectionChange)
