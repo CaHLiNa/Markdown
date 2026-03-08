@@ -1,6 +1,7 @@
 import Vditor from 'vditor'
 
 import type { EditorCommand } from './commands'
+import { isBackgroundFocusTarget } from './editor-focus'
 import {
   extractMarkdownBlocks,
   findHeadingOffset,
@@ -251,20 +252,6 @@ const normalizeRuntimeCommand = (command: RuntimeEditorCommand) => {
     default:
       return command
   }
-}
-
-const isBackgroundFocusTarget = (target: EventTarget | null) => {
-  if (!(target instanceof Element)) {
-    return false
-  }
-
-  return (
-    target.classList.contains('editor-host') ||
-    target.classList.contains('vditor') ||
-    target.classList.contains('vditor-content') ||
-    target.classList.contains('vditor-ir') ||
-    target.classList.contains('vditor-reset')
-  )
 }
 
 const serializeTextPoint = (root: Node, node: Node, offset: number): SerializedDomPoint | null => {
