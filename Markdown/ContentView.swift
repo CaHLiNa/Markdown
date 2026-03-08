@@ -33,6 +33,9 @@ struct ContentView: View {
         static let segmentedHeight: CGFloat = 32
         static let panelRadius: CGFloat = 10
         static let tabStripHeight: CGFloat = 38
+        static let tabCellMinWidth: CGFloat = 84
+        static let tabCellMaxWidth: CGFloat = 168
+        static let tabAddButtonWidth: CGFloat = 36
         static let editorTopInset: CGFloat = 54
         static let editorLeadingInset: CGFloat = 84
         static let toolbarButtonSize: CGFloat = 28
@@ -616,14 +619,22 @@ struct ContentView: View {
     }
 
     private var tabStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                ForEach(documentController.tabs) { tab in
-                    tabCell(tab)
-                }
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(documentController.tabs) { tab in
+                        tabCell(tab)
+                    }
 
-                Spacer(minLength: 0)
+                    Spacer(minLength: 0)
+                }
             }
+
+            Rectangle()
+                .fill(palette.separator)
+                .frame(width: 1)
+
+            newTabButton
         }
         .frame(height: Metrics.tabStripHeight)
         .background(palette.editorChrome)
@@ -633,10 +644,12 @@ struct ContentView: View {
         let isActive = tab.id == documentController.activeTabID
 
         return HStack(spacing: 6) {
-            Text(tab.title)
+            Text(tab.compactTitle())
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(isActive ? palette.primaryText : palette.secondaryText)
                 .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
             if tab.isDirty {
                 Circle()
@@ -654,7 +667,8 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .opacity(isActive ? 1 : 0.7)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
+        .frame(minWidth: Metrics.tabCellMinWidth, maxWidth: Metrics.tabCellMaxWidth)
         .frame(height: Metrics.tabStripHeight)
         .background(isActive ? palette.activeTabSurface : .clear)
         .overlay(alignment: .trailing) {
@@ -666,6 +680,22 @@ struct ContentView: View {
         .onTapGesture {
             documentController.selectTab(tab.id)
         }
+    }
+
+    private var newTabButton: some View {
+        Button {
+            documentController.createUntitledDocument()
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(palette.secondaryText)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .buttonStyle(.plain)
+        .frame(width: Metrics.tabAddButtonWidth, height: Metrics.tabStripHeight)
+        .background(palette.editorChrome)
+        .contentShape(Rectangle())
+        .help("新建标签页")
     }
 
     private var editorSurface: some View {

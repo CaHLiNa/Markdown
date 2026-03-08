@@ -79,6 +79,28 @@ struct EditorTab: Identifiable, Equatable {
     var isDirty: Bool {
         markdown != lastSavedMarkdown
     }
+
+    func compactTitle(maxLength: Int = 26) -> String {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard normalizedTitle.count > maxLength, maxLength > 8 else {
+            return normalizedTitle
+        }
+
+        let pathExtension = (normalizedTitle as NSString).pathExtension
+        let suffixLength = min(
+            max(pathExtension.isEmpty ? 6 : pathExtension.count + 6, 6),
+            max(6, maxLength / 2)
+        )
+        let prefixLength = min(
+            max(4, (maxLength / 2) - 2),
+            maxLength - suffixLength - 1
+        )
+        let prefix = normalizedTitle.prefix(prefixLength)
+        let suffix = normalizedTitle.suffix(suffixLength)
+
+        return "\(prefix)…\(suffix)"
+    }
 }
 
 struct EditorRevealRequest: Equatable {

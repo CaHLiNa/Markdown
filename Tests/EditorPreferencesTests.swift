@@ -7,6 +7,7 @@ final class EditorPreferencesTests: XCTestCase {
         let presentation = preferences.presentation(theme: .light)
 
         XCTAssertEqual(presentation.theme, "light", "Expected default preferences to use the light web theme.")
+        XCTAssertTrue(preferences.tabBarVisibility, "Expected the tab bar to be visible by default.")
         XCTAssertFalse(presentation.focusMode, "Expected focus mode to default to false.")
         XCTAssertFalse(presentation.typewriterMode, "Expected typewriter mode to default to false.")
         XCTAssertEqual(presentation.fontSize, 17, "Expected default font size to be 17.")
