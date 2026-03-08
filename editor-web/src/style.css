@@ -902,6 +902,8 @@ body {
 
 .md-editor {
   position: relative;
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
   color: var(--editor-text);
   background: var(--editor-surface);
@@ -909,19 +911,34 @@ body {
 
 .md-editor__wysiwyg,
 .md-editor__source {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   min-height: 100vh;
+}
+
+.md-editor__wysiwyg > :first-child,
+.md-editor__source > :first-child {
+  flex: 1 1 auto;
+  min-height: 100%;
 }
 
 .md-editor__wysiwyg .ProseMirror {
   box-sizing: border-box;
+  flex: 1 1 auto;
   min-height: 100vh;
   max-width: var(--editor-page-width);
   margin: 0 auto;
   padding: 40px 48px 96px;
   outline: none;
+  width: 100%;
   font-family: var(--editor-font-family);
   font-size: var(--editor-font-size);
   line-height: var(--editor-line-height);
+}
+
+.md-editor__source .cm-editor {
+  flex: 1 1 auto;
 }
 
 .md-editor__wysiwyg .ProseMirror p,

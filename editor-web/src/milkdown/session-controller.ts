@@ -18,7 +18,7 @@ import { getMarkdown, replaceAll } from '@milkdown/kit/utils'
 import { math, katexOptionsCtx } from '@milkdown/plugin-math'
 import { $prose } from '@milkdown/utils'
 import { Fragment, Slice } from '@milkdown/prose/model'
-import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/prose/state'
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/prose/state'
 import { Decoration } from '@milkdown/prose/view'
 import type { EditorView } from '@milkdown/prose/view'
 import { imageSchema, paragraphSchema } from '@milkdown/kit/preset/commonmark'
@@ -447,6 +447,7 @@ export class MilkdownSessionController {
 
     await this.#pendingMilkdownDestroy
 
+    this.#milkdownHost?.removeEventListener('pointerdown', this.#handleWysiwygHostPointerDown)
     this.#milkdownHost?.remove()
     this.#milkdownHost = null
     this.#shell.remove()
@@ -566,6 +567,17 @@ export class MilkdownSessionController {
     })
   }
 
+  #focusWysiwygView() {
+    if (!this.#milkdown || !this.#milkdownMounted) {
+      return false
+    }
+
+    return this.#milkdown.action((ctx) => {
+      ctx.get(editorViewCtx).focus()
+      return true
+    })
+  }
+
   #restoreWysiwygSelection(selection: SelectionOffsets) {
     if (!this.#milkdown || !this.#milkdownMounted) {
       return
@@ -587,13 +599,49 @@ export class MilkdownSessionController {
       )
       const transaction = view.state.tr
 
-      if (anchor.selectNode && head.selectNode && anchor.pos === head.pos) {
-        transaction.setSelection(NodeSelection.create(transaction.doc, anchor.pos))
-      } else {
-        transaction.setSelection(TextSelection.create(transaction.doc, anchor.pos, head.pos))
+      try {
+        if (anchor.selectNode && head.selectNode && anchor.pos === head.pos) {
+          transaction.setSelection(NodeSelection.create(transaction.doc, anchor.pos))
+        } else {
+          transaction.setSelection(TextSelection.create(transaction.doc, anchor.pos, head.pos))
+        }
+      } catch (error) {
+        console.warn('[editor-web] 恢复 WYSIWYG 选择区失败', error)
+        const fallbackPos = Math.min(Math.max(anchor.pos, 0), transaction.doc.content.size)
+        transaction.setSelection(Selection.near(transaction.doc.resolve(fallbackPos)))
       }
 
       view.dispatch(transaction.scrollIntoView())
+    })
+  }
+
+  #handleWysiwygHostPointerDown = (event: PointerEvent) => {
+    if (this.#mode !== 'wysiwyg' || event.button !== 0) {
+      return
+    }
+
+    const target = event.target
+
+    if (!(target instanceof Node)) {
+      return
+    }
+
+    if (target instanceof Element) {
+      if (target.closest('.ProseMirror')) {
+        return
+      }
+
+      if (target.closest('.cm-floating-ui, .cm-block-gutter')) {
+        return
+      }
+
+      if (target.closest('.md-math-block__source, .md-inline-math__input')) {
+        return
+      }
+    }
+
+    queueMicrotask(() => {
+      this.#focusWysiwygView()
     })
   }
 
@@ -1069,6 +1117,7 @@ export class MilkdownSessionController {
     const host = document.createElement('div')
     host.className = 'md-editor__wysiwyg'
     host.hidden = this.#mode !== 'wysiwyg'
+    host.addEventListener('pointerdown', this.#handleWysiwygHostPointerDown)
     this.#milkdownHost = host
     this.#shell.append(host)
     this.#applyEditableClassNames()
@@ -1198,5 +1247,8 @@ export class MilkdownSessionController {
     this.#restoreWysiwygSelection(this.#selection)
     this.#ensureWysiwygInteractions()
     this.#refreshWysiwygInteractions()
+    queueMicrotask(() => {
+      this.#focusWysiwygView()
+    })
   }
 }

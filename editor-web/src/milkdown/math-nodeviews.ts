@@ -45,6 +45,20 @@ const maybeSkipClosingSymbol = (view: EditorView, key: string) => {
   return true
 }
 
+export const shouldStopBlockMathEvent = (
+  sourceShell: HTMLElement,
+  target: EventTarget | null
+) => {
+  return target instanceof Node && sourceShell.contains(target)
+}
+
+export const shouldStopInlineMathEvent = (
+  input: HTMLInputElement,
+  target: EventTarget | null
+) => {
+  return target === input
+}
+
 class BlockMathNodeView implements NodeView {
   dom: HTMLElement
   #node: ProseMirrorNode
@@ -74,7 +88,6 @@ class BlockMathNodeView implements NodeView {
     this.#sourceShell.className = 'md-math-block__source'
     this.dom.append(this.#preview, this.#sourceShell)
     this.#renderPreview()
-    this.dom.addEventListener('click', this.#handlePreviewClick)
   }
 
   update(node: ProseMirrorNode) {
@@ -105,6 +118,9 @@ class BlockMathNodeView implements NodeView {
 
   selectNode() {
     this.#expand()
+    queueMicrotask(() => {
+      this.#sourceEditor?.focus()
+    })
   }
 
   deselectNode() {
@@ -112,7 +128,7 @@ class BlockMathNodeView implements NodeView {
   }
 
   stopEvent(event: Event) {
-    return this.dom.contains(event.target as Node)
+    return shouldStopBlockMathEvent(this.#sourceShell, event.target)
   }
 
   ignoreMutation() {
@@ -121,7 +137,6 @@ class BlockMathNodeView implements NodeView {
 
   destroy() {
     this.#destroyed = true
-    this.dom.removeEventListener('click', this.#handlePreviewClick)
 
     if (this.#flushTimer != null) {
       window.clearTimeout(this.#flushTimer)
@@ -134,15 +149,6 @@ class BlockMathNodeView implements NodeView {
     this.#flush()
     this.#sourceEditor?.destroy()
     this.#sourceEditor = null
-  }
-
-  #handlePreviewClick = () => {
-    if (this.#destroyed) {
-      return
-    }
-
-    this.#expand()
-    this.#sourceEditor?.focus()
   }
 
   #expand() {
@@ -309,7 +315,6 @@ class InlineMathNodeView implements NodeView {
     this.#input.spellcheck = false
     this.dom.append(this.#preview, this.#input)
     this.#render()
-    this.dom.addEventListener('click', this.#handleClick)
     this.#input.addEventListener('keydown', this.#handleKeydown)
     this.#input.addEventListener('blur', this.#handleBlur)
   }
@@ -337,7 +342,7 @@ class InlineMathNodeView implements NodeView {
   }
 
   stopEvent(event: Event) {
-    return this.dom.contains(event.target as Node)
+    return shouldStopInlineMathEvent(this.#input, event.target)
   }
 
   ignoreMutation() {
@@ -345,13 +350,8 @@ class InlineMathNodeView implements NodeView {
   }
 
   destroy() {
-    this.dom.removeEventListener('click', this.#handleClick)
     this.#input.removeEventListener('keydown', this.#handleKeydown)
     this.#input.removeEventListener('blur', this.#handleBlur)
-  }
-
-  #handleClick = () => {
-    this.#enterEditMode()
   }
 
   #handleKeydown = (event: KeyboardEvent) => {
