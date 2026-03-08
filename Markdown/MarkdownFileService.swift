@@ -22,6 +22,10 @@ enum MarkdownExportTheme: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
+    var displayName: String {
+        rawValue
+    }
+
     func resolvedTheme(matching editorTheme: String) -> MarkdownRenderedTheme {
         switch self {
         case .matchEditor:

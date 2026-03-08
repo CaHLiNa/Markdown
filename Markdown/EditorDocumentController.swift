@@ -103,10 +103,16 @@ struct EditorRevealRequest: Equatable {
     let length: Int
 }
 
+enum EditorUnsavedChangesDecision {
+    case save
+    case discard
+    case cancel
+}
+
 @MainActor
 final class EditorDocumentController: ObservableObject {
     @Published private(set) var tabs: [EditorTab]
-    @Published var activeTabID: UUID {
+    @Published var activeTabID: UUID? {
         didSet {
             refreshDocumentSearchResults(
                 selectActiveMatch: isDocumentSearchPresented,
@@ -217,12 +223,19 @@ final class EditorDocumentController: ObservableObject {
 
     let editorController = EditorWebView.Controller()
     private var untitledDocumentCount = 1
+    var unsavedChangesDecisionHandler: ((EditorTab) -> EditorUnsavedChangesDecision)?
+    var saveTabOverride: ((UUID, @escaping (Bool) -> Void) -> Void)?
 
     init(markdown: String? = nil) {
         let preferences = Self.loadPreferences()
-        let initialTab = Self.makeUntitledTab(markdown: markdown ?? Self.defaultMarkdown, index: 1)
-        self.tabs = [initialTab]
-        self.activeTabID = initialTab.id
+        if let markdown {
+            let initialTab = Self.makeUntitledTab(markdown: markdown, index: 1)
+            self.tabs = [initialTab]
+            self.activeTabID = initialTab.id
+        } else {
+            self.tabs = []
+            self.activeTabID = nil
+        }
         self.recentFiles = Self.loadRecentFiles()
         self.appearanceMode = preferences.appearanceMode
         self.editorTheme = preferences.editorTheme
@@ -251,20 +264,24 @@ final class EditorDocumentController: ObservableObject {
         activeTab?.fileURL
     }
 
+    var hasOpenTab: Bool {
+        activeTab != nil
+    }
+
     var hasUnsavedChanges: Bool {
         activeTab?.isDirty ?? false
     }
 
     var canRunRichTextCommands: Bool {
-        true
+        hasOpenTab
     }
 
     var canExportRenderedDocument: Bool {
-        true
+        hasOpenTab
     }
 
     var currentTitle: String {
-        activeTab?.title ?? "未命名"
+        activeTab?.title ?? "Markdown"
     }
 
     var editableCurrentTitle: String {
@@ -628,10 +645,72 @@ final class EditorDocumentController: ObservableObject {
     }
 
     func closeCurrentTab() {
+        guard let activeTabID else {
+            return
+        }
+
         closeTab(id: activeTabID)
     }
 
     func closeTab(id: UUID) {
+        guard let tab = tab(for: id) else {
+            return
+        }
+
+        guard tab.isDirty else {
+            closeTabImmediately(id: id)
+            return
+        }
+
+        switch decideUnsavedChanges(for: tab) {
+        case .save:
+            saveTab(id: id) { [weak self] didSave in
+                guard didSave else {
+                    return
+                }
+
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated {
+                        self?.closeTabImmediately(id: id)
+                    }
+                } else {
+                    Task { @MainActor in
+                        self?.closeTabImmediately(id: id)
+                    }
+                }
+            }
+        case .discard:
+            closeTabImmediately(id: id)
+        case .cancel:
+            return
+        }
+    }
+
+    func selectTab(_ id: UUID) {
+        guard tabs.contains(where: { $0.id == id }) else {
+            return
+        }
+
+        activeTabID = id
+    }
+
+    func saveDocument() {
+        guard let activeTabID else {
+            return
+        }
+
+        saveTab(id: activeTabID)
+    }
+
+    func saveDocumentAs() {
+        guard let activeTabID else {
+            return
+        }
+
+        saveTabAs(id: activeTabID)
+    }
+
+    private func closeTabImmediately(id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else {
             return
         }
@@ -639,10 +718,7 @@ final class EditorDocumentController: ObservableObject {
         tabs.remove(at: index)
 
         if tabs.isEmpty {
-            untitledDocumentCount += 1
-            let tab = Self.makeUntitledTab(markdown: Self.defaultMarkdown, index: untitledDocumentCount)
-            tabs = [tab]
-            activeTabID = tab.id
+            activeTabID = nil
             return
         }
 
@@ -650,94 +726,118 @@ final class EditorDocumentController: ObservableObject {
         activeTabID = tabs[nextIndex].id
     }
 
-    func selectTab(_ id: UUID) {
-        activeTabID = id
-    }
-
-    func saveDocument() {
-        guard let activeTab else {
+    private func saveTab(id: UUID, completion: ((Bool) -> Void)? = nil) {
+        if let saveTabOverride {
+            saveTabOverride(id) { didSave in
+                completion?(didSave)
+            }
             return
         }
 
-        if let fileURL = activeTab.fileURL {
-            currentEditorMarkdown { [weak self] markdown in
-                guard let self else {
-                    return
-                }
+        guard let tab = tab(for: id) else {
+            completion?(false)
+            return
+        }
 
+        let persist: (String) -> Void = { [weak self] markdown in
+            guard let self else {
+                completion?(false)
+                return
+            }
+
+            if let fileURL = tab.fileURL {
                 do {
                     try MarkdownFileService.write(markdown, to: fileURL)
                     try MarkdownFileService.removeUnusedSiblingImageAssets(
                         for: markdown,
                         alongsideMarkdownFile: fileURL
                     )
-                    self.updateActiveTab {
+                    self.updateTab(id: id) {
                         $0.markdown = markdown
                         $0.lastSavedMarkdown = markdown
                     }
                     self.addRecentFile(fileURL)
+                    completion?(true)
                 } catch {
                     self.presentError(error, title: "无法保存文件")
+                    completion?(false)
                 }
+                return
+            }
+
+            self.saveTabAs(id: id, markdownOverride: markdown, completion: completion)
+        }
+
+        if id == activeTabID {
+            currentEditorMarkdown { [weak self] markdown in
+                guard self != nil else {
+                    completion?(false)
+                    return
+                }
+
+                persist(markdown)
             }
             return
         }
 
-        saveDocumentAs()
+        persist(tab.markdown)
     }
 
-    func saveDocumentAs() {
-        guard let activeTab else {
+    private func saveTabAs(
+        id: UUID,
+        markdownOverride: String? = nil,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        guard let tab = tab(for: id) else {
+            completion?(false)
             return
         }
 
         let panel = NSSavePanel()
         panel.allowedContentTypes = [MarkdownFileService.markdownContentType]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = activeTab.fileURL?.lastPathComponent ?? "\(activeTab.title).md"
-        panel.directoryURL = activeTab.fileURL?.deletingLastPathComponent() ?? folderURL
+        panel.nameFieldStringValue = tab.fileURL?.lastPathComponent ?? "\(tab.title).md"
+        panel.directoryURL = tab.fileURL?.deletingLastPathComponent() ?? folderURL
         panel.prompt = "保存"
 
         guard panel.runModal() == .OK, let selectedURL = panel.url else {
+            completion?(false)
             return
         }
 
         let destinationURL = MarkdownFileService.normalizedMarkdownURL(from: selectedURL)
+        let saveMarkdown = markdownOverride ?? tab.markdown
 
-        currentEditorMarkdown { [weak self] markdown in
-            guard let self else {
-                return
-            }
+        do {
+            let markdownToSave: String
 
-            do {
-                let markdownToSave: String
-
-                if let sourceURL = activeTab.fileURL {
-                    markdownToSave = try MarkdownFileService.relocateSiblingImageAssetsForSaveAs(
-                        markdown,
-                        from: sourceURL,
-                        to: destinationURL
-                    )
-                } else {
-                    markdownToSave = markdown
-                }
-
-                try MarkdownFileService.write(markdownToSave, to: destinationURL)
-                try MarkdownFileService.removeUnusedSiblingImageAssets(
-                    for: markdownToSave,
-                    alongsideMarkdownFile: destinationURL
+            if let sourceURL = tab.fileURL {
+                markdownToSave = try MarkdownFileService.relocateSiblingImageAssetsForSaveAs(
+                    saveMarkdown,
+                    from: sourceURL,
+                    to: destinationURL
                 )
-                self.updateActiveTab {
-                    $0.fileURL = destinationURL
-                    $0.title = destinationURL.lastPathComponent
-                    $0.markdown = markdownToSave
-                    $0.lastSavedMarkdown = markdownToSave
-                }
-                self.addRecentFile(destinationURL)
-                self.refreshWorkspace()
-            } catch {
-                self.presentError(error, title: "无法保存文件")
+            } else {
+                markdownToSave = saveMarkdown
             }
+
+            try MarkdownFileService.write(markdownToSave, to: destinationURL)
+            try MarkdownFileService.removeUnusedSiblingImageAssets(
+                for: markdownToSave,
+                alongsideMarkdownFile: destinationURL
+            )
+            updateTab(id: id) {
+                $0.fileURL = destinationURL
+                $0.title = destinationURL.lastPathComponent
+                $0.markdown = markdownToSave
+                $0.lastSavedMarkdown = markdownToSave
+            }
+            addRecentFile(destinationURL)
+            refreshWorkspace()
+            completion?(true)
+        } catch {
+            presentError(error, title: "无法保存文件")
+            completion?(false)
         }
     }
 
@@ -935,7 +1035,15 @@ final class EditorDocumentController: ObservableObject {
     }
 
     private var activeTab: EditorTab? {
-        tabs.first(where: { $0.id == activeTabID })
+        guard let activeTabID else {
+            return nil
+        }
+
+        return tabs.first(where: { $0.id == activeTabID })
+    }
+
+    private func tab(for id: UUID) -> EditorTab? {
+        tabs.first(where: { $0.id == id })
     }
 
     private func currentEditorMarkdown(completion: @escaping (String) -> Void) {
@@ -985,7 +1093,10 @@ final class EditorDocumentController: ObservableObject {
     }
 
     private func updateActiveTab(_ transform: (inout EditorTab) -> Void) {
-        guard let index = tabs.firstIndex(where: { $0.id == activeTabID }) else {
+        guard
+            let activeTabID,
+            let index = tabs.firstIndex(where: { $0.id == activeTabID })
+        else {
             return
         }
 
@@ -993,6 +1104,25 @@ final class EditorDocumentController: ObservableObject {
         var tab = tabs[index]
         transform(&tab)
         tabs[index] = tab
+        refreshDocumentSearchResults(
+            preferredOffset: preferredOffset
+        )
+    }
+
+    private func updateTab(id: UUID, _ transform: (inout EditorTab) -> Void) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        let preferredOffset = id == activeTabID ? currentDocumentSearchMatch?.offset : nil
+        var tab = tabs[index]
+        transform(&tab)
+        tabs[index] = tab
+
+        guard id == activeTabID else {
+            return
+        }
+
         refreshDocumentSearchResults(
             preferredOffset: preferredOffset
         )
@@ -1166,6 +1296,29 @@ final class EditorDocumentController: ObservableObject {
         )
 
         Self.persistPreferences(preferences)
+    }
+
+    private func decideUnsavedChanges(for tab: EditorTab) -> EditorUnsavedChangesDecision {
+        if let unsavedChangesDecisionHandler {
+            return unsavedChangesDecisionHandler(tab)
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "要保存对“\(tab.title)”的更改吗？"
+        alert.informativeText = "如果现在关闭，未保存的修改将会丢失。"
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "不保存")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return .save
+        case .alertSecondButtonReturn:
+            return .cancel
+        default:
+            return .discard
+        }
     }
 
     private var exportBaseName: String {

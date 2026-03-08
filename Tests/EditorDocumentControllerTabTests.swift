@@ -17,10 +17,52 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
 
         controller.createUntitledDocument()
 
-        XCTAssertEqual(controller.tabs.count, 2, "Expected creating an untitled document to append a new tab.")
+        XCTAssertEqual(controller.tabs.count, 1, "Expected creating the first untitled document to open a single tab.")
         XCTAssertNotEqual(controller.activeTabID, originalActiveTabID, "Expected the new tab to become active.")
         XCTAssertEqual(controller.activeTabID, controller.tabs.last?.id, "Expected the appended tab to be selected.")
-        XCTAssertEqual(controller.tabs.last?.title, "Untitled-2", "Expected the new untitled tab to use the next sequential title.")
+        XCTAssertEqual(controller.tabs.last?.title, "Untitled-2", "Expected the first manually created untitled tab to use the next sequential title.")
+    }
+
+    func testClosingDirtyTabCanBeCancelled() {
+        resetPersistentState()
+        let controller = EditorDocumentController()
+        controller.createUntitledDocument()
+        controller.currentMarkdown = "modified"
+        controller.unsavedChangesDecisionHandler = { _ in .cancel }
+
+        controller.closeCurrentTab()
+
+        XCTAssertEqual(controller.tabs.count, 1, "Expected cancel to keep the dirty tab open.")
+        XCTAssertEqual(controller.currentMarkdown, "modified", "Expected the dirty markdown to remain untouched.")
+    }
+
+    func testClosingDirtyTabCanDiscardChanges() {
+        resetPersistentState()
+        let controller = EditorDocumentController()
+        controller.createUntitledDocument()
+        controller.currentMarkdown = "modified"
+        controller.unsavedChangesDecisionHandler = { _ in .discard }
+
+        controller.closeCurrentTab()
+
+        XCTAssertTrue(controller.tabs.isEmpty, "Expected discard to close the only dirty tab.")
+        XCTAssertNil(controller.activeTabID, "Expected there to be no active tab after closing the last dirty tab.")
+    }
+
+    func testClosingDirtyTabAfterSaveClosesTab() {
+        resetPersistentState()
+        let controller = EditorDocumentController()
+        controller.createUntitledDocument()
+        controller.currentMarkdown = "modified"
+        controller.unsavedChangesDecisionHandler = { _ in .save }
+        controller.saveTabOverride = { _, completion in
+            completion(true)
+        }
+
+        controller.closeCurrentTab()
+
+        XCTAssertTrue(controller.tabs.isEmpty, "Expected a dirty tab to close after saving succeeds.")
+        XCTAssertNil(controller.activeTabID, "Expected there to be no active tab after saving and closing the last tab.")
     }
 
     func testCompactTitlePreservesBothEndsForLongTitles() {

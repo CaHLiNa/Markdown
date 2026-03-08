@@ -14,10 +14,18 @@ struct ContentView: View {
     @FocusState private var focusedSearchField: SearchField?
     @State private var isRenamingTitle = false
     @State private var titleDraft = ""
+    @State private var outlineExpansionOverrides: [String: Bool] = [:]
 
     private enum SearchField: Hashable {
         case query
         case replacement
+    }
+
+    private struct OutlineEntry: Identifiable {
+        let item: EditorOutlineItem
+        let hasChildren: Bool
+
+        var id: String { item.id }
     }
 
     private enum Metrics {
@@ -63,10 +71,6 @@ struct ContentView: View {
 
     private var isSidebarVisible: Bool {
         documentController.isSidebarVisible && !documentController.isFocusModeEnabled
-    }
-
-    private var isEmptyVisualDocument: Bool {
-        documentController.currentMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var displayTitle: String {
@@ -264,14 +268,24 @@ struct ContentView: View {
                         .focused($isTitleFieldFocused)
                         .onSubmit(commitTitleRename)
                         .onExitCommand(perform: cancelTitleRename)
+                        .disabled(!documentController.hasOpenTab)
                 } else {
-                    Button(action: beginTitleRename) {
-                        Text(displayTitle)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(palette.titleText)
-                            .lineLimit(1)
+                    Group {
+                        if documentController.hasOpenTab {
+                            Button(action: beginTitleRename) {
+                                Text(displayTitle)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(palette.titleText)
+                                    .lineLimit(1)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Text(displayTitle)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(palette.titleText)
+                                .lineLimit(1)
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
 
                 if documentController.hasUnsavedChanges {
@@ -533,36 +547,215 @@ struct ContentView: View {
                 )
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(documentController.outlineItems) { item in
-                            Button {
-                                documentController.revealOutlineItem(item)
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Text(item.title)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(palette.secondaryText)
-                                        .lineLimit(1)
-                                        .padding(.leading, CGFloat(item.level) * 12 + 8)
-
-                                    Spacer(minLength: 0)
-                                }
-                                .frame(minHeight: 24)
-                                .padding(.horizontal, 8)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                        .fill(palette.rowHover)
-                                )
-                            }
-                            .buttonStyle(.plain)
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(visibleOutlineEntries) { entry in
+                            outlineRow(entry)
                         }
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 6)
                 }
+                .onChange(of: documentController.outlineItems.map(\.id)) { _, ids in
+                    outlineExpansionOverrides = outlineExpansionOverrides.filter { ids.contains($0.key) }
+                }
             }
         }
         .sidebarPanelStyle(palette: palette)
+    }
+
+    private var visibleOutlineEntries: [OutlineEntry] {
+        let items = documentController.outlineItems
+        var entries: [OutlineEntry] = []
+        var collapsedAncestorLevels: [Int] = []
+
+        for (index, item) in items.enumerated() {
+            while let lastLevel = collapsedAncestorLevels.last, lastLevel >= item.level {
+                collapsedAncestorLevels.removeLast()
+            }
+
+            let hasChildren = outlineItemHasChildren(at: index, in: items)
+            let isHiddenByAncestor = !collapsedAncestorLevels.isEmpty
+
+            if !isHiddenByAncestor {
+                entries.append(
+                    OutlineEntry(
+                        item: item,
+                        hasChildren: hasChildren
+                    )
+                )
+            }
+
+            if hasChildren && !isOutlineItemExpanded(item) {
+                collapsedAncestorLevels.append(item.level)
+            }
+        }
+
+        return entries
+    }
+
+    private func outlineRow(_ entry: OutlineEntry) -> some View {
+        let item = entry.item
+        let leadingInset = CGFloat(max(0, item.level - outlineBaseLevel)) * 14
+
+        return HStack(spacing: 6) {
+            Button {
+                if entry.hasChildren {
+                    toggleOutlineExpansion(for: item)
+                }
+            } label: {
+                Image(systemName: isOutlineItemExpanded(item) ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(entry.hasChildren ? palette.mutedText : .clear)
+                    .frame(width: 12, height: 12)
+            }
+            .buttonStyle(.plain)
+            .disabled(!entry.hasChildren)
+
+            Button {
+                documentController.revealOutlineItem(item)
+            } label: {
+                HStack(spacing: 0) {
+                    Text(item.title)
+                        .font(outlineTitleFont(for: item.level))
+                        .foregroundStyle(outlineTitleColor(for: item.level))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Spacer(minLength: 0)
+                }
+                .frame(minHeight: 28)
+                .padding(.leading, leadingInset)
+                .padding(.trailing, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, item.level == outlineBaseLevel ? 2 : 0)
+    }
+
+    private func outlineItemHasChildren(at index: Int, in items: [EditorOutlineItem]) -> Bool {
+        let currentLevel = items[index].level
+        let nextIndex = index + 1
+
+        guard nextIndex < items.count else {
+            return false
+        }
+
+        return items[nextIndex].level > currentLevel
+    }
+
+    private var outlineBaseLevel: Int {
+        documentController.outlineItems.map(\.level).min() ?? 1
+    }
+
+    private func isOutlineItemExpanded(_ item: EditorOutlineItem) -> Bool {
+        outlineExpansionOverrides[item.id] ?? false
+    }
+
+    private func toggleOutlineExpansion(for item: EditorOutlineItem) {
+        let items = documentController.outlineItems
+
+        guard let itemIndex = outlineIndex(for: item, in: items) else {
+            return
+        }
+
+        if isOutlineItemExpanded(item) {
+            outlineExpansionOverrides[item.id] = false
+            collapseOutlineDescendants(of: item, in: items)
+            return
+        }
+
+        let parentID = outlineParentID(for: itemIndex, in: items)
+
+        for siblingIndex in items.indices where siblingIndex != itemIndex {
+            let sibling = items[siblingIndex]
+
+            guard sibling.level == item.level else {
+                continue
+            }
+
+            guard outlineParentID(for: siblingIndex, in: items) == parentID else {
+                continue
+            }
+
+            outlineExpansionOverrides[sibling.id] = false
+            collapseOutlineDescendants(of: sibling, in: items)
+        }
+
+        outlineExpansionOverrides[item.id] = true
+    }
+
+    private func outlineIndex(for item: EditorOutlineItem, in items: [EditorOutlineItem]) -> Int? {
+        items.firstIndex { $0.id == item.id }
+    }
+
+    private func outlineParentID(for index: Int, in items: [EditorOutlineItem]) -> String? {
+        guard items.indices.contains(index) else {
+            return nil
+        }
+
+        let currentLevel = items[index].level
+
+        guard currentLevel > outlineBaseLevel, index > 0 else {
+            return nil
+        }
+
+        for candidateIndex in stride(from: index - 1, through: 0, by: -1) {
+            if items[candidateIndex].level < currentLevel {
+                return items[candidateIndex].id
+            }
+        }
+
+        return nil
+    }
+
+    private func outlineBranchUpperBound(startingAt index: Int, in items: [EditorOutlineItem]) -> Int {
+        let currentLevel = items[index].level
+        var upperBound = index + 1
+
+        while upperBound < items.count, items[upperBound].level > currentLevel {
+            upperBound += 1
+        }
+
+        return upperBound
+    }
+
+    private func collapseOutlineDescendants(of item: EditorOutlineItem, in items: [EditorOutlineItem]) {
+        guard let itemIndex = outlineIndex(for: item, in: items) else {
+            return
+        }
+
+        let upperBound = outlineBranchUpperBound(startingAt: itemIndex, in: items)
+
+        guard upperBound > itemIndex + 1 else {
+            return
+        }
+
+        for descendantIndex in (itemIndex + 1)..<upperBound {
+            outlineExpansionOverrides[items[descendantIndex].id] = false
+        }
+    }
+
+    private func outlineTitleFont(for level: Int) -> Font {
+        switch level {
+        case 1:
+            return .system(size: 13, weight: .semibold)
+        case 2:
+            return .system(size: 12, weight: .medium)
+        default:
+            return .system(size: 12, weight: .regular)
+        }
+    }
+
+    private func outlineTitleColor(for level: Int) -> Color {
+        switch level {
+        case 1:
+            return palette.primaryText
+        case 2:
+            return palette.primaryText.opacity(0.82)
+        default:
+            return palette.secondaryText
+        }
     }
 
     private var searchField: some View {
@@ -649,7 +842,9 @@ struct ContentView: View {
     }
 
     private func scrollActiveTab(using proxy: ScrollViewProxy, animated: Bool = true) {
-        let activeTabID = documentController.activeTabID
+        guard let activeTabID = documentController.activeTabID else {
+            return
+        }
 
         DispatchQueue.main.async {
             if animated {
@@ -754,6 +949,7 @@ struct ContentView: View {
         .background(palette.editorChrome)
         .contentShape(Rectangle())
         .help("显示所有标签页")
+        .disabled(documentController.tabs.isEmpty)
     }
 
     private var editorSurface: some View {
@@ -761,20 +957,15 @@ struct ContentView: View {
             palette.editorSurface
                 .ignoresSafeArea()
 
-            EditorWebView(
-                markdown: markdownBinding,
-                controller: documentController.editorController,
-                documentBaseURL: documentController.currentFileURL?.deletingLastPathComponent(),
-                presentation: documentController.currentPresentation,
-                revealRequest: documentController.revealRequest,
-                onImageAssetRequest: documentController.persistImageAsset
-            )
-
-            if isEmptyVisualDocument {
-                EmptyEditorHintView(palette: palette)
-                    .padding(.leading, Metrics.editorLeadingInset)
-                    .padding(.top, Metrics.editorTopInset)
-                    .allowsHitTesting(false)
+            if documentController.hasOpenTab {
+                EditorWebView(
+                    markdown: markdownBinding,
+                    controller: documentController.editorController,
+                    documentBaseURL: documentController.currentFileURL?.deletingLastPathComponent(),
+                    presentation: documentController.currentPresentation,
+                    revealRequest: documentController.revealRequest,
+                    onImageAssetRequest: documentController.persistImageAsset
+                )
             }
 
             if documentController.isDocumentSearchPresented {
@@ -941,6 +1132,10 @@ struct ContentView: View {
     }
 
     private func beginTitleRename() {
+        guard documentController.hasOpenTab else {
+            return
+        }
+
         titleDraft = displayTitle
         isRenamingTitle = true
     }
@@ -1076,23 +1271,6 @@ private struct SidebarEmptyStateView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-private struct EmptyEditorHintView: View {
-    let palette: EditorPalette
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("开始写作")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(palette.primaryText)
-
-            Text("输入内容，或在新行输入 @ 快速插入表格、代码块、任务列表等结构。")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(palette.secondaryText)
-                .frame(maxWidth: 320, alignment: .leading)
-        }
     }
 }
 

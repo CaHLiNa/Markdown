@@ -38,6 +38,17 @@ enum EditorTheme: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
+    var displayName: String {
+        switch self {
+        case .defaultTheme:
+            return "系统默认"
+        case .codexPaper:
+            return "纸页"
+        case .nightInk:
+            return "夜墨"
+        }
+    }
+
     func webTheme(for style: EditorInterfaceStyle) -> String {
         switch self {
         case .defaultTheme:
