@@ -451,7 +451,13 @@ export const blockMenuSections: CommandSectionDefinition[] = [
   {
     id: 'actions',
     label: '块操作',
-    commands: ['duplicate-block', 'new-paragraph']
+    commands: [
+      'toggle-global-source-mode',
+      'upgrade-heading',
+      'degrade-heading',
+      'duplicate-block',
+      'new-paragraph'
+    ]
   },
   {
     id: 'danger',

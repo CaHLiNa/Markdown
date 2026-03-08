@@ -19,8 +19,11 @@ import { type EditorPresentation } from '../editor-presentation'
 import { type EditorRuntimeState } from '../editor-state'
 import { renderMarkdownDocument } from '../markdown-renderer'
 import { runMilkdownCommand, runSourceCommand } from './commands-adapter'
+import { BlockHandleProvider } from './block-handle-provider'
 import { MarkdownOffsetMapper } from './offset-mapper'
+import { SlashMenuProvider } from './slash-provider'
 import { createSourceEditor, type SourceEditorController } from './source-editor'
+import { SelectionToolbarProvider } from './tooltip-provider'
 
 const insertedTextForKey = (key: string) => {
   switch (key) {
@@ -63,6 +66,11 @@ export class MilkdownSessionController {
   #milkdownReady: Promise<void> | null = null
   #milkdownMounted = false
   #sourceEditor: SourceEditorController | null = null
+  #slashMenu: SlashMenuProvider | null = null
+  #blockHandle: BlockHandleProvider | null = null
+  #selectionToolbar: SelectionToolbarProvider | null = null
+  #shortcutToggleScheduled = false
+  #pendingMilkdownDestroy: Promise<void> = Promise.resolve()
 
   constructor({
     root,
@@ -81,6 +89,7 @@ export class MilkdownSessionController {
     this.#mapper = new MarkdownOffsetMapper(initialMarkdown)
     this.#shell = document.createElement('div')
     this.#shell.className = 'md-editor'
+    this.#shell.addEventListener('keydown', this.#handleShellKeydown, true)
     this.#root.innerHTML = ''
     this.#root.append(this.#shell)
   }
@@ -167,6 +176,7 @@ export class MilkdownSessionController {
     }
 
     this.#milkdown.action(replaceAll(markdown, true))
+    this.#refreshWysiwygInteractions()
   }
 
   runCommand(command: EditorCommand) {
@@ -194,6 +204,7 @@ export class MilkdownSessionController {
 
     if (handled) {
       this.#syncMarkdownFromMilkdown()
+      this.#refreshWysiwygInteractions()
     }
 
     return handled
@@ -268,6 +279,14 @@ export class MilkdownSessionController {
       return false
     }
 
+    if (
+      this.#slashMenu?.handleKey(key) ||
+      this.#blockHandle?.handleKey(key) ||
+      this.#selectionToolbar?.handleKey(key)
+    ) {
+      return true
+    }
+
     const text = insertedTextForKey(key)
 
     if (text == null) {
@@ -280,6 +299,7 @@ export class MilkdownSessionController {
       const transaction = view.state.tr.insertText(text, from, to)
       view.dispatch(transaction.scrollIntoView())
       this.#syncMarkdownFromMilkdown()
+      this.#refreshWysiwygInteractions()
       return true
     })
   }
@@ -294,8 +314,10 @@ export class MilkdownSessionController {
   }
 
   async destroy() {
+    this.#shell.removeEventListener('keydown', this.#handleShellKeydown, true)
     this.#sourceEditor?.destroy()
     this.#sourceEditor = null
+    this.#destroyWysiwygInteractions()
 
     if (this.#milkdownReady) {
       await this.#milkdownReady
@@ -308,6 +330,8 @@ export class MilkdownSessionController {
       await activeMilkdown.destroy()
     }
 
+    await this.#pendingMilkdownDestroy
+
     this.#milkdownHost?.remove()
     this.#milkdownHost = null
     this.#shell.remove()
@@ -317,6 +341,25 @@ export class MilkdownSessionController {
     this.#shell.dataset.mode = this.#mode
     this.#shell.dataset.focusMode = this.#presentation?.focusMode ? 'true' : 'false'
     this.#shell.dataset.typewriterMode = this.#presentation?.typewriterMode ? 'true' : 'false'
+  }
+
+  #handleShellKeydown = (event: KeyboardEvent) => {
+    if (event.key !== '/' || (!event.metaKey && !event.ctrlKey)) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (this.#shortcutToggleScheduled) {
+      return
+    }
+
+    this.#shortcutToggleScheduled = true
+    queueMicrotask(() => {
+      this.#shortcutToggleScheduled = false
+      this.toggleGlobalSourceMode()
+    })
   }
 
   #emitMarkdownChange(markdown: string) {
@@ -343,6 +386,71 @@ export class MilkdownSessionController {
     this.#sourceEditor?.setMarkdown(markdown)
     this.#sourceEditor?.setSelection(selection.anchor, selection.head)
     this.#emitMarkdownChange(markdown)
+  }
+
+  #ensureWysiwygInteractions() {
+    if (!this.#milkdown || !this.#milkdownMounted) {
+      return
+    }
+
+    const view = this.#milkdown.action((ctx) => ctx.get(editorViewCtx))
+
+    if (!this.#slashMenu) {
+      this.#slashMenu = new SlashMenuProvider({
+        root: this.#shell,
+        onRunCommand: (command) => this.runCommand(command)
+      })
+    }
+
+    if (!this.#blockHandle) {
+      this.#blockHandle = new BlockHandleProvider({
+        root: this.#shell,
+        onInsert: () => {
+          const inserted = this.runCommand('new-paragraph')
+
+          if (!inserted) {
+            return
+          }
+
+          this.#slashMenu?.openAtSelection('')
+          this.#refreshWysiwygInteractions()
+        },
+        onRunCommand: (command) => this.runCommand(command)
+      })
+    }
+
+    if (!this.#selectionToolbar) {
+      this.#selectionToolbar = new SelectionToolbarProvider({
+        root: this.#shell,
+        onRunCommand: (command) => this.runCommand(command)
+      })
+    }
+
+    this.#slashMenu.attach(view)
+    this.#blockHandle.attach(view)
+    this.#selectionToolbar.attach(view)
+  }
+
+  #refreshWysiwygInteractions() {
+    if (this.#mode !== 'wysiwyg' || !this.#milkdown || !this.#milkdownMounted) {
+      return
+    }
+
+    this.#ensureWysiwygInteractions()
+
+    const view = this.#milkdown.action((ctx) => ctx.get(editorViewCtx))
+    this.#slashMenu?.update(view)
+    this.#blockHandle?.update(view)
+    this.#selectionToolbar?.update(view)
+  }
+
+  #destroyWysiwygInteractions() {
+    this.#slashMenu?.destroy()
+    this.#blockHandle?.destroy()
+    this.#selectionToolbar?.destroy()
+    this.#slashMenu = null
+    this.#blockHandle = null
+    this.#selectionToolbar = null
   }
 
   #normalizeSerializedMarkdown(markdown: string) {
@@ -380,10 +488,22 @@ export class MilkdownSessionController {
 
         listeners.markdownUpdated((_, markdown) => {
           this.#emitMarkdownChange(markdown)
+          this.#refreshWysiwygInteractions()
         })
 
         listeners.blur(() => {
           this.#selection = this.getSelectionOffsets()
+          this.#slashMenu?.close()
+          this.#selectionToolbar?.hide()
+          this.#blockHandle?.closeMenu()
+        })
+
+        listeners.focus(() => {
+          this.#refreshWysiwygInteractions()
+        })
+
+        listeners.selectionUpdated(() => {
+          this.#refreshWysiwygInteractions()
         })
       })
 
@@ -391,11 +511,14 @@ export class MilkdownSessionController {
     this.#milkdownReady = editor.create().then(() => {
       this.#milkdownMounted = true
       this.#syncMarkdownFromMilkdown()
+      this.#ensureWysiwygInteractions()
+      this.#refreshWysiwygInteractions()
     })
     await this.#milkdownReady
   }
 
   #unmountWysiwyg() {
+    this.#destroyWysiwygInteractions()
     const activeMilkdown = this.#milkdown
     const host = this.#milkdownHost
     this.#milkdown = null
@@ -404,7 +527,10 @@ export class MilkdownSessionController {
     host?.remove()
 
     if (activeMilkdown) {
-      void activeMilkdown.destroy()
+      const destroyPromise = activeMilkdown.destroy().catch(() => undefined)
+      this.#pendingMilkdownDestroy = this.#pendingMilkdownDestroy.then(async () => {
+        await destroyPromise
+      })
     }
   }
 

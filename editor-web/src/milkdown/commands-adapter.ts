@@ -1,6 +1,7 @@
 import type { Editor } from '@milkdown/kit/core'
 import { editorViewCtx } from '@milkdown/kit/core'
 import { setBlockType, toggleMark, wrapIn } from '@milkdown/kit/prose/commands'
+import { TextSelection } from '@milkdown/prose/state'
 import {
   blockquoteSchema,
   bulletListSchema,
@@ -242,7 +243,9 @@ export const runMilkdownCommand = (editor: Editor, command: EditorCommand) => {
         if (!node) {
           return false
         }
-        block.view.dispatch(block.view.state.tr.insert(block.to, node).scrollIntoView())
+        const transaction = block.view.state.tr.insert(block.to, node)
+        transaction.setSelection(TextSelection.create(transaction.doc, block.to + 1))
+        block.view.dispatch(transaction.scrollIntoView())
         return true
       })
     case 'duplicate-block':
@@ -285,6 +288,38 @@ export const runMilkdownCommand = (editor: Editor, command: EditorCommand) => {
         }).scrollIntoView())
         return true
       })
+    default:
+      return false
+  }
+}
+
+export const supportsMilkdownCommand = (command: EditorCommand) => {
+  switch (command) {
+    case 'paragraph':
+    case 'heading-1':
+    case 'heading-2':
+    case 'heading-3':
+    case 'heading-4':
+    case 'heading-5':
+    case 'heading-6':
+    case 'upgrade-heading':
+    case 'degrade-heading':
+    case 'blockquote':
+    case 'bullet-list':
+    case 'ordered-list':
+    case 'code-block':
+    case 'bold':
+    case 'italic':
+    case 'inline-code':
+    case 'strikethrough':
+    case 'link':
+    case 'horizontal-rule':
+    case 'image':
+    case 'table':
+    case 'duplicate-block':
+    case 'new-paragraph':
+    case 'delete-block':
+      return true
     default:
       return false
   }

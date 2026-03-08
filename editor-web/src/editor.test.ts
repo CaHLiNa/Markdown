@@ -175,7 +175,7 @@ describe('createMarkdownEditor', () => {
 
     expect(editor.getMarkdown()).toContain('```')
     expect(editor.getMarkdown()).not.toContain('/co')
-    expect(root.querySelector('.cm-quick-insert')).toBeNull()
+    expect(root.querySelector<HTMLElement>('.cm-quick-insert')?.hidden).toBe(true)
 
     await editor.destroy()
   })
