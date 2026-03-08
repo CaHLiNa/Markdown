@@ -41,7 +41,7 @@ struct MarkdownApp: App {
             } else {
                 EditorSettingsView()
                     .environmentObject(documentController)
-                    .frame(minWidth: 820, idealWidth: 860, minHeight: 560)
+                    .frame(minWidth: 900, idealWidth: 940, minHeight: 620)
             }
         }
     }
@@ -521,120 +521,134 @@ private struct EditorViewCommands: Commands {
 }
 
 private enum EditorSettingsSection: String, CaseIterable, Identifiable {
-    case general
+    case appearance
     case editor
-    case input
+    case markdown
     case export
+    case general
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .general:
-            return "通用"
+        case .appearance:
+            return "外观"
         case .editor:
             return "编辑器"
-        case .input:
-            return "输入"
+        case .markdown:
+            return "Markdown"
         case .export:
             return "导出"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
         case .general:
-            return "窗口、界面与默认工作方式"
-        case .editor:
-            return "主题、字体与排版密度"
-        case .input:
-            return "输入辅助与编辑行为"
-        case .export:
-            return "导出外观与输出偏好"
+            return "通用"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .general:
-            return "slider.horizontal.3"
+        case .appearance:
+            return "paintbrush"
         case .editor:
-            return "textformat.size"
-        case .input:
-            return "keyboard"
+            return "pencil.and.ruler"
+        case .markdown:
+            return "chevron.left.forwardslash.chevron.right"
         case .export:
             return "square.and.arrow.up"
+        case .general:
+            return "gearshape"
+        }
+    }
+
+    var keywords: [String] {
+        switch self {
+        case .appearance:
+            return ["主题", "颜色", "深色", "浅色"]
+        case .editor:
+            return ["字体", "字号", "行高", "宽度", "代码"]
+        case .markdown:
+            return ["括号", "引号", "自动配对", "提示"]
+        case .export:
+            return ["HTML", "PDF", "导出", "主题"]
+        case .general:
+            return ["标签栏", "专注", "打字机", "窗口"]
         }
     }
 }
 
 private struct EditorSettingsView: View {
     @EnvironmentObject private var documentController: EditorDocumentController
-    @State private var selectedSection: EditorSettingsSection = .general
+    @State private var selectedSection: EditorSettingsSection = .appearance
+    @State private var settingsQuery = ""
 
     private var preferredColorScheme: ColorScheme {
         documentController.effectiveInterfaceStyle == .dark ? .dark : .light
     }
 
-    private var previewBodyWidth: CGFloat {
-        let digits = documentController.editorPageWidth.filter { "0123456789.".contains($0) }
-        let rawWidth = Double(digits) ?? 860
-        return min(max(CGFloat(rawWidth) * 0.34, 280), 480)
+    private var sidebarSelectionFill: Color {
+        Color.accentColor.opacity(preferredColorScheme == .dark ? 0.22 : 0.12)
     }
 
-    private var previewBodyLineSpacing: CGFloat {
-        max(0, CGFloat(documentController.editorFontSize) * CGFloat(documentController.editorLineHeight - 1))
+    private var filteredSections: [EditorSettingsSection] {
+        let trimmedQuery = settingsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedQuery.isEmpty else {
+            return EditorSettingsSection.allCases
+        }
+
+        return EditorSettingsSection.allCases.filter { section in
+            section.title.localizedCaseInsensitiveContains(trimmedQuery) ||
+                section.keywords.contains { $0.localizedCaseInsensitiveContains(trimmedQuery) }
+        }
     }
 
-    private var primaryBodyFontName: String {
-        primaryFontName(from: documentController.editorFontFamily) ?? "Iowan Old Style"
-    }
+    private var activeSection: EditorSettingsSection? {
+        if filteredSections.contains(selectedSection) {
+            return selectedSection
+        }
 
-    private var primaryCodeFontName: String {
-        primaryFontName(from: documentController.codeFontFamily) ?? "SF Mono"
+        return filteredSections.first
     }
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("偏好设置")
-                        .font(.system(size: 22, weight: .semibold))
-                    Text("把常用偏好收拢到更稳定的原生设置结构里。")
-                        .font(.system(size: 12, weight: .regular))
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
 
-                VStack(spacing: 6) {
-                    ForEach(EditorSettingsSection.allCases) { section in
+                    TextField("查找...", text: $settingsQuery)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, weight: .regular))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                )
+
+                VStack(spacing: 4) {
+                    ForEach(filteredSections) { section in
                         Button {
                             selectedSection = section
                         } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: section.systemImage)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .frame(width: 16)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .frame(width: 18)
 
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(section.title)
-                                        .font(.system(size: 13, weight: .semibold))
-                                    Text(section.subtitle)
-                                        .font(.system(size: 11, weight: .regular))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
+                                Text(section.title)
+                                    .font(.system(size: 14, weight: .medium))
 
                                 Spacer(minLength: 0)
                             }
-                            .padding(.horizontal, 12)
+                            .foregroundStyle(selectedSection == section ? .primary : .secondary)
+                            .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                             .background(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(selectedSection == section
-                                        ? Color.accentColor.opacity(preferredColorScheme == .dark ? 0.24 : 0.12)
-                                        : Color.clear
-                                    )
+                                    .fill(selectedSection == section ? sidebarSelectionFill : Color.clear)
                             )
                         }
                         .buttonStyle(.plain)
@@ -642,42 +656,46 @@ private struct EditorSettingsView: View {
                 }
 
                 Spacer(minLength: 0)
-
-                Text("Markdown")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 24)
-            .frame(width: 248)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 18)
+            .frame(width: 232)
             .frame(maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .underPageBackgroundColor))
 
             Divider()
 
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(selectedSection.title)
-                            .font(.system(size: 24, weight: .semibold))
-                        Text(selectedSection.subtitle)
+                if let activeSection {
+                    VStack(alignment: .leading, spacing: 26) {
+                        switch activeSection {
+                        case .appearance:
+                            appearanceSettingsContent
+                        case .editor:
+                            editorSettingsContent
+                        case .markdown:
+                            markdownSettingsContent
+                        case .export:
+                            exportSettingsContent
+                        case .general:
+                            generalSettingsContent
+                        }
+                    }
+                    .frame(maxWidth: 720, alignment: .leading)
+                    .padding(.horizontal, 36)
+                    .padding(.vertical, 28)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("没有匹配项")
+                            .font(.system(size: 22, weight: .semibold))
+                        Text("换个关键词再试。")
                             .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(.secondary)
                     }
-
-                    switch selectedSection {
-                    case .general:
-                        generalSettingsContent
-                    case .editor:
-                        editorSettingsContent
-                    case .input:
-                        inputSettingsContent
-                    case .export:
-                        exportSettingsContent
-                    }
+                    .frame(maxWidth: .infinity, minHeight: 360, alignment: .topLeading)
+                    .padding(.horizontal, 36)
+                    .padding(.vertical, 32)
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 26)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .windowBackgroundColor))
@@ -685,120 +703,93 @@ private struct EditorSettingsView: View {
         .preferredColorScheme(preferredColorScheme)
     }
 
-    private var generalSettingsContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            SettingsCard(
-                title: "界面与窗口",
-                subtitle: "这些设置决定应用的整体工作环境。"
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Picker("界面外观", selection: $documentController.appearanceMode) {
+    private var appearanceSettingsContent: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            SettingsSectionGroup(title: "界面") {
+                SettingsFieldBlock(title: "颜色模式") {
+                    SettingsRadioStrip {
                         ForEach(EditorAppearanceMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
+                            SettingsRadioOption(value: mode, selection: $documentController.appearanceMode, title: mode.rawValue)
                         }
                     }
-                    .pickerStyle(.segmented)
-
-                    Toggle("默认显示标签栏", isOn: $documentController.isTabStripVisible)
-                    Toggle("默认启用专注模式", isOn: $documentController.isFocusModeEnabled)
-                    Toggle("默认启用打字机模式", isOn: $documentController.isTypewriterModeEnabled)
                 }
-            }
 
-            SettingsCard(
-                title: "文档行为",
-                subtitle: "当前版本文档生命周期采用标签页模式。"
-            ) {
-                VStack(alignment: .leading, spacing: 10) {
-                    SettingsInfoRow(title: "新建文稿", value: "通过标签页创建")
-                    SettingsInfoRow(title: "关闭未保存文稿", value: "关闭前询问保存")
-                    SettingsInfoRow(title: "快速打开", value: "Command + P")
+                SettingsFieldBlock(title: "编辑器主题") {
+                    SettingsRadioStrip {
+                        ForEach(EditorTheme.allCases) { theme in
+                            SettingsRadioOption(value: theme, selection: $documentController.editorTheme, title: theme.displayName)
+                        }
+                    }
                 }
             }
         }
     }
 
     private var editorSettingsContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            SettingsCard(
-                title: "主题与排版",
-                subtitle: "编辑器外观、阅读宽度与文本节奏。"
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Picker("编辑器主题", selection: $documentController.editorTheme) {
-                        ForEach(EditorTheme.allCases) { theme in
-                            Text(theme.displayName).tag(theme)
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 26) {
+            SettingsSectionGroup(title: "正文") {
+                SettingsFieldBlock(title: "字体") {
+                    TextField("", text: $documentController.editorFontFamily)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 280)
+                }
 
-                    TextField("正文字体", text: $documentController.editorFontFamily)
-                    TextField("页面宽度", text: $documentController.editorPageWidth)
+                SettingsFieldBlock(title: "字号") {
+                    SettingsStepperField(
+                        value: $documentController.editorFontSize,
+                        range: 12...32,
+                        step: 1,
+                        format: .number.precision(.fractionLength(0)),
+                        suffix: "pt",
+                        width: 82
+                    )
+                }
 
-                    Stepper(value: $documentController.editorFontSize, in: 12...32, step: 1) {
-                        Text("正文字号 \(Int(documentController.editorFontSize)) pt")
-                    }
+                SettingsFieldBlock(title: "行高") {
+                    SettingsStepperField(
+                        value: $documentController.editorLineHeight,
+                        range: 1.2...2.4,
+                        step: 0.05,
+                        format: .number.precision(.fractionLength(2)),
+                        suffix: nil,
+                        width: 82
+                    )
+                }
 
-                    Stepper(value: $documentController.editorLineHeight, in: 1.2...2.4, step: 0.05) {
-                        Text("正文行高 \(documentController.editorLineHeight, specifier: "%.2f")")
-                    }
+                SettingsFieldBlock(title: "页面宽度") {
+                    TextField("", text: $documentController.editorPageWidth)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
                 }
             }
 
-            SettingsCard(
-                title: "代码排版",
-                subtitle: "代码块和行内代码使用独立字体体系。"
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
-                    TextField("代码字体", text: $documentController.codeFontFamily)
+            Divider()
 
-                    Stepper(value: $documentController.codeFontSize, in: 12...28, step: 1) {
-                        Text("代码字号 \(Int(documentController.codeFontSize)) pt")
-                    }
+            SettingsSectionGroup(title: "代码") {
+                SettingsFieldBlock(title: "字体") {
+                    TextField("", text: $documentController.codeFontFamily)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 280)
                 }
-            }
 
-            SettingsCard(
-                title: "排版预览",
-                subtitle: "这里的预览会跟随字号、行高与宽度设置一起变化。"
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 14) {
-                        SettingsInfoRow(title: "正文", value: primaryBodyFontName)
-                        SettingsInfoRow(title: "代码", value: primaryCodeFontName)
-                    }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("控制理论中的稳定性分析")
-                            .font(.custom(primaryBodyFontName, size: CGFloat(documentController.editorFontSize + 7)))
-                            .fontWeight(.semibold)
-
-                        Text("通过选择合适的李雅普诺夫函数，可以在不直接求解系统轨迹的情况下，判断系统在平衡点附近的稳定性与收敛速度。")
-                            .font(.custom(primaryBodyFontName, size: CGFloat(documentController.editorFontSize)))
-                            .lineSpacing(previewBodyLineSpacing)
-                            .foregroundStyle(.secondary)
-
-                        Text("x_{k+1} = Ax_k + Bu_k")
-                            .font(.custom(primaryCodeFontName, size: CGFloat(documentController.codeFontSize)))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: previewBodyWidth, alignment: .leading)
-                    .padding(18)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color(nsColor: .controlBackgroundColor))
+                SettingsFieldBlock(title: "字号") {
+                    SettingsStepperField(
+                        value: $documentController.codeFontSize,
+                        range: 12...28,
+                        step: 1,
+                        format: .number.precision(.fractionLength(0)),
+                        suffix: "pt",
+                        width: 82
                     )
                 }
             }
         }
     }
 
-    private var inputSettingsContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            SettingsCard(
-                title: "输入辅助",
-                subtitle: "控制编辑时的自动补全和提示行为。"
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
+    private var markdownSettingsContent: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            SettingsSectionGroup(title: "输入辅助") {
+                VStack(alignment: .leading, spacing: 12) {
                     Toggle("隐藏快速插入提示", isOn: $documentController.hideQuickInsertHint)
                     Toggle("括号自动配对", isOn: $documentController.autoPairBracket)
                     Toggle("Markdown 语法自动配对", isOn: $documentController.autoPairMarkdownSyntax)
@@ -809,107 +800,118 @@ private struct EditorSettingsView: View {
     }
 
     private var exportSettingsContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            SettingsCard(
-                title: "导出外观",
-                subtitle: "控制 HTML 与 PDF 等导出结果的视觉样式。"
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Picker("HTML 导出主题", selection: $documentController.htmlExportTheme) {
+        VStack(alignment: .leading, spacing: 26) {
+            SettingsSectionGroup(title: "HTML") {
+                SettingsFieldBlock(title: "主题") {
+                    Picker("", selection: $documentController.htmlExportTheme) {
                         ForEach(MarkdownExportTheme.allCases) { theme in
                             Text(theme.displayName).tag(theme)
                         }
                     }
-
-                    Text("PDF 导出将跟随当前渲染结果。")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            SettingsCard(
-                title: "导出提示",
-                subtitle: "当前已经支持 HTML、PDF 与打印输出。"
-            ) {
-                VStack(alignment: .leading, spacing: 10) {
-                    SettingsInfoRow(title: "HTML", value: "适合发布与分享")
-                    SettingsInfoRow(title: "PDF", value: "适合归档与打印")
-                    SettingsInfoRow(title: "打印", value: "直接使用当前排版结果")
+                    .labelsHidden()
+                    .frame(width: 220)
                 }
             }
         }
     }
 
-    private func primaryFontName(from cssStack: String) -> String? {
-        let candidates = cssStack
-            .split(separator: ",")
-            .map { fragment in
-                fragment
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .replacingOccurrences(of: "\"", with: "")
+    private var generalSettingsContent: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            SettingsSectionGroup(title: "窗口") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("默认显示标签栏", isOn: $documentController.isTabStripVisible)
+                    Toggle("默认启用专注模式", isOn: $documentController.isFocusModeEnabled)
+                    Toggle("默认启用打字机模式", isOn: $documentController.isTypewriterModeEnabled)
+                }
             }
-            .filter { candidate in
-                let lowercased = candidate.lowercased()
-                return !candidate.isEmpty &&
-                    lowercased != "serif" &&
-                    lowercased != "sans-serif" &&
-                    lowercased != "monospace" &&
-                    lowercased != "ui-monospace"
-            }
-
-        return candidates.first
+        }
     }
 }
 
-private struct SettingsCard<Content: View>: View {
+private struct SettingsSectionGroup<Content: View>: View {
     let title: String
-    let subtitle: String?
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+        VStack(alignment: .leading, spacing: 18) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
 
             content
         }
-        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        )
     }
 }
 
-private struct SettingsInfoRow: View {
+private struct SettingsFieldBlock<Content: View>: View {
     let title: String
-    let value: String
+    @ViewBuilder let content: Content
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        VStack(alignment: .leading, spacing: 9) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 96, alignment: .leading)
+                .font(.system(size: 13, weight: .semibold))
 
-            Text(value)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            content
+        }
+    }
+}
+
+private struct SettingsRadioStrip<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 32) {
+            content
+        }
+    }
+}
+
+private struct SettingsRadioOption<Value: Hashable>: View {
+    let value: Value
+    @Binding var selection: Value
+    let title: String
+
+    var body: some View {
+        Button {
+            selection = value
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selection == value ? "smallcircle.filled.circle.fill" : "circle")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(selection == value ? Color.accentColor : .secondary)
+
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.primary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SettingsStepperField: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let format: FloatingPointFormatStyle<Double>
+    let suffix: String?
+    let width: CGFloat
+
+    var body: some View {
+        HStack(spacing: 10) {
+            TextField("", value: $value, format: format)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: width)
+
+            Stepper("", value: $value, in: range, step: step)
+                .labelsHidden()
+
+            if let suffix {
+                Text(suffix)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
