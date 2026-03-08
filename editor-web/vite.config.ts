@@ -25,7 +25,19 @@ export default defineConfig({
     viteStaticCopy({
       targets: [
         {
-          src: 'node_modules/vditor/dist/**/*',
+          src: 'node_modules/vditor/dist/js/**/*',
+          dest: 'vditor/dist/js'
+        },
+        {
+          src: 'node_modules/vditor/dist/css/**/*',
+          dest: 'vditor/dist/css'
+        },
+        {
+          src: 'node_modules/vditor/dist/images/**/*',
+          dest: 'vditor/dist/images'
+        },
+        {
+          src: 'node_modules/vditor/dist/index.min.js',
           dest: 'vditor/dist'
         }
       ]
@@ -33,7 +45,7 @@ export default defineConfig({
   ],
   build: {
     assetsDir: '.',
-    chunkSizeWarningLimit: 550,
+    chunkSizeWarningLimit: 1500,
     emptyOutDir: true,
     outDir: '../Markdown/Editor',
     rollupOptions: {

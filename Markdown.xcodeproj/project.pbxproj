@@ -31,9 +31,6 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		8CF4859C2F5C458500A74B00 /* Markdown */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			explicitFolders = (
-				Editor/vditor/dist/sv,
-			);
 			path = Markdown;
 			sourceTree = "<group>";
 		};
