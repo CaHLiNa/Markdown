@@ -10,18 +10,18 @@
   --editor-heading: #17120d;
   --editor-link: #8d5425;
   --editor-border: rgba(54, 46, 39, 0.12);
-  --editor-inline-code: rgba(244, 234, 219, 0.82);
-  --editor-inline-code-border: rgba(141, 84, 37, 0.12);
-  --editor-code-block: rgba(248, 243, 236, 0.92);
-  --editor-code-block-border: rgba(70, 56, 41, 0.1);
-  --editor-code-block-focus: rgba(244, 238, 230, 0.98);
-  --editor-math-block: rgba(252, 249, 245, 0.92);
-  --editor-math-border: rgba(141, 84, 37, 0.14);
-  --editor-quote-surface: rgba(177, 109, 52, 0.06);
+  --editor-inline-code: rgba(244, 234, 219, 0.44);
+  --editor-inline-code-border: rgba(141, 84, 37, 0.06);
+  --editor-code-block: rgba(246, 241, 233, 0.5);
+  --editor-code-block-border: rgba(70, 56, 41, 0.04);
+  --editor-code-block-focus: rgba(246, 241, 233, 0.72);
+  --editor-math-block: transparent;
+  --editor-math-border: transparent;
+  --editor-quote-surface: transparent;
   --editor-selection: rgba(201, 135, 70, 0.18);
   --editor-quote: #b16d34;
   --editor-canvas: transparent;
-  --editor-shadow: 0 1px 0 rgba(255, 255, 255, 0.35) inset;
+  --editor-shadow: none;
   color-scheme: light;
   background: transparent;
 }
@@ -32,17 +32,17 @@
   --editor-heading: #f9f5ef;
   --editor-link: #f0a35c;
   --editor-border: rgba(255, 255, 255, 0.08);
-  --editor-inline-code: rgba(255, 255, 255, 0.06);
-  --editor-inline-code-border: rgba(255, 255, 255, 0.07);
-  --editor-code-block: rgba(23, 27, 33, 0.88);
-  --editor-code-block-border: rgba(255, 255, 255, 0.08);
-  --editor-code-block-focus: rgba(27, 32, 39, 0.96);
-  --editor-math-block: rgba(248, 241, 231, 0.04);
-  --editor-math-border: rgba(240, 163, 92, 0.16);
-  --editor-quote-surface: rgba(255, 255, 255, 0.03);
+  --editor-inline-code: rgba(255, 255, 255, 0.05);
+  --editor-inline-code-border: rgba(255, 255, 255, 0.04);
+  --editor-code-block: rgba(255, 255, 255, 0.035);
+  --editor-code-block-border: rgba(255, 255, 255, 0.05);
+  --editor-code-block-focus: rgba(255, 255, 255, 0.055);
+  --editor-math-block: transparent;
+  --editor-math-border: transparent;
+  --editor-quote-surface: transparent;
   --editor-selection: rgba(240, 163, 92, 0.2);
   --editor-quote: #f0a35c;
-  --editor-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --editor-shadow: none;
   color-scheme: dark;
 }
 
@@ -52,17 +52,17 @@
   --editor-heading: #34261c;
   --editor-link: #9c6332;
   --editor-border: rgba(92, 69, 44, 0.12);
-  --editor-inline-code: rgba(238, 219, 184, 0.72);
-  --editor-inline-code-border: rgba(140, 99, 56, 0.14);
-  --editor-code-block: rgba(244, 232, 211, 0.86);
-  --editor-code-block-border: rgba(104, 79, 52, 0.12);
-  --editor-code-block-focus: rgba(241, 228, 205, 0.96);
-  --editor-math-block: rgba(247, 238, 221, 0.9);
-  --editor-math-border: rgba(156, 99, 50, 0.16);
-  --editor-quote-surface: rgba(161, 95, 40, 0.06);
+  --editor-inline-code: rgba(238, 219, 184, 0.48);
+  --editor-inline-code-border: rgba(140, 99, 56, 0.08);
+  --editor-code-block: rgba(244, 232, 211, 0.44);
+  --editor-code-block-border: rgba(104, 79, 52, 0.06);
+  --editor-code-block-focus: rgba(241, 228, 205, 0.7);
+  --editor-math-block: transparent;
+  --editor-math-border: transparent;
+  --editor-quote-surface: transparent;
   --editor-selection: rgba(166, 111, 59, 0.18);
   --editor-quote: #a15f28;
-  --editor-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset;
+  --editor-shadow: none;
   color-scheme: light;
 }
 
@@ -117,7 +117,7 @@ body {
   min-height: 100vh;
   max-width: min(100%, var(--editor-page-width));
   margin: 0 auto;
-  padding: 42px clamp(28px, 4.6vw, 72px) 160px;
+  padding: 22px clamp(20px, 3.4vw, 56px) 120px;
   box-sizing: border-box;
   color: var(--editor-text);
   caret-color: var(--editor-heading);
@@ -160,7 +160,7 @@ body {
 .vditor-reset pre,
 .vditor-reset .language-math,
 .vditor-reset table {
-  margin: 0 0 0.92rem;
+  margin: 0 0 0.7rem;
 }
 
 .vditor-ir p,
@@ -181,7 +181,7 @@ body {
 
 .vditor-ir li + li,
 .vditor-reset li + li {
-  margin-top: 0.18rem;
+  margin-top: 0.12rem;
 }
 
 .vditor-ir h1,
@@ -199,13 +199,13 @@ body {
   color: var(--editor-heading);
   line-height: 1.2;
   letter-spacing: -0.02em;
-  margin: 1.6rem 0 0.7rem;
+  margin: 1.15rem 0 0.42rem;
 }
 
 .vditor-ir h1,
 .vditor-reset h1 {
   margin-top: 0;
-  margin-bottom: 0.95rem;
+  margin-bottom: 0.72rem;
   font-size: clamp(2.1rem, 2.8vw, 2.7rem);
 }
 
@@ -249,20 +249,20 @@ body {
 .vditor-ir li code:not(.hljs):not(.highlight-chroma),
 .vditor-reset p code:not(.hljs):not(.highlight-chroma),
 .vditor-reset li code:not(.hljs):not(.highlight-chroma) {
-  padding: 0.12rem 0.38rem;
+  padding: 0.08rem 0.34rem;
   border: 1px solid var(--editor-inline-code-border);
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--editor-inline-code) !important;
   background-image: none !important;
 }
 
 .vditor-ir blockquote,
 .vditor-reset blockquote {
-  margin: 1rem 0 1.1rem;
-  padding: 0.2rem 0 0.2rem 1rem;
+  margin: 0.85rem 0 0.9rem;
+  padding: 0.06rem 0 0.06rem 0.8rem;
   border-left: 2px solid var(--editor-quote);
-  background: linear-gradient(90deg, var(--editor-quote-surface), transparent 72%);
-  border-radius: 0 12px 12px 0;
+  background: none;
+  border-radius: 0;
   color: var(--editor-muted);
 }
 
@@ -291,7 +291,7 @@ body {
 
 .vditor-ir__node[data-type='code-block'],
 .vditor-ir__node[data-type='math-block'] {
-  margin: 0.35rem 0 1.2rem;
+  margin: 0.2rem 0 0.62rem;
 }
 
 .vditor-ir__node--expand[data-type='code-block']:before,
@@ -300,31 +300,34 @@ body {
 .vditor-ir__node--expand[data-type='math-block']:after,
 .vditor-ir__node--expand .vditor-ir__marker {
   color: var(--editor-muted);
-  opacity: 0.72;
+  opacity: 0.56;
 }
 
 .vditor-ir pre,
-.vditor-reset pre {
-  margin: 1rem 0 1.15rem;
+.vditor-reset pre,
+.vditor-ir > pre.vditor-reset {
+  margin: 0;
   padding: 0;
   background: transparent !important;
-  border-radius: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
   overflow: visible;
+  box-shadow: none !important;
 }
 
-.vditor-ir pre.vditor-reset,
+.vditor-ir__node[data-type='code-block'] pre.vditor-reset,
 .vditor-reset pre {
-  padding: 0.95rem 1.05rem;
+  margin: 0.5rem 0 0.72rem;
+  padding: 0.72rem 0.84rem;
   overflow-x: auto;
-  border: 1px solid var(--editor-code-block-border);
-  border-radius: 14px;
+  border: 1px solid var(--editor-code-block-border) !important;
+  border-radius: 6px !important;
   background: var(--editor-code-block) !important;
   box-shadow: var(--editor-shadow);
 }
 
-.vditor-ir pre.vditor-reset:focus {
+.vditor-ir__node[data-type='code-block'] pre.vditor-reset:focus {
   background: var(--editor-code-block-focus) !important;
-  border-color: var(--editor-math-border);
 }
 
 .vditor-ir pre > code,
@@ -343,27 +346,68 @@ body {
 .vditor-ir__node[data-type='math-block'] .vditor-ir__preview,
 .vditor-reset .language-math {
   display: block;
-  margin: 0.35rem 0;
-  padding: 1.05rem 1.25rem;
-  border: 1px solid var(--editor-math-border);
-  border-radius: 16px;
+  width: 100%;
+  margin: 0.1rem 0 0.2rem;
+  padding: 0.1rem 0;
+  border: 0 !important;
+  border-radius: 0 !important;
   background: var(--editor-math-block) !important;
-  box-shadow: var(--editor-shadow);
+  box-shadow: none !important;
   color: var(--editor-text) !important;
   text-align: center;
 }
 
+.vditor-ir__node--expand[data-type='math-block'] {
+  display: block;
+}
+
+.vditor-ir__node--expand[data-type='math-block']:before,
+.vditor-ir__node--expand[data-type='math-block']:after {
+  display: block;
+  line-height: 1.15;
+  margin: 0;
+}
+
+.vditor-ir__node--expand[data-type='math-block'] .vditor-ir__marker--pre {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  color: var(--editor-text);
+  white-space: pre-wrap;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.vditor-ir__node--expand[data-type='math-block'] .vditor-ir__marker--pre code {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  white-space: pre-wrap;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
 .vditor-ir__node[data-type='math-block'] .vditor-ir__preview .katex-display,
 .vditor-reset .language-math .katex-display {
-  margin: 0;
+  margin: 0.08rem 0;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 0.12rem 0;
+  padding: 0;
 }
 
 .vditor-ir__node[data-type='math-block'] .vditor-ir__preview .katex,
 .vditor-reset .language-math .katex {
-  font-size: 1.02em;
+  font-size: 1.04em;
 }
 
 .vditor-ir .task-list-item,
