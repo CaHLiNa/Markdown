@@ -1323,10 +1323,9 @@ export const createMarkdownEditor = async ({
     return applyTransform(updateMarkdownTable(markdown, selection, updater))
   }
 
-  const expandTableToDimensions = (context: TableContext, requestedRows: number, requestedColumns: number) => {
-    const { rows: currentRows, columns: currentColumns } = getCurrentTableDimensions(context.tableElement)
-    const targetRows = Math.max(requestedRows, currentRows)
-    const targetColumns = Math.max(requestedColumns, currentColumns)
+  const resizeTableToDimensions = (context: TableContext, requestedRows: number, requestedColumns: number) => {
+    const targetRows = Math.max(1, requestedRows)
+    const targetColumns = Math.max(1, requestedColumns)
 
     return applyCurrentTableTransform(context, (table) => {
       table.header = normalizeMarkdownTableRow(table.header, targetColumns)
@@ -1334,7 +1333,9 @@ export const createMarkdownEditor = async ({
         table.aligns.map((align) => align ?? ''),
         targetColumns
       ).map((align) => (align === 'left' || align === 'center' || align === 'right' ? align : null))
-      table.rows = table.rows.map((row) => normalizeMarkdownTableRow(row, targetColumns))
+      table.rows = table.rows
+        .slice(0, Math.max(0, targetRows - 1))
+        .map((row) => normalizeMarkdownTableRow(row, targetColumns))
 
       while (table.rows.length < targetRows - 1) {
         table.rows.push(Array.from({ length: targetColumns }, () => ''))
@@ -1516,12 +1517,12 @@ export const createMarkdownEditor = async ({
       }
 
       hideTableToolbarPopover()
-      void expandTableToDimensions(context, selectedRows, selectedColumns)
+      void resizeTableToDimensions(context, selectedRows, selectedColumns)
     }
 
     const updateSelection = (rows: number, columns: number) => {
-      selectedRows = Math.max(rows, currentRows)
-      selectedColumns = Math.max(columns, currentColumns)
+      selectedRows = clamp(rows, 1, maxRows)
+      selectedColumns = clamp(columns, 1, maxColumns)
 
       for (const cellElement of Array.from(matrixElement.children) as HTMLButtonElement[]) {
         const cellRows = Number.parseInt(cellElement.dataset.rows ?? '0', 10)
@@ -1533,7 +1534,7 @@ export const createMarkdownEditor = async ({
         cellElement.dataset.required = isRequired ? 'true' : 'false'
       }
 
-      footerElement.textContent = `扩展到 ${selectedRows} × ${selectedColumns}`
+      footerElement.textContent = `调整为 ${selectedRows} × ${selectedColumns}`
     }
 
     for (let rowIndex = 1; rowIndex <= maxRows; rowIndex += 1) {
@@ -1575,7 +1576,7 @@ export const createMarkdownEditor = async ({
     }
 
     updateSelection(currentRows, currentColumns)
-    footerElement.textContent = `扩展到 ${currentRows} × ${currentColumns}`
+    footerElement.textContent = `调整为 ${currentRows} × ${currentColumns}`
     panelElement.append(matrixElement, footerElement)
     tableToolbarPopover.replaceChildren(panelElement)
   }
@@ -1831,16 +1832,11 @@ export const createMarkdownEditor = async ({
       button.innerHTML = TABLE_TOOLBAR_ICONS[icon]
       button.addEventListener('pointerdown', (event) => {
         markTableToolbarInteraction()
-
-        if (event.button === 0) {
-          event.preventDefault()
-        }
+        event.preventDefault()
       })
     }
 
-    configureIconButton(entryButton, 'table', '表格工具')
-    entryButton.setAttribute('aria-haspopup', 'menu')
-    entryButton.addEventListener('click', () => {
+    const openEntryGridPopover = () => {
       markTableToolbarInteraction()
       const context = getResolvedTableContext()
 
@@ -1855,12 +1851,10 @@ export const createMarkdownEditor = async ({
       }
 
       renderTableGridPopover(context)
-    })
-    entryButton.addEventListener('contextmenu', (event) => {
-      markTableToolbarInteraction()
-      event.preventDefault()
-      event.stopPropagation()
+    }
 
+    const openEntryContextMenu = () => {
+      markTableToolbarInteraction()
       const context = getResolvedTableContext()
 
       if (!context) {
@@ -1874,6 +1868,34 @@ export const createMarkdownEditor = async ({
       }
 
       renderTableContextMenu('root')
+    }
+
+    configureIconButton(entryButton, 'table', '表格工具')
+    entryButton.setAttribute('aria-haspopup', 'menu')
+    entryButton.addEventListener('click', () => {
+      openEntryGridPopover()
+    })
+    entryButton.addEventListener('mouseup', (event) => {
+      if (event.button !== 2) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      openEntryContextMenu()
+    })
+    entryButton.addEventListener('auxclick', (event) => {
+      if (event.button !== 2) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+    })
+    entryButton.addEventListener('contextmenu', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      openEntryContextMenu()
     })
 
     configureIconButton(deleteButton, 'trash', '删除整个表格')
@@ -1949,8 +1971,8 @@ export const createMarkdownEditor = async ({
 
     document.addEventListener('selectionchange', handleSelectionChange)
     document.addEventListener('pointerdown', handlePointerDown, true)
-    document.addEventListener('pointerup', handlePointerStateReset, true)
-    document.addEventListener('pointercancel', handlePointerStateReset, true)
+    document.addEventListener('pointerup', handlePointerStateReset)
+    document.addEventListener('pointercancel', handlePointerStateReset)
     document.addEventListener('scroll', handleViewportChange, true)
     window.addEventListener('resize', handleViewportChange)
 
@@ -1967,8 +1989,8 @@ export const createMarkdownEditor = async ({
 
       document.removeEventListener('selectionchange', handleSelectionChange)
       document.removeEventListener('pointerdown', handlePointerDown, true)
-      document.removeEventListener('pointerup', handlePointerStateReset, true)
-      document.removeEventListener('pointercancel', handlePointerStateReset, true)
+      document.removeEventListener('pointerup', handlePointerStateReset)
+      document.removeEventListener('pointercancel', handlePointerStateReset)
       document.removeEventListener('scroll', handleViewportChange, true)
       window.removeEventListener('resize', handleViewportChange)
 
