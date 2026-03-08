@@ -920,35 +920,6 @@ const getMarkdownTableCellOffset = (table: MarkdownTableModel, target: MarkdownT
   return offset
 }
 
-const updateMarkdownTable = (
-  markdown: string,
-  selection: NormalizedSelection,
-  updater: (table: MarkdownTableModel) => MarkdownTableTarget
-): MarkdownTransform | null => {
-  const block = getActiveBlock(markdown, selection.start)
-
-  if (!block || block.type !== 'table') {
-    return null
-  }
-
-  const table = parseMarkdownTable(block.text)
-
-  if (!table) {
-    return null
-  }
-
-  const target = updater(table)
-  const replacement = stringifyMarkdownTable(table)
-  const cellOffset = getMarkdownTableCellOffset(table, target)
-  const selectionOffset = block.from + cellOffset
-
-  return {
-    markdown: replaceRange(markdown, block.from, block.to, replacement),
-    selectionStart: selectionOffset,
-    selectionEnd: selectionOffset
-  }
-}
-
 const exportMarkdownJSON = (instance: Vditor, markdown: string): JSONNode => {
   try {
     return JSON.parse(instance.exportJSON(markdown)) as JSONNode
@@ -994,7 +965,6 @@ export const createMarkdownEditor = async ({
   let tableGridPointerDown = false
   let activeTableContext: TableContext | null = null
   let tableToolbarInteractionTimer = 0
-  let tableToolbarSecondaryOpenUntil = 0
   let suppressTableToolbarSelectionChange = false
   const tableToolbarButtons = new Map<TableToolbarAction, HTMLButtonElement>()
 
@@ -1248,26 +1218,6 @@ export const createMarkdownEditor = async ({
     return align === 'center' || align === 'right' ? align : 'left'
   }
 
-  const setSelectionInTableCell = (cellElement: HTMLTableCellElement, collapseToEnd = false) => {
-    const selection = window.getSelection()
-
-    if (!selection) {
-      return
-    }
-
-    const range = document.createRange()
-    range.selectNodeContents(cellElement)
-    range.collapse(!collapseToEnd)
-
-    selection.removeAllRanges()
-    selection.addRange(range)
-  }
-
-  const restoreTableSelection = (context: TableContext, collapseToEnd = false) => {
-    markTableToolbarInteraction()
-    setSelectionInTableCell(context.cellElement, collapseToEnd)
-  }
-
   const normalizeVisualText = (value: string) => {
     return value.replace(/\s+/g, ' ').trim()
   }
@@ -1319,19 +1269,133 @@ export const createMarkdownEditor = async ({
     return alignments.every((align) => align === alignments[0]) ? alignments[0] : null
   }
 
+  const getNormalizedTableMatrix = (tableElement: HTMLTableElement) => {
+    return Array.from(tableElement.rows, (row) =>
+      Array.from(row.cells, (cell) => normalizeVisualText(cell.innerText || cell.textContent || ''))
+    )
+  }
+
+  const scoreMarkdownTableMatch = (table: MarkdownTableModel, context: TableContext) => {
+    const domMatrix = getNormalizedTableMatrix(context.tableElement)
+    const markdownMatrix = [table.header, ...table.rows].map((row) => row.map((cell) => normalizeVisualText(cell)))
+
+    if (domMatrix.length === 0 || markdownMatrix.length !== domMatrix.length) {
+      return -1
+    }
+
+    const columnCount = domMatrix[0]?.length ?? 0
+
+    if (
+      columnCount === 0 ||
+      !domMatrix.every((row) => row.length === columnCount) ||
+      !markdownMatrix.every((row) => row.length === columnCount)
+    ) {
+      return -1
+    }
+
+    const targetRowIndex = clamp(
+      (context.cellElement.parentElement as HTMLTableRowElement).rowIndex,
+      0,
+      markdownMatrix.length - 1
+    )
+    const targetColumnIndex = clamp(context.cellElement.cellIndex, 0, columnCount - 1)
+    const targetCellText = domMatrix[targetRowIndex]?.[targetColumnIndex] ?? ''
+    let score = 1000
+
+    for (let rowIndex = 0; rowIndex < markdownMatrix.length; rowIndex += 1) {
+      for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+        if ((markdownMatrix[rowIndex]?.[columnIndex] ?? '') === (domMatrix[rowIndex]?.[columnIndex] ?? '')) {
+          score += 2
+        }
+      }
+    }
+
+    if ((markdownMatrix[targetRowIndex]?.[targetColumnIndex] ?? '') === targetCellText) {
+      score += 100
+    }
+
+    if (markdownMatrix.flat().join('\n') === domMatrix.flat().join('\n')) {
+      score += 250
+    }
+
+    return score
+  }
+
+  const resolveMarkdownTableBlock = (markdown: string, context: TableContext) => {
+    const selection = normalizeSelection(getSelectionOffsets())
+    const activeBlock = getActiveBlock(markdown, selection.start)
+    const scoreBlock = (block: MarkdownBlock) => {
+      const table = parseMarkdownTable(block.text)
+
+      if (!table) {
+        return -1
+      }
+
+      return scoreMarkdownTableMatch(table, context)
+    }
+
+    if (activeBlock?.type === 'table' && scoreBlock(activeBlock) >= 0) {
+      return activeBlock
+    }
+
+    let bestBlock: MarkdownBlock | null = null
+    let bestScore = -1
+
+    for (const block of extractMarkdownBlocks(markdown)) {
+      if (block.type !== 'table') {
+        continue
+      }
+
+      const score = scoreBlock(block)
+
+      if (score > bestScore) {
+        bestScore = score
+        bestBlock = block
+      }
+    }
+
+    return bestScore >= 0 ? bestBlock : null
+  }
+
+  const updateMarkdownTableForContext = (
+    markdown: string,
+    context: TableContext,
+    updater: (table: MarkdownTableModel) => MarkdownTableTarget
+  ) => {
+    const block = resolveMarkdownTableBlock(markdown, context)
+
+    if (!block) {
+      return null
+    }
+
+    const table = parseMarkdownTable(block.text)
+
+    if (!table) {
+      return null
+    }
+
+    const target = updater(table)
+    const replacement = stringifyMarkdownTable(table)
+    const cellOffset = getMarkdownTableCellOffset(table, target)
+    const selectionOffset = block.from + cellOffset
+
+    return {
+      markdown: replaceRange(markdown, block.from, block.to, replacement),
+      selectionStart: selectionOffset,
+      selectionEnd: selectionOffset
+    }
+  }
+
   const applyCurrentTableTransform = (
     context: TableContext,
     updater: (table: MarkdownTableModel) => MarkdownTableTarget
   ) => {
-    restoreTableSelection(context)
     const markdown = readMarkdown()
-    const selection = normalizeSelection(getSelectionOffsets())
-
-    return applyTransform(updateMarkdownTable(markdown, selection, updater))
+    return applyTransform(updateMarkdownTableForContext(markdown, context, updater))
   }
 
   const resizeTableToDimensions = (context: TableContext, requestedRows: number, requestedColumns: number) => {
-    const targetRows = Math.max(1, requestedRows)
+    const targetRows = Math.max(2, requestedRows)
     const targetColumns = Math.max(1, requestedColumns)
 
     return applyCurrentTableTransform(context, (table) => {
@@ -1356,10 +1420,8 @@ export const createMarkdownEditor = async ({
   }
 
   const insertParagraphNearTable = (context: TableContext, position: 'above' | 'below') => {
-    restoreTableSelection(context)
     const markdown = readMarkdown()
-    const selection = normalizeSelection(getSelectionOffsets())
-    const block = getActiveBlock(markdown, selection.start)
+    const block = resolveMarkdownTableBlock(markdown, context)
 
     if (!block || block.type !== 'table') {
       return false
@@ -1447,13 +1509,9 @@ export const createMarkdownEditor = async ({
   }
 
   const deleteCurrentTable = (context?: TableContext) => {
-    if (context) {
-      restoreTableSelection(context)
-    }
-
     const markdown = readMarkdown()
     const selection = normalizeSelection(getSelectionOffsets())
-    const block = getActiveBlock(markdown, selection.start)
+    const block = context ? resolveMarkdownTableBlock(markdown, context) : getActiveBlock(markdown, selection.start)
 
     if (!block || block.type !== 'table') {
       return false
@@ -1461,14 +1519,6 @@ export const createMarkdownEditor = async ({
 
     hideTableToolbar()
     return applyTransform(applyDeleteBlockTransform(markdown, selection))
-  }
-
-  const markSecondaryToolbarOpen = () => {
-    tableToolbarSecondaryOpenUntil = window.performance.now() + 320
-  }
-
-  const shouldKeepSecondaryToolbarOpen = () => {
-    return window.performance.now() <= tableToolbarSecondaryOpenUntil
   }
 
   const hideTableToolbarPopover = () => {
@@ -1541,7 +1591,7 @@ export const createMarkdownEditor = async ({
     }
 
     const updateSelection = (rows: number, columns: number) => {
-      selectedRows = clamp(rows, 1, maxRows)
+      selectedRows = clamp(rows, 2, maxRows)
       selectedColumns = clamp(columns, 1, maxColumns)
 
       for (const cellElement of Array.from(matrixElement.children) as HTMLButtonElement[]) {
@@ -1891,69 +1941,22 @@ export const createMarkdownEditor = async ({
 
     configureIconButton(entryButton, 'table', '表格工具')
     entryButton.setAttribute('aria-haspopup', 'menu')
-    entryButton.addEventListener('pointerdown', (event) => {
-      if (event.button !== 2) {
-        return
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-      markSecondaryToolbarOpen()
-      openEntryContextMenu(true)
-    })
-    entryButton.addEventListener('mousedown', (event) => {
-      if (event.button !== 2) {
-        return
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-      markSecondaryToolbarOpen()
-      openEntryContextMenu(true)
-    })
     entryButton.addEventListener('click', () => {
       openEntryGridPopover()
     })
-    entryButton.addEventListener('mouseup', (event) => {
+    entryButton.addEventListener('pointerup', (event) => {
       if (event.button !== 2) {
         return
       }
 
+      markTableToolbarInteraction()
       event.preventDefault()
       event.stopPropagation()
-
-      if (shouldKeepSecondaryToolbarOpen()) {
-        return
-      }
-
-      markSecondaryToolbarOpen()
-      openEntryContextMenu(true)
-    })
-    entryButton.addEventListener('auxclick', (event) => {
-      if (event.button !== 2) {
-        return
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-
-      if (shouldKeepSecondaryToolbarOpen()) {
-        return
-      }
-
-      markSecondaryToolbarOpen()
-      openEntryContextMenu(true)
+      openEntryContextMenu()
     })
     entryButton.addEventListener('contextmenu', (event) => {
       event.preventDefault()
       event.stopPropagation()
-
-      if (shouldKeepSecondaryToolbarOpen()) {
-        return
-      }
-
-      markSecondaryToolbarOpen()
-      openEntryContextMenu(true)
     })
 
     configureIconButton(deleteButton, 'trash', '删除整个表格')

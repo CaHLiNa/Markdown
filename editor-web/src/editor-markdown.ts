@@ -27,7 +27,7 @@ const orderedListPattern = /^\s{0,3}\d+[.)]\s+/
 const horizontalRulePattern = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/
 const codeFencePattern = /^\s{0,3}(```+|~~~+)(.*)$/
 const mathFencePattern = /^\s{0,3}\$\$\s*$/
-const tableSeparatorPattern = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/
+const tableSeparatorPattern = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/
 
 const splitLines = (markdownText: string): LineInfo[] => {
   if (markdownText.length === 0) {

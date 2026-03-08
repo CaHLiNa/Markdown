@@ -30,4 +30,18 @@ describe('editor-markdown', () => {
     const markdown = ['intro', '## Methods', 'body'].join('\n')
     expect(findHeadingOffset(markdown, 'Methods')).toBe(6)
   })
+
+  it('treats Vditor single-dash separator rows as tables', () => {
+    const markdown = [
+      '| A | B | C |',
+      '| - | - | - |',
+      '| 1 | 2 | 3 |'
+    ].join('\n')
+
+    const blocks = extractMarkdownBlocks(markdown)
+
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]?.type).toBe('table')
+    expect(blocks[0]?.text).toBe(markdown)
+  })
 })
