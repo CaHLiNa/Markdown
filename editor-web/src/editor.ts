@@ -200,7 +200,7 @@ const TABLE_CONTEXT_MENU_ITEMS: Record<
     { action: 'open-autofill-submenu', label: '自动填充', title: '自动填充表格内容', hasSubmenu: true }
   ],
   table: [
-    { action: 'open-grid-popover', label: '扩展当前表格', title: '扩展当前表格行列' },
+    { action: 'open-grid-popover', label: '调整当前表格', title: '调整当前表格行列' },
     { action: 'delete-table', label: '删除整个表格', title: '删除整个表格' }
   ],
   autofill: [
@@ -994,6 +994,7 @@ export const createMarkdownEditor = async ({
   let tableGridPointerDown = false
   let activeTableContext: TableContext | null = null
   let tableToolbarInteractionTimer = 0
+  let tableToolbarSecondaryOpenUntil = 0
   let suppressTableToolbarSelectionChange = false
   const tableToolbarButtons = new Map<TableToolbarAction, HTMLButtonElement>()
 
@@ -1262,6 +1263,11 @@ export const createMarkdownEditor = async ({
     selection.addRange(range)
   }
 
+  const restoreTableSelection = (context: TableContext, collapseToEnd = false) => {
+    markTableToolbarInteraction()
+    setSelectionInTableCell(context.cellElement, collapseToEnd)
+  }
+
   const normalizeVisualText = (value: string) => {
     return value.replace(/\s+/g, ' ').trim()
   }
@@ -1314,9 +1320,10 @@ export const createMarkdownEditor = async ({
   }
 
   const applyCurrentTableTransform = (
-    _context: TableContext,
+    context: TableContext,
     updater: (table: MarkdownTableModel) => MarkdownTableTarget
   ) => {
+    restoreTableSelection(context)
     const markdown = readMarkdown()
     const selection = normalizeSelection(getSelectionOffsets())
 
@@ -1348,7 +1355,8 @@ export const createMarkdownEditor = async ({
     })
   }
 
-  const insertParagraphNearTable = (_context: TableContext, position: 'above' | 'below') => {
+  const insertParagraphNearTable = (context: TableContext, position: 'above' | 'below') => {
+    restoreTableSelection(context)
     const markdown = readMarkdown()
     const selection = normalizeSelection(getSelectionOffsets())
     const block = getActiveBlock(markdown, selection.start)
@@ -1438,7 +1446,11 @@ export const createMarkdownEditor = async ({
     })
   }
 
-  const deleteCurrentTable = () => {
+  const deleteCurrentTable = (context?: TableContext) => {
+    if (context) {
+      restoreTableSelection(context)
+    }
+
     const markdown = readMarkdown()
     const selection = normalizeSelection(getSelectionOffsets())
     const block = getActiveBlock(markdown, selection.start)
@@ -1449,6 +1461,14 @@ export const createMarkdownEditor = async ({
 
     hideTableToolbar()
     return applyTransform(applyDeleteBlockTransform(markdown, selection))
+  }
+
+  const markSecondaryToolbarOpen = () => {
+    tableToolbarSecondaryOpenUntil = window.performance.now() + 320
+  }
+
+  const shouldKeepSecondaryToolbarOpen = () => {
+    return window.performance.now() <= tableToolbarSecondaryOpenUntil
   }
 
   const hideTableToolbarPopover = () => {
@@ -1741,8 +1761,7 @@ export const createMarkdownEditor = async ({
     hideTableToolbarPopover()
 
     if (action === 'delete-table') {
-      setSelectionInTableCell(context.cellElement)
-      return deleteCurrentTable()
+      return deleteCurrentTable(context)
     }
 
     switch (action) {
@@ -1789,7 +1808,7 @@ export const createMarkdownEditor = async ({
         return fillTableBlanksFromFirstColumn(context)
       case 'delete-table':
         hideTableToolbarPopover()
-        return deleteCurrentTable()
+        return deleteCurrentTable(context)
     }
   }
 
@@ -1853,7 +1872,7 @@ export const createMarkdownEditor = async ({
       renderTableGridPopover(context)
     }
 
-    const openEntryContextMenu = () => {
+    const openEntryContextMenu = (forceOpen = false) => {
       markTableToolbarInteraction()
       const context = getResolvedTableContext()
 
@@ -1862,7 +1881,7 @@ export const createMarkdownEditor = async ({
         return
       }
 
-      if (tableToolbarPopoverKind === 'menu' && tableContextMenuView === 'root') {
+      if (!forceOpen && tableToolbarPopoverKind === 'menu' && tableContextMenuView === 'root') {
         hideTableToolbarPopover()
         return
       }
@@ -1872,6 +1891,26 @@ export const createMarkdownEditor = async ({
 
     configureIconButton(entryButton, 'table', '表格工具')
     entryButton.setAttribute('aria-haspopup', 'menu')
+    entryButton.addEventListener('pointerdown', (event) => {
+      if (event.button !== 2) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      markSecondaryToolbarOpen()
+      openEntryContextMenu(true)
+    })
+    entryButton.addEventListener('mousedown', (event) => {
+      if (event.button !== 2) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      markSecondaryToolbarOpen()
+      openEntryContextMenu(true)
+    })
     entryButton.addEventListener('click', () => {
       openEntryGridPopover()
     })
@@ -1882,7 +1921,13 @@ export const createMarkdownEditor = async ({
 
       event.preventDefault()
       event.stopPropagation()
-      openEntryContextMenu()
+
+      if (shouldKeepSecondaryToolbarOpen()) {
+        return
+      }
+
+      markSecondaryToolbarOpen()
+      openEntryContextMenu(true)
     })
     entryButton.addEventListener('auxclick', (event) => {
       if (event.button !== 2) {
@@ -1891,11 +1936,24 @@ export const createMarkdownEditor = async ({
 
       event.preventDefault()
       event.stopPropagation()
+
+      if (shouldKeepSecondaryToolbarOpen()) {
+        return
+      }
+
+      markSecondaryToolbarOpen()
+      openEntryContextMenu(true)
     })
     entryButton.addEventListener('contextmenu', (event) => {
       event.preventDefault()
       event.stopPropagation()
-      openEntryContextMenu()
+
+      if (shouldKeepSecondaryToolbarOpen()) {
+        return
+      }
+
+      markSecondaryToolbarOpen()
+      openEntryContextMenu(true)
     })
 
     configureIconButton(deleteButton, 'trash', '删除整个表格')

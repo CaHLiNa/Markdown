@@ -1,0 +1,17 @@
+- generic [ref=e1]:
+  - img
+  - table [ref=e72]:
+    - rowgroup [ref=e73]:
+      - row "A B C" [ref=e74]:
+        - columnheader "A" [ref=e75]
+        - columnheader "B" [ref=e76]
+        - columnheader "C" [ref=e77]
+    - rowgroup [ref=e78]:
+      - row "1 2 3" [ref=e79]:
+        - cell "1" [ref=e80]
+        - cell "2" [ref=e81]
+        - cell "3" [ref=e82]
+      - row "4 5 6" [ref=e83]:
+        - cell "4" [ref=e84]
+        - cell "5" [ref=e85]
+        - cell "6" [ref=e86]
