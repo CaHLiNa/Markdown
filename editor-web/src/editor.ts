@@ -76,18 +76,27 @@ type TableContext = {
   cellElement: HTMLTableCellElement
 }
 
+type TableAlignment = 'left' | 'center' | 'right'
+
 type TableToolbarAction =
   | 'align-left'
   | 'align-center'
   | 'align-right'
-  | 'insert-row-above'
-  | 'insert-row-below'
-  | 'insert-column-left'
-  | 'insert-column-right'
-  | 'delete-row'
-  | 'delete-column'
+  | 'delete-table'
 
-type TableToolbarMenuKind = 'structure' | 'delete'
+type TableToolbarPopoverKind = 'grid' | 'menu'
+
+type TableContextMenuView = 'root' | 'table' | 'autofill'
+
+type TableContextMenuAction =
+  | 'open-table-submenu'
+  | 'open-autofill-submenu'
+  | 'insert-paragraph-above'
+  | 'insert-paragraph-below'
+  | 'open-grid-popover'
+  | 'autofill-from-header'
+  | 'autofill-from-first-column'
+  | 'delete-table'
 
 export type MarkdownEditor = {
   loadMarkdown: (markdown: string) => void
@@ -118,27 +127,9 @@ const DEFAULT_LINK_PLACEHOLDER = 'https://'
 const DEFAULT_INLINE_PLACEHOLDER = 'text'
 const DEFAULT_IMAGE_ALT = 'image'
 const DEFAULT_TABLE_SNIPPET = '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1 | Value 2 |'
-const TABLE_TOOLBAR_MIN_WIDTH = 228
-
-const TABLE_TOOLBAR_MENU_ACTIONS: Record<
-  TableToolbarMenuKind,
-  Array<{
-    action: TableToolbarAction
-    label: string
-    title: string
-  }>
-> = {
-  structure: [
-    { action: 'insert-row-above', label: '在上方插入一行', title: '在上方插入一行' },
-    { action: 'insert-row-below', label: '在下方插入一行', title: '在下方插入一行' },
-    { action: 'insert-column-left', label: '在左侧插入一列', title: '在左侧插入一列' },
-    { action: 'insert-column-right', label: '在右侧插入一列', title: '在右侧插入一列' }
-  ],
-  delete: [
-    { action: 'delete-row', label: '删除当前行', title: '删除当前行' },
-    { action: 'delete-column', label: '删除当前列', title: '删除当前列' }
-  ]
-}
+const TABLE_TOOLBAR_MIN_WIDTH = 176
+const TABLE_GRID_MIN_SIZE = 8
+const TABLE_GRID_BUFFER = 4
 
 const TABLE_TOOLBAR_ALIGNMENT_ACTIONS: Array<{
   action: TableToolbarAction
@@ -149,6 +140,35 @@ const TABLE_TOOLBAR_ALIGNMENT_ACTIONS: Array<{
   { action: 'align-center', icon: 'vditor-icon-align-center', title: '当前列居中' },
   { action: 'align-right', icon: 'vditor-icon-align-right', title: '当前列右对齐' }
 ]
+
+const TABLE_CONTEXT_MENU_ITEMS: Record<
+  TableContextMenuView,
+  Array<{
+    action: TableContextMenuAction
+    label: string
+    title: string
+    hasSubmenu?: boolean
+  }>
+> = {
+  root: [
+    { action: 'open-table-submenu', label: '表格', title: '表格操作', hasSubmenu: true },
+    { action: 'insert-paragraph-above', label: '在上方插入段落', title: '在表格上方插入段落' },
+    { action: 'insert-paragraph-below', label: '在下方插入段落', title: '在表格下方插入段落' },
+    { action: 'open-autofill-submenu', label: '自动填充', title: '自动填充表格内容', hasSubmenu: true }
+  ],
+  table: [
+    { action: 'open-grid-popover', label: '扩展当前表格', title: '扩展当前表格行列' },
+    { action: 'delete-table', label: '删除整个表格', title: '删除整个表格' }
+  ],
+  autofill: [
+    { action: 'autofill-from-header', label: '用首行填充空白', title: '使用首行内容填充空白单元格' },
+    {
+      action: 'autofill-from-first-column',
+      label: '用首列填充空白',
+      title: '使用首列内容填充空白单元格'
+    }
+  ]
+}
 
 const installVditorVersionGlobal = () => {
   const runtimeGlobal = globalThis as VditorGlobalScope
@@ -775,10 +795,11 @@ export const createMarkdownEditor = async ({
   let removeTableToolbarListeners: (() => void) | null = null
   let tableToolbarRefreshFrame = 0
   let tableToolbar: HTMLDivElement | null = null
-  let tableToolbarMenu: HTMLDivElement | null = null
-  let tableToolbarMeta: HTMLSpanElement | null = null
-  let tableToolbarMenuKind: TableToolbarMenuKind | null = null
-  let tableToolbarMenuTrigger: HTMLButtonElement | null = null
+  let tableToolbarPopover: HTMLDivElement | null = null
+  let tableToolbarEntryButton: HTMLButtonElement | null = null
+  let tableToolbarPopoverKind: TableToolbarPopoverKind | null = null
+  let tableContextMenuView: TableContextMenuView = 'root'
+  let tableGridPointerDown = false
   const tableToolbarButtons = new Map<TableToolbarAction, HTMLButtonElement>()
 
   const getInstance = () => {
@@ -1038,160 +1059,191 @@ export const createMarkdownEditor = async ({
     scheduleTableToolbarRefresh()
   }
 
-  const insertTableRowBelow = (context: TableContext) => {
-    const currentRow = context.cellElement.parentElement as HTMLTableRowElement
-    const targetColumn = context.cellElement.cellIndex
-    const alignments = Array.from(currentRow.cells, (cell) => {
-      const align = cell.getAttribute('align')
-      return align === 'left' || align === 'center' || align === 'right' ? align : null
-    })
+  const normalizeVisualText = (value: string) => {
+    return value.replace(/\s+/g, ' ').trim()
+  }
 
-    const nextRow = document.createElement('tr')
+  const isBlankTableCell = (cellElement: HTMLTableCellElement) => {
+    return normalizeVisualText(cellElement.textContent ?? '') === ''
+  }
 
-    for (const align of alignments) {
-      nextRow.append(createTableCell('td', align))
+  const getCurrentTableDimensions = (tableElement: HTMLTableElement) => {
+    return {
+      rows: tableElement.rows.length,
+      columns: tableElement.rows[0]?.cells.length ?? 0
+    }
+  }
+
+  const getAllTableCells = (tableElement: HTMLTableElement) => {
+    return Array.from(tableElement.rows, (row) => Array.from(row.cells) as HTMLTableCellElement[]).flat()
+  }
+
+  const setSelectionInParagraphElement = (paragraphElement: HTMLParagraphElement) => {
+    const selection = window.getSelection()
+
+    if (!selection) {
+      return
     }
 
-    if (context.cellElement.tagName === 'TH') {
-      const tbody = context.tableElement.tBodies[0] ?? context.tableElement.createTBody()
-      tbody.insertBefore(nextRow, tbody.firstChild)
+    const range = document.createRange()
+    range.setStart(paragraphElement, 0)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+
+  const createEmptyParagraphElement = () => {
+    const paragraphElement = document.createElement('p')
+    paragraphElement.setAttribute('data-block', '0')
+    paragraphElement.append(document.createElement('br'))
+    return paragraphElement
+  }
+
+  const syncAfterParagraphInsertion = (paragraphElement: HTMLParagraphElement) => {
+    setSelectionInParagraphElement(paragraphElement)
+    syncMarkdownFromEditor(true)
+    currentSelection = getSelectionOffsets()
+    hideTableToolbar()
+  }
+
+  const isWholeTableSelection = (context: TableContext) => {
+    const selection = window.getSelection()
+
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return false
+    }
+
+    const range = selection.getRangeAt(0)
+    const cells = getAllTableCells(context.tableElement)
+    const selectedText = normalizeVisualText(selection.toString())
+    const tableText = normalizeVisualText(context.tableElement.innerText)
+    const intersectsEveryCell =
+      cells.length > 0 &&
+      cells.every((cellElement) => {
+        try {
+          return range.intersectsNode(cellElement)
+        } catch {
+          return false
+        }
+      })
+
+    return intersectsEveryCell && selectedText.length > 0 && selectedText === tableText
+  }
+
+  const readWholeTableAlignment = (context: TableContext) => {
+    const alignments = Array.from(context.tableElement.rows, (row) =>
+      Array.from(row.cells, (cell) => readTableAlignment(cell as HTMLTableCellElement))
+    ).flat()
+
+    if (alignments.length === 0) {
+      return 'left'
+    }
+
+    return alignments.every((align) => align === alignments[0]) ? alignments[0] : null
+  }
+
+  const expandTableToDimensions = (context: TableContext, requestedRows: number, requestedColumns: number) => {
+    const { rows: currentRows, columns: currentColumns } = getCurrentTableDimensions(context.tableElement)
+    const targetRows = Math.max(requestedRows, currentRows)
+    const targetColumns = Math.max(requestedColumns, currentColumns)
+    const rows = Array.from(context.tableElement.rows)
+    const columnAlignments = Array.from({ length: targetColumns }, (_, columnIndex) => {
+      for (const row of rows) {
+        const align = row.cells[columnIndex]?.getAttribute('align')
+
+        if (align === 'left' || align === 'center' || align === 'right') {
+          return align
+        }
+      }
+
+      return null
+    })
+
+    for (const row of rows) {
+      const tagName = row.parentElement?.tagName === 'THEAD' ? 'th' : 'td'
+
+      while (row.cells.length < targetColumns) {
+        row.append(createTableCell(tagName, columnAlignments[row.cells.length] ?? null))
+      }
+    }
+
+    const tbody = context.tableElement.tBodies[0] ?? context.tableElement.createTBody()
+
+    while (context.tableElement.rows.length < targetRows) {
+      const nextRow = document.createElement('tr')
+
+      for (let columnIndex = 0; columnIndex < targetColumns; columnIndex += 1) {
+        nextRow.append(createTableCell('td', columnAlignments[columnIndex] ?? null))
+      }
+
+      tbody.append(nextRow)
+    }
+
+    return context.cellElement
+  }
+
+  const insertParagraphNearTable = (context: TableContext, position: 'above' | 'below') => {
+    const paragraphElement = createEmptyParagraphElement()
+
+    if (position === 'above') {
+      context.tableElement.insertAdjacentElement('beforebegin', paragraphElement)
     } else {
-      currentRow.insertAdjacentElement('afterend', nextRow)
+      context.tableElement.insertAdjacentElement('afterend', paragraphElement)
     }
 
-    return nextRow.cells[targetColumn] as HTMLTableCellElement | null
+    syncAfterParagraphInsertion(paragraphElement)
+    return true
   }
 
-  const insertTableRowAbove = (context: TableContext) => {
-    const currentRow = context.cellElement.parentElement as HTMLTableRowElement
-    const targetColumn = context.cellElement.cellIndex
-    const alignments = Array.from(currentRow.cells, (cell) => {
-      const align = cell.getAttribute('align')
-      return align === 'left' || align === 'center' || align === 'right' ? align : null
-    })
+  const fillTableBlanksFromHeaderRow = (context: TableContext) => {
+    const rows = Array.from(context.tableElement.rows)
 
-    if (context.cellElement.tagName === 'TH') {
-      const thead = context.tableElement.tHead ?? context.tableElement.createTHead()
-      const newHeaderRow = document.createElement('tr')
-      const movedBodyRow = document.createElement('tr')
+    if (rows.length < 2) {
+      return context.cellElement
+    }
 
-      for (const cell of Array.from(currentRow.cells)) {
-        const align = cell.getAttribute('align')
-        const normalizedAlign =
-          align === 'left' || align === 'center' || align === 'right' ? align : null
+    const headerHTML = Array.from(rows[0].cells, (cell) => cell.innerHTML)
 
-        newHeaderRow.append(createTableCell('th', normalizedAlign))
-        movedBodyRow.append(createTableCell('td', normalizedAlign, cell.innerHTML))
+    for (const row of rows.slice(1)) {
+      for (let columnIndex = 0; columnIndex < row.cells.length; columnIndex += 1) {
+        const cellElement = row.cells[columnIndex] as HTMLTableCellElement
+
+        if (isBlankTableCell(cellElement) && (headerHTML[columnIndex] ?? '').trim().length > 0) {
+          cellElement.innerHTML = headerHTML[columnIndex]
+        }
       }
-
-      thead.replaceChildren(newHeaderRow)
-
-      const tbody = context.tableElement.tBodies[0] ?? context.tableElement.createTBody()
-      tbody.insertBefore(movedBodyRow, tbody.firstChild)
-
-      return newHeaderRow.cells[targetColumn] as HTMLTableCellElement | null
     }
 
-    const previousRow = document.createElement('tr')
-
-    for (const align of alignments) {
-      previousRow.append(createTableCell('td', align))
-    }
-
-    currentRow.insertAdjacentElement('beforebegin', previousRow)
-    return previousRow.cells[targetColumn] as HTMLTableCellElement | null
+    return context.cellElement
   }
 
-  const insertTableColumnAt = (context: TableContext, position: 'left' | 'right') => {
-    const sourceIndex = context.cellElement.cellIndex
-    const insertIndex = sourceIndex + (position === 'right' ? 1 : 0)
-
+  const fillTableBlanksFromFirstColumn = (context: TableContext) => {
     for (const row of Array.from(context.tableElement.rows)) {
-      const currentCell = row.cells[sourceIndex] ?? row.cells[Math.max(0, sourceIndex - 1)]
-      const align = currentCell?.getAttribute('align')
-      const normalizedAlign =
-        align === 'left' || align === 'center' || align === 'right' ? align : null
-      const tagName = row.cells[0]?.tagName === 'TH' ? 'th' : 'td'
-      const newCell = createTableCell(tagName.toLowerCase() as 'th' | 'td', normalizedAlign)
+      const seedHTML = row.cells[0]?.innerHTML ?? ''
 
-      row.insertBefore(newCell, row.cells[insertIndex] ?? null)
-    }
-
-    return (context.cellElement.parentElement as HTMLTableRowElement).cells[insertIndex] as HTMLTableCellElement
-  }
-
-  const deleteCurrentTableRow = (context: TableContext) => {
-    const currentRow = context.cellElement.parentElement as HTMLTableRowElement
-    const targetColumn = context.cellElement.cellIndex
-
-    if (context.cellElement.tagName === 'TH') {
-      const tbody = context.tableElement.tBodies[0]
-
-      if (!tbody || tbody.rows.length === 0) {
-        context.tableElement.remove()
-        return null
+      if (seedHTML.trim().length === 0) {
+        continue
       }
 
-      const promotedRow = tbody.rows[0]
-      const thead = context.tableElement.tHead ?? context.tableElement.createTHead()
-      const newHeaderRow = document.createElement('tr')
-
-      for (const cell of Array.from(promotedRow.cells)) {
-        const align = cell.getAttribute('align')
-        const normalizedAlign =
-          align === 'left' || align === 'center' || align === 'right' ? align : null
-
-        newHeaderRow.append(createTableCell('th', normalizedAlign, cell.innerHTML))
+      for (const cellElement of Array.from(row.cells).slice(1) as HTMLTableCellElement[]) {
+        if (isBlankTableCell(cellElement)) {
+          cellElement.innerHTML = seedHTML
+        }
       }
-
-      thead.replaceChildren(newHeaderRow)
-      promotedRow.remove()
-
-      if (tbody.rows.length === 0) {
-        tbody.remove()
-      }
-
-      return newHeaderRow.cells[Math.min(targetColumn, newHeaderRow.cells.length - 1)] as HTMLTableCellElement
     }
 
-    const tbody = currentRow.parentElement as HTMLTableSectionElement
-    const fallbackRow =
-      (currentRow.previousElementSibling as HTMLTableRowElement | null) ??
-      (currentRow.nextElementSibling as HTMLTableRowElement | null) ??
-      context.tableElement.tHead?.rows[context.tableElement.tHead.rows.length - 1] ??
-      null
-
-    currentRow.remove()
-
-    if (tbody.childElementCount === 0) {
-      tbody.remove()
-    }
-
-    if (!fallbackRow) {
-      context.tableElement.remove()
-      return null
-    }
-
-    return fallbackRow.cells[Math.min(targetColumn, fallbackRow.cells.length - 1)] as HTMLTableCellElement
+    return context.cellElement
   }
 
-  const deleteCurrentTableColumn = (context: TableContext) => {
-    const targetColumn = context.cellElement.cellIndex
+  const applyTableAlignment = (context: TableContext, align: TableAlignment) => {
+    if (isWholeTableSelection(context)) {
+      for (const cellElement of getAllTableCells(context.tableElement)) {
+        cellElement.setAttribute('align', align)
+      }
 
-    if (context.tableElement.rows[0]?.cells.length === 1) {
-      context.tableElement.remove()
-      return null
+      return context.cellElement
     }
 
-    for (const row of Array.from(context.tableElement.rows)) {
-      row.cells[targetColumn]?.remove()
-    }
-
-    const activeRow = context.cellElement.parentElement as HTMLTableRowElement
-    return activeRow.cells[Math.min(targetColumn, activeRow.cells.length - 1)] as HTMLTableCellElement
-  }
-
-  const applyTableColumnAlignment = (context: TableContext, align: 'left' | 'center' | 'right') => {
     const targetColumn = context.cellElement.cellIndex
 
     for (const row of Array.from(context.tableElement.rows)) {
@@ -1201,93 +1253,219 @@ export const createMarkdownEditor = async ({
     return (context.cellElement.parentElement as HTMLTableRowElement).cells[targetColumn] as HTMLTableCellElement
   }
 
-  const hideTableToolbarMenu = () => {
-    if (tableToolbarMenuTrigger) {
-      tableToolbarMenuTrigger.dataset.active = 'false'
-      tableToolbarMenuTrigger.setAttribute('aria-pressed', 'false')
+  const deleteCurrentTable = () => {
+    const markdown = readMarkdown()
+    const selection = normalizeSelection(getSelectionOffsets())
+    const block = getActiveBlock(markdown, selection.start)
+
+    if (!block || block.type !== 'table') {
+      return false
     }
 
-    tableToolbarMenuKind = null
-    tableToolbarMenuTrigger = null
-
-    if (!tableToolbar || !tableToolbarMenu) {
-      return
-    }
-
-    tableToolbar.dataset.menuOpen = 'false'
-    tableToolbarMenu.hidden = true
-    tableToolbarMenu.setAttribute('aria-hidden', 'true')
-    tableToolbarMenu.replaceChildren()
+    hideTableToolbar()
+    return applyTransform(applyDeleteBlockTransform(markdown, selection))
   }
 
-  const renderTableToolbarMenu = (menuKind: TableToolbarMenuKind) => {
-    if (!tableToolbarMenu) {
+  const hideTableToolbarPopover = () => {
+    tableToolbarPopoverKind = null
+    tableContextMenuView = 'root'
+    tableGridPointerDown = false
+
+    if (tableToolbarEntryButton) {
+      tableToolbarEntryButton.dataset.active = 'false'
+      tableToolbarEntryButton.setAttribute('aria-pressed', 'false')
+    }
+
+    if (!tableToolbarPopover) {
       return
     }
 
-    const menuElement = tableToolbarMenu
-    const fragment = document.createDocumentFragment()
-    const titleElement = document.createElement('div')
+    tableToolbarPopover.hidden = true
+    tableToolbarPopover.setAttribute('aria-hidden', 'true')
+    tableToolbarPopover.removeAttribute('data-kind')
+    tableToolbarPopover.replaceChildren()
+  }
 
-    titleElement.className = 'editor-table-toolbar__menu-title'
-    titleElement.textContent = menuKind === 'structure' ? '表格' : '删除'
-    fragment.append(titleElement)
+  const showTableToolbarPopover = (kind: TableToolbarPopoverKind) => {
+    if (!tableToolbarPopover) {
+      return false
+    }
 
-    for (const definition of TABLE_TOOLBAR_MENU_ACTIONS[menuKind]) {
+    tableToolbarPopoverKind = kind
+    tableToolbarPopover.hidden = false
+    tableToolbarPopover.setAttribute('aria-hidden', 'false')
+    tableToolbarPopover.dataset.kind = kind
+
+    if (tableToolbarEntryButton) {
+      tableToolbarEntryButton.dataset.active = 'true'
+      tableToolbarEntryButton.setAttribute('aria-pressed', 'true')
+    }
+
+    return true
+  }
+
+  const renderTableGridPopover = (context: TableContext) => {
+    if (!tableToolbarPopover || !showTableToolbarPopover('grid')) {
+      return
+    }
+
+    tableContextMenuView = 'root'
+
+    const { rows: currentRows, columns: currentColumns } = getCurrentTableDimensions(context.tableElement)
+    const maxRows = Math.max(TABLE_GRID_MIN_SIZE, currentRows + TABLE_GRID_BUFFER)
+    const maxColumns = Math.max(TABLE_GRID_MIN_SIZE, currentColumns + TABLE_GRID_BUFFER)
+    let selectedRows = currentRows
+    let selectedColumns = currentColumns
+    const panelElement = document.createElement('div')
+    const matrixElement = document.createElement('div')
+    const footerElement = document.createElement('div')
+
+    panelElement.className = 'editor-table-toolbar__grid'
+    matrixElement.className = 'editor-table-toolbar__grid-matrix'
+    matrixElement.style.setProperty('--table-grid-columns', String(maxColumns))
+    footerElement.className = 'editor-table-toolbar__grid-meta'
+
+    const applySelection = () => {
+      if (selectedRows === currentRows && selectedColumns === currentColumns) {
+        hideTableToolbarPopover()
+        return
+      }
+
+      hideTableToolbarPopover()
+      const focusCell = expandTableToDimensions(context, selectedRows, selectedColumns)
+      window.requestAnimationFrame(() => {
+        syncAfterTableMutation(focusCell)
+      })
+    }
+
+    const updateSelection = (rows: number, columns: number) => {
+      selectedRows = Math.max(rows, currentRows)
+      selectedColumns = Math.max(columns, currentColumns)
+
+      for (const cellElement of Array.from(matrixElement.children) as HTMLButtonElement[]) {
+        const cellRows = Number.parseInt(cellElement.dataset.rows ?? '0', 10)
+        const cellColumns = Number.parseInt(cellElement.dataset.columns ?? '0', 10)
+        const isActive = cellRows <= selectedRows && cellColumns <= selectedColumns
+        const isRequired = cellRows <= currentRows && cellColumns <= currentColumns
+
+        cellElement.dataset.active = isActive ? 'true' : 'false'
+        cellElement.dataset.required = isRequired ? 'true' : 'false'
+      }
+
+      footerElement.textContent = `扩展到 ${selectedRows} × ${selectedColumns}`
+    }
+
+    for (let rowIndex = 1; rowIndex <= maxRows; rowIndex += 1) {
+      for (let columnIndex = 1; columnIndex <= maxColumns; columnIndex += 1) {
+        const cellElement = document.createElement('button')
+
+        cellElement.type = 'button'
+        cellElement.className = 'editor-table-toolbar__grid-cell'
+        cellElement.dataset.rows = String(rowIndex)
+        cellElement.dataset.columns = String(columnIndex)
+        cellElement.addEventListener('pointerdown', (event) => {
+          event.preventDefault()
+          tableGridPointerDown = true
+          updateSelection(rowIndex, columnIndex)
+        })
+        cellElement.addEventListener('pointerenter', () => {
+          if (tableGridPointerDown) {
+            updateSelection(rowIndex, columnIndex)
+          }
+        })
+        cellElement.addEventListener('pointerup', (event) => {
+          event.preventDefault()
+
+          if (!tableGridPointerDown) {
+            return
+          }
+
+          updateSelection(rowIndex, columnIndex)
+          tableGridPointerDown = false
+          applySelection()
+        })
+        cellElement.addEventListener('click', () => {
+          updateSelection(rowIndex, columnIndex)
+        })
+
+        matrixElement.append(cellElement)
+      }
+    }
+
+    updateSelection(currentRows, currentColumns)
+    footerElement.textContent = `扩展到 ${currentRows} × ${currentColumns}`
+    panelElement.append(matrixElement, footerElement)
+    tableToolbarPopover.replaceChildren(panelElement)
+  }
+
+  const renderTableContextMenu = (view: TableContextMenuView = 'root') => {
+    if (!tableToolbarPopover || !showTableToolbarPopover('menu')) {
+      return
+    }
+
+    tableContextMenuView = view
+
+    const panelElement = document.createElement('div')
+    panelElement.className = 'editor-table-toolbar__menu'
+    panelElement.dataset.view = view
+
+    if (view !== 'root') {
+      const backButton = document.createElement('button')
+      backButton.type = 'button'
+      backButton.className = 'editor-table-toolbar__menu-button editor-table-toolbar__menu-button--back'
+      backButton.textContent = '返回'
+      backButton.addEventListener('pointerdown', (event) => {
+        event.preventDefault()
+      })
+      backButton.addEventListener('click', () => {
+        renderTableContextMenu('root')
+      })
+      panelElement.append(backButton)
+    }
+
+    TABLE_CONTEXT_MENU_ITEMS[view].forEach((item, index) => {
+      if (
+        (view === 'root' && (index === 1 || index === 3)) ||
+        (view !== 'root' && index === 0 && panelElement.childElementCount > 0)
+      ) {
+        const separator = document.createElement('div')
+        separator.className = 'editor-table-toolbar__menu-separator'
+        panelElement.append(separator)
+      }
+
       const button = document.createElement('button')
+      const label = document.createElement('span')
 
       button.type = 'button'
       button.className = 'editor-table-toolbar__menu-button'
-      button.dataset.action = definition.action
-      button.textContent = definition.label
-      button.title = definition.title
-      button.setAttribute('aria-label', definition.title)
+      button.dataset.action = item.action
+      button.title = item.title
+      button.setAttribute('aria-label', item.title)
+      label.textContent = item.label
+      button.append(label)
+
+      if (item.hasSubmenu) {
+        const caret = document.createElement('span')
+        caret.className = 'editor-table-toolbar__menu-caret'
+        caret.textContent = '›'
+        button.append(caret)
+      }
+
       button.addEventListener('pointerdown', (event) => {
         event.preventDefault()
       })
       button.addEventListener('click', () => {
-        hideTableToolbarMenu()
-        void runTableToolbarAction(definition.action)
+        void runTableContextMenuAction(item.action)
       })
 
-      tableToolbarButtons.set(definition.action, button)
-      fragment.append(button)
-    }
+      panelElement.append(button)
+    })
 
-    menuElement.replaceChildren(fragment)
-  }
-
-  const toggleTableToolbarMenu = (
-    menuKind: TableToolbarMenuKind,
-    anchor: 'start' | 'end',
-    trigger: HTMLButtonElement
-  ) => {
-    if (!tableToolbar || !tableToolbarMenu) {
-      return
-    }
-
-    if (tableToolbarMenuKind === menuKind) {
-      hideTableToolbarMenu()
-      return
-    }
-
-    if (tableToolbarMenuKind) {
-      hideTableToolbarMenu()
-    }
-
-    tableToolbarMenuKind = menuKind
-    tableToolbarMenuTrigger = trigger
-    trigger.dataset.active = 'true'
-    trigger.setAttribute('aria-pressed', 'true')
-    tableToolbar.dataset.menuOpen = 'true'
-    tableToolbarMenu.dataset.anchor = anchor
-    renderTableToolbarMenu(menuKind)
-    tableToolbarMenu.hidden = false
-    tableToolbarMenu.setAttribute('aria-hidden', 'false')
+    tableToolbarPopover.replaceChildren(panelElement)
   }
 
   const hideTableToolbar = () => {
-    hideTableToolbarMenu()
+    hideTableToolbarPopover()
 
     if (!tableToolbar) {
       return
@@ -1310,7 +1488,8 @@ export const createMarkdownEditor = async ({
       return
     }
 
-    const width = clamp(Math.round(tableRect.width), TABLE_TOOLBAR_MIN_WIDTH, host.clientWidth)
+    const maxWidth = Math.max(TABLE_TOOLBAR_MIN_WIDTH, Math.round(host.clientWidth))
+    const width = clamp(Math.round(tableRect.width), TABLE_TOOLBAR_MIN_WIDTH, maxWidth)
     tableToolbar.style.width = `${width}px`
 
     const toolbarRect = tableToolbar.getBoundingClientRect()
@@ -1333,11 +1512,9 @@ export const createMarkdownEditor = async ({
       return
     }
 
-    const rows = context.tableElement.rows.length
-    const columns = context.tableElement.rows[0]?.cells.length ?? 0
-    const activeAlign = readTableAlignment(context.cellElement)
-
-    tableToolbarMeta?.replaceChildren(document.createTextNode(`${rows} × ${columns}`))
+    const activeAlign = isWholeTableSelection(context)
+      ? readWholeTableAlignment(context)
+      : readTableAlignment(context.cellElement)
 
     for (const [action, button] of tableToolbarButtons.entries()) {
       const isActive =
@@ -1351,7 +1528,6 @@ export const createMarkdownEditor = async ({
 
     tableToolbar.hidden = false
     tableToolbar.setAttribute('aria-hidden', 'false')
-    tableToolbar.dataset.menuOpen = tableToolbarMenuKind ? 'true' : 'false'
     positionTableToolbar(context)
   }
 
@@ -1374,43 +1550,75 @@ export const createMarkdownEditor = async ({
       return false
     }
 
+    hideTableToolbarPopover()
+
+    if (action === 'delete-table') {
+      return deleteCurrentTable()
+    }
+
     let focusCell: HTMLTableCellElement | null = null
 
     switch (action) {
       case 'align-left':
-        focusCell = applyTableColumnAlignment(context, 'left')
+        focusCell = applyTableAlignment(context, 'left')
         break
       case 'align-center':
-        focusCell = applyTableColumnAlignment(context, 'center')
+        focusCell = applyTableAlignment(context, 'center')
         break
       case 'align-right':
-        focusCell = applyTableColumnAlignment(context, 'right')
-        break
-      case 'insert-row-above':
-        focusCell = insertTableRowAbove(context)
-        break
-      case 'insert-row-below':
-        focusCell = insertTableRowBelow(context)
-        break
-      case 'insert-column-left':
-        focusCell = insertTableColumnAt(context, 'left')
-        break
-      case 'insert-column-right':
-        focusCell = insertTableColumnAt(context, 'right')
-        break
-      case 'delete-row':
-        focusCell = deleteCurrentTableRow(context)
-        break
-      case 'delete-column':
-        focusCell = deleteCurrentTableColumn(context)
+        focusCell = applyTableAlignment(context, 'right')
         break
     }
 
     window.requestAnimationFrame(() => {
-      syncAfterTableMutation(focusCell, action.startsWith('delete-'))
+      syncAfterTableMutation(focusCell)
     })
 
     return true
+  }
+
+  const runTableContextMenuAction = (action: TableContextMenuAction) => {
+    const context = getCurrentTableContext()
+
+    if (!context) {
+      hideTableToolbar()
+      return false
+    }
+
+    switch (action) {
+      case 'open-table-submenu':
+        renderTableContextMenu('table')
+        return true
+      case 'open-autofill-submenu':
+        renderTableContextMenu('autofill')
+        return true
+      case 'insert-paragraph-above':
+        hideTableToolbarPopover()
+        return insertParagraphNearTable(context, 'above')
+      case 'insert-paragraph-below':
+        hideTableToolbarPopover()
+        return insertParagraphNearTable(context, 'below')
+      case 'open-grid-popover':
+        renderTableGridPopover(context)
+        return true
+      case 'autofill-from-header': {
+        hideTableToolbarPopover()
+        window.requestAnimationFrame(() => {
+          syncAfterTableMutation(fillTableBlanksFromHeaderRow(context))
+        })
+        return true
+      }
+      case 'autofill-from-first-column': {
+        hideTableToolbarPopover()
+        window.requestAnimationFrame(() => {
+          syncAfterTableMutation(fillTableBlanksFromFirstColumn(context))
+        })
+        return true
+      }
+      case 'delete-table':
+        hideTableToolbarPopover()
+        return deleteCurrentTable()
+    }
   }
 
   const installTableToolbar = () => {
@@ -1418,33 +1626,30 @@ export const createMarkdownEditor = async ({
     const startGroup = document.createElement('div')
     const alignGroup = document.createElement('div')
     const endGroup = document.createElement('div')
-    const structureButton = document.createElement('button')
+    const entryButton = document.createElement('button')
     const deleteButton = document.createElement('button')
-    const menuElement = document.createElement('div')
-    const meta = document.createElement('span')
+    const popoverElement = document.createElement('div')
 
     toolbarElement.className = 'editor-table-toolbar'
     toolbarElement.hidden = true
     toolbarElement.setAttribute('aria-hidden', 'true')
-    toolbarElement.dataset.menuOpen = 'false'
+    toolbarElement.setAttribute('role', 'toolbar')
 
     startGroup.className = 'editor-table-toolbar__group editor-table-toolbar__group--start'
-    alignGroup.className = 'editor-table-toolbar__group'
+    alignGroup.className = 'editor-table-toolbar__group editor-table-toolbar__group--align'
     endGroup.className = 'editor-table-toolbar__group editor-table-toolbar__group--end'
-    meta.className = 'editor-table-toolbar__meta'
-    menuElement.className = 'editor-table-toolbar__menu'
-    menuElement.hidden = true
-    menuElement.setAttribute('aria-hidden', 'true')
+    popoverElement.className = 'editor-table-toolbar__popover'
+    popoverElement.hidden = true
+    popoverElement.setAttribute('aria-hidden', 'true')
 
     tableToolbar = toolbarElement
-    tableToolbarMenu = menuElement
-    tableToolbarMeta = meta
+    tableToolbarPopover = popoverElement
+    tableToolbarEntryButton = entryButton
 
     const configureIconButton = (
       button: HTMLButtonElement,
       icon: string,
-      title: string,
-      onClick: () => void
+      title: string
     ) => {
       button.type = 'button'
       button.className = 'editor-table-toolbar__icon'
@@ -1456,58 +1661,77 @@ export const createMarkdownEditor = async ({
       button.addEventListener('pointerdown', (event) => {
         event.preventDefault()
       })
-      button.addEventListener('click', onClick)
     }
+
+    configureIconButton(entryButton, 'vditor-icon-table', '表格工具')
+    entryButton.setAttribute('aria-haspopup', 'menu')
+    entryButton.addEventListener('click', () => {
+      const context = getCurrentTableContext()
+
+      if (!context) {
+        hideTableToolbar()
+        return
+      }
+
+      if (tableToolbarPopoverKind === 'grid') {
+        hideTableToolbarPopover()
+        return
+      }
+
+      renderTableGridPopover(context)
+    })
+    entryButton.addEventListener('contextmenu', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+
+      const context = getCurrentTableContext()
+
+      if (!context) {
+        hideTableToolbar()
+        return
+      }
+
+      if (tableToolbarPopoverKind === 'menu' && tableContextMenuView === 'root') {
+        hideTableToolbarPopover()
+        return
+      }
+
+      renderTableContextMenu('root')
+    })
+
+    configureIconButton(deleteButton, 'vditor-icon-trashcan', '删除整个表格')
+    deleteButton.addEventListener('click', () => {
+      void runTableToolbarAction('delete-table')
+    })
 
     const appendAlignmentButton = (
       container: HTMLElement,
-      action: TableToolbarAction,
+      action: Extract<TableToolbarAction, 'align-left' | 'align-center' | 'align-right'>,
       icon: string,
       title: string
     ) => {
       const button = document.createElement('button')
 
-      button.type = 'button'
-      button.className = 'editor-table-toolbar__icon'
+      configureIconButton(button, icon, title)
       button.dataset.action = action
-      button.dataset.active = 'false'
-      button.setAttribute('aria-pressed', 'false')
-      button.setAttribute('aria-label', title)
-      button.title = title
-      button.innerHTML = `<svg viewBox="0 0 32 32" aria-hidden="true"><use xlink:href="#${icon}"></use></svg>`
-      button.addEventListener('pointerdown', (event) => {
-        event.preventDefault()
-      })
       button.addEventListener('click', () => {
-        hideTableToolbarMenu()
         void runTableToolbarAction(action)
       })
-
       tableToolbarButtons.set(action, button)
       container.append(button)
     }
 
-    configureIconButton(structureButton, 'vditor-icon-table', '表格操作', () => {
-      toggleTableToolbarMenu('structure', 'start', structureButton)
-    })
-    structureButton.dataset.kind = 'structure'
-
-    configureIconButton(deleteButton, 'vditor-icon-trashcan', '删除当前行或列', () => {
-      toggleTableToolbarMenu('delete', 'end', deleteButton)
-    })
-    deleteButton.dataset.kind = 'delete'
-
     for (const definition of TABLE_TOOLBAR_ALIGNMENT_ACTIONS) {
-      appendAlignmentButton(alignGroup, definition.action, definition.icon, definition.title)
+      appendAlignmentButton(alignGroup, definition.action as never, definition.icon, definition.title)
     }
 
-    startGroup.append(structureButton, meta)
+    startGroup.append(entryButton)
     endGroup.append(deleteButton)
-    toolbarElement.append(startGroup, alignGroup, endGroup, menuElement)
+    toolbarElement.append(startGroup, alignGroup, endGroup, popoverElement)
     host.append(toolbarElement)
 
     const handleSelectionChange = () => {
-      hideTableToolbarMenu()
+      hideTableToolbarPopover()
       scheduleTableToolbarRefresh()
     }
 
@@ -1525,17 +1749,26 @@ export const createMarkdownEditor = async ({
       }
 
       window.requestAnimationFrame(() => {
-        hideTableToolbarMenu()
+        hideTableToolbarPopover()
         const context = getCurrentTableContext()
 
         if (!context) {
           hideTableToolbar()
+          return
         }
+
+        scheduleTableToolbarRefresh()
       })
+    }
+
+    const handlePointerStateReset = () => {
+      tableGridPointerDown = false
     }
 
     document.addEventListener('selectionchange', handleSelectionChange)
     document.addEventListener('pointerdown', handlePointerDown, true)
+    document.addEventListener('pointerup', handlePointerStateReset, true)
+    document.addEventListener('pointercancel', handlePointerStateReset, true)
     document.addEventListener('scroll', handleViewportChange, true)
     window.addEventListener('resize', handleViewportChange)
 
@@ -1547,14 +1780,15 @@ export const createMarkdownEditor = async ({
 
       document.removeEventListener('selectionchange', handleSelectionChange)
       document.removeEventListener('pointerdown', handlePointerDown, true)
+      document.removeEventListener('pointerup', handlePointerStateReset, true)
+      document.removeEventListener('pointercancel', handlePointerStateReset, true)
       document.removeEventListener('scroll', handleViewportChange, true)
       window.removeEventListener('resize', handleViewportChange)
 
-      hideTableToolbarMenu()
+      hideTableToolbarPopover()
       tableToolbarButtons.clear()
-      tableToolbarMenu = null
-      tableToolbarMenuTrigger = null
-      tableToolbarMeta = null
+      tableToolbarPopover = null
+      tableToolbarEntryButton = null
       tableToolbar?.remove()
       tableToolbar = null
     }
