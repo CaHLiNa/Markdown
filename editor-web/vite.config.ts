@@ -35,6 +35,14 @@ export default defineConfig({
           dest: 'vditor/dist/js/icons'
         },
         {
+          src: 'node_modules/vditor/dist/js/highlight.js/highlight.min.js',
+          dest: 'vditor/dist/js/highlight.js'
+        },
+        {
+          src: 'node_modules/vditor/dist/js/highlight.js/third-languages.js',
+          dest: 'vditor/dist/js/highlight.js'
+        },
+        {
           src: 'node_modules/vditor/dist/js/highlight.js/styles/github.min.css',
           dest: 'vditor/dist/js/highlight.js/styles'
         },
