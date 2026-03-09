@@ -18,7 +18,10 @@ import {
   defaultEditorPresentation,
   type EditorPresentation
 } from './editor-presentation'
-import { applyEditableRootRuntimeOptions } from './editor-runtime-options'
+import {
+  applyEditableRootRuntimeOptions,
+  applyLuteRuntimeOptions
+} from './editor-runtime-options'
 import type { EditorRuntimeState } from './editor-state'
 
 type Root = HTMLElement | string
@@ -99,7 +102,10 @@ type VditorRuntime = Vditor['vditor'] & {
     element: HTMLElement
   }
   lute?: Vditor['vditor']['lute'] & {
+    SetChineseParagraphBeginningSpace?: (enabled: boolean) => void
+    SetIndentCodeBlock?: (enabled: boolean) => void
     SetLinkBase?: (value: string) => void
+    SetParagraphBeginningSpace?: (enabled: boolean) => void
     SetVditorIR?: (enabled: boolean) => void
     SetVditorSV?: (enabled: boolean) => void
     SetVditorWYSIWYG?: (enabled: boolean) => void
@@ -108,7 +114,10 @@ type VditorRuntime = Vditor['vditor'] & {
     preview?: {
       mode?: 'both' | 'editor'
       markdown?: {
+        footnotes?: boolean
         linkBase?: string
+        mathBlockPreview?: boolean
+        paragraphBeginningSpace?: boolean
       }
     }
   }
@@ -1218,6 +1227,7 @@ export const createMarkdownEditor = async ({
     const nextLinkBase = getResolvedLinkBase()
 
     runtime.lute?.SetLinkBase?.(nextLinkBase)
+    applyLuteRuntimeOptions(runtime.lute)
 
     for (const root of [getRuntime().ir?.element, getRuntime().sv?.element]) {
       if (!root) {
@@ -1231,6 +1241,7 @@ export const createMarkdownEditor = async ({
       runtime.options.preview.markdown.footnotes = currentPresentation.enableFootnotes
       runtime.options.preview.markdown.mathBlockPreview = currentPresentation.enableMath
       runtime.options.preview.markdown.linkBase = nextLinkBase
+      runtime.options.preview.markdown.paragraphBeginningSpace = true
     }
   }
 
@@ -2868,6 +2879,7 @@ export const createMarkdownEditor = async ({
         gfmAutoLink: true,
         linkBase: getResolvedLinkBase(),
         mathBlockPreview: currentPresentation.enableMath,
+        paragraphBeginningSpace: true,
         sanitize: false
       },
       math: {
