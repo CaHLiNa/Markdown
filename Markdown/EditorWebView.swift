@@ -31,6 +31,7 @@ struct EditorWebView: NSViewRepresentable {
     static let imageAssetRequestMessageName = "editorImageAssetRequest"
     static let openLinkMessageName = "editorOpenLink"
     static let consoleMessageName = "editorConsole"
+    static let contextMenuRequestMessageName = "editorContextMenuRequest"
 
     @Binding var markdown: String
     let controller: Controller
@@ -39,6 +40,7 @@ struct EditorWebView: NSViewRepresentable {
     var revealRequest: EditorRevealRequest?
     var onContentChanged: ((String) -> Void)?
     var onImageAssetRequest: ((ImageAssetRequest, @escaping (Result<String, Error>) -> Void) -> Void)?
+    var onContextMenuCommand: ((EditorCommand) -> Void)?
 
     init(
         markdown: Binding<String>,
@@ -47,7 +49,8 @@ struct EditorWebView: NSViewRepresentable {
         presentation: Presentation = .default,
         revealRequest: EditorRevealRequest? = nil,
         onContentChanged: ((String) -> Void)? = nil,
-        onImageAssetRequest: ((ImageAssetRequest, @escaping (Result<String, Error>) -> Void) -> Void)? = nil
+        onImageAssetRequest: ((ImageAssetRequest, @escaping (Result<String, Error>) -> Void) -> Void)? = nil,
+        onContextMenuCommand: ((EditorCommand) -> Void)? = nil
     ) {
         _markdown = markdown
         self.controller = controller
@@ -56,6 +59,7 @@ struct EditorWebView: NSViewRepresentable {
         self.revealRequest = revealRequest
         self.onContentChanged = onContentChanged
         self.onImageAssetRequest = onImageAssetRequest
+        self.onContextMenuCommand = onContextMenuCommand
     }
 
     func makeCoordinator() -> Coordinator {
@@ -73,6 +77,7 @@ struct EditorWebView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: Self.imageAssetRequestMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.openLinkMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.consoleMessageName)
+        configuration.userContentController.add(context.coordinator, name: Self.contextMenuRequestMessageName)
         configuration.userContentController.addUserScript(
             WKUserScript(
                 source: Self.consoleForwardingScript,
@@ -80,11 +85,19 @@ struct EditorWebView: NSViewRepresentable {
                 forMainFrameOnly: true
             )
         )
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: Self.contextMenuInterceptionScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
 
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = ContextMenuWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.allowsMagnification = false
         webView.setValue(false, forKey: "drawsBackground")
+        webView.editorCommandHandler = onContextMenuCommand
         controller.attach(webView: webView)
         context.coordinator.loadLocalEditor(in: webView)
         return webView
@@ -93,6 +106,7 @@ struct EditorWebView: NSViewRepresentable {
     func updateNSView(_ nsView: WKWebView, context: Context) {
         context.coordinator.parent = self
         controller.attach(webView: nsView)
+        (nsView as? ContextMenuWebView)?.editorCommandHandler = onContextMenuCommand
         context.coordinator.syncMarkdownToJavaScript()
         context.coordinator.syncDocumentBaseURLToJavaScript()
         context.coordinator.syncPresentationToJavaScript()
@@ -105,7 +119,9 @@ struct EditorWebView: NSViewRepresentable {
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: imageAssetRequestMessageName)
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: openLinkMessageName)
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: consoleMessageName)
+        nsView.configuration.userContentController.removeScriptMessageHandler(forName: contextMenuRequestMessageName)
         nsView.navigationDelegate = nil
+        (nsView as? ContextMenuWebView)?.editorCommandHandler = nil
         coordinator.parent.controller.detach(webView: nsView)
         nsView.stopLoading()
     }
@@ -213,6 +229,262 @@ struct EditorWebView: NSViewRepresentable {
     })();
     """
 
+    static let contextMenuInterceptionScript = """
+    (() => {
+      const handler = window.webkit?.messageHandlers?.editorContextMenuRequest;
+
+      if (!handler || window.__editorContextMenuInstalled) {
+        return;
+      }
+
+      window.__editorContextMenuInstalled = true;
+
+      const editableSelector = [
+        '.ProseMirror',
+        '.cm-editor',
+        '.cm-content',
+        '[contenteditable=\"true\"]'
+      ].join(', ');
+
+      const resolveElement = (target) => {
+        if (target instanceof Element) {
+          return target;
+        }
+
+        if (target instanceof Node) {
+          return target.parentElement;
+        }
+
+        return null;
+      };
+
+      document.addEventListener('contextmenu', (event) => {
+        const element = resolveElement(event.target);
+
+        if (!element || !element.closest(editableSelector)) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        try {
+          const result = handler.postMessage({
+            clientX: event.clientX,
+            clientY: event.clientY
+          });
+
+          if (result && typeof result === 'object' && typeof result.catch === 'function') {
+            result.catch(() => {});
+          }
+        } catch {}
+      }, true);
+    })();
+    """
+
+    struct ContextMenuSystemItemDefinition {
+        let title: String
+        let action: Selector
+        let keyEquivalent: String
+        let modifiers: NSEvent.ModifierFlags
+    }
+
+    struct ContextMenuCommandDefinition {
+        let command: EditorCommand
+        let title: String
+        let keyEquivalent: String
+        let modifiers: NSEvent.ModifierFlags
+    }
+
+    enum ContextMenuBuilder {
+        static let undoSelector = NSSelectorFromString("undo:")
+        static let redoSelector = NSSelectorFromString("redo:")
+        static let cutSelector = NSSelectorFromString("cut:")
+        static let copySelector = NSSelectorFromString("copy:")
+        static let pasteSelector = NSSelectorFromString("paste:")
+        static let selectAllSelector = NSSelectorFromString("selectAll:")
+
+        static let systemItemGroups: [[ContextMenuSystemItemDefinition]] = [
+            [
+                .init(title: "撤销", action: undoSelector, keyEquivalent: "z", modifiers: [.command]),
+                .init(title: "重做", action: redoSelector, keyEquivalent: "z", modifiers: [.command, .shift]),
+            ],
+            [
+                .init(title: "剪切", action: cutSelector, keyEquivalent: "x", modifiers: [.command]),
+                .init(title: "复制", action: copySelector, keyEquivalent: "c", modifiers: [.command]),
+                .init(title: "粘贴", action: pasteSelector, keyEquivalent: "v", modifiers: [.command]),
+            ],
+            [
+                .init(title: "全选", action: selectAllSelector, keyEquivalent: "a", modifiers: [.command]),
+            ],
+        ]
+
+        static let inlineCommandItems: [ContextMenuCommandDefinition] = [
+            .init(command: .bold, title: "粗体", keyEquivalent: "b", modifiers: [.command]),
+            .init(command: .italic, title: "斜体", keyEquivalent: "i", modifiers: [.command]),
+            .init(command: .link, title: "链接", keyEquivalent: "l", modifiers: [.command]),
+            .init(command: .inlineCode, title: "行内代码", keyEquivalent: "e", modifiers: [.command]),
+        ]
+
+        static let blockCommandItems: [ContextMenuCommandDefinition] = [
+            .init(command: .heading1, title: "标题 1", keyEquivalent: "1", modifiers: [.command]),
+            .init(command: .heading2, title: "标题 2", keyEquivalent: "2", modifiers: [.command]),
+            .init(command: .heading3, title: "标题 3", keyEquivalent: "3", modifiers: [.command]),
+            .init(command: .blockquote, title: "引用块", keyEquivalent: "q", modifiers: [.command, .option]),
+            .init(command: .bulletList, title: "无序列表", keyEquivalent: "u", modifiers: [.command, .option]),
+            .init(command: .orderedList, title: "有序列表", keyEquivalent: "o", modifiers: [.command, .option]),
+            .init(command: .taskList, title: "任务列表", keyEquivalent: "x", modifiers: [.command, .option]),
+            .init(command: .codeBlock, title: "代码块", keyEquivalent: "c", modifiers: [.command, .option]),
+        ]
+
+        static func buildMenu(
+            from defaultMenu: NSMenu?,
+            commandTarget: AnyObject,
+            commandAction: Selector
+        ) -> NSMenu {
+            let menu = NSMenu(title: "Editor")
+            menu.autoenablesItems = true
+            menu.allowsContextMenuPlugIns = false
+            if #available(macOS 15.2, *) {
+                menu.automaticallyInsertsWritingToolsItems = false
+            }
+
+            appendSystemEditItems(to: menu, defaultMenu: defaultMenu)
+            appendCommandItems(inlineCommandItems, to: menu, commandTarget: commandTarget, commandAction: commandAction)
+            appendCommandItems(blockCommandItems, to: menu, commandTarget: commandTarget, commandAction: commandAction)
+
+            return menu
+        }
+
+        private static func appendSystemEditItems(to menu: NSMenu, defaultMenu: NSMenu?) {
+            for group in systemItemGroups {
+                let items = group.compactMap { menuItem(for: $0, in: defaultMenu) }
+                appendSection(items, to: menu)
+            }
+        }
+
+        private static func appendCommandItems(
+            _ definitions: [ContextMenuCommandDefinition],
+            to menu: NSMenu,
+            commandTarget: AnyObject,
+            commandAction: Selector
+        ) {
+            let items = definitions.map { definition -> NSMenuItem in
+                let item = NSMenuItem(
+                    title: definition.title,
+                    action: commandAction,
+                    keyEquivalent: definition.keyEquivalent
+                )
+                item.keyEquivalentModifierMask = definition.modifiers
+                item.target = commandTarget
+                item.representedObject = definition.command.rawValue
+                return item
+            }
+
+            appendSection(items, to: menu)
+        }
+
+        private static func appendSection(_ items: [NSMenuItem], to menu: NSMenu) {
+            guard !items.isEmpty else {
+                return
+            }
+
+            if !menu.items.isEmpty {
+                menu.addItem(.separator())
+            }
+
+            items.forEach(menu.addItem(_:))
+        }
+
+        private static func menuItem(
+            for definition: ContextMenuSystemItemDefinition,
+            in defaultMenu: NSMenu?
+        ) -> NSMenuItem? {
+            if let defaultItem = defaultMenu?.items.first(where: { $0.action == definition.action }) {
+                if let copiedItem = defaultItem.copy() as? NSMenuItem {
+                    return copiedItem
+                }
+            }
+
+            let fallbackItem = NSMenuItem(
+                title: definition.title,
+                action: definition.action,
+                keyEquivalent: definition.keyEquivalent
+            )
+            fallbackItem.keyEquivalentModifierMask = definition.modifiers
+            fallbackItem.target = nil
+            return fallbackItem
+        }
+    }
+
+    final class ContextMenuWebView: WKWebView {
+        var editorCommandHandler: ((EditorCommand) -> Void)?
+
+        func presentEditorContextMenu(atViewportPoint viewportPoint: CGPoint? = nil) {
+            let menu = ContextMenuBuilder.buildMenu(
+                from: nil,
+                commandTarget: self,
+                commandAction: #selector(performEditorContextMenuCommand(_:))
+            )
+
+            guard let event = contextMenuEvent(atViewportPoint: viewportPoint) else {
+                return
+            }
+
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        }
+
+        override func menu(for event: NSEvent) -> NSMenu? {
+            let defaultMenu = super.menu(for: event)
+            return ContextMenuBuilder.buildMenu(
+                from: defaultMenu,
+                commandTarget: self,
+                commandAction: #selector(performEditorContextMenuCommand(_:))
+            )
+        }
+
+        @objc private func performEditorContextMenuCommand(_ sender: NSMenuItem) {
+            guard
+                let rawValue = sender.representedObject as? String,
+                let command = EditorCommand(rawValue: rawValue)
+            else {
+                return
+            }
+
+            editorCommandHandler?(command)
+        }
+
+        private func contextMenuEvent(atViewportPoint viewportPoint: CGPoint?) -> NSEvent? {
+            guard let window else {
+                return nil
+            }
+
+            let locationInWindow: NSPoint
+
+            if let viewportPoint {
+                let viewPoint = NSPoint(
+                    x: viewportPoint.x,
+                    y: bounds.height - viewportPoint.y
+                )
+                locationInWindow = convert(viewPoint, to: nil)
+            } else {
+                locationInWindow = window.mouseLocationOutsideOfEventStream
+            }
+
+            return NSEvent.mouseEvent(
+                with: .rightMouseDown,
+                location: locationInWindow,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            )
+        }
+    }
+
     struct Presentation: Equatable {
         var theme: String
         var focusMode: Bool
@@ -275,6 +547,32 @@ struct EditorWebView: NSViewRepresentable {
         )
     }
 
+    struct SynchronizedPageState {
+        var markdown: String?
+        var documentBaseURL: URL?
+        var presentation: Presentation?
+        var revealRequestID: UUID?
+
+        mutating func resetForPageLoad() {
+            markdown = nil
+            documentBaseURL = nil
+            presentation = nil
+            revealRequestID = nil
+        }
+    }
+
+    struct PageLoadState {
+        private(set) var isReady = false
+
+        mutating func prepareForPageLoad() {
+            isReady = false
+        }
+
+        mutating func markReady() {
+            isReady = true
+        }
+    }
+
     struct ImageAssetRequest {
         let filename: String
         let mimeType: String
@@ -284,7 +582,7 @@ struct EditorWebView: NSViewRepresentable {
     @MainActor
     final class Controller {
         private weak var webView: WKWebView?
-        private var isPageReady = false
+        private var pageLoadState = PageLoadState()
         private var pendingScripts: [PendingScript] = []
 
         func attach(webView: WKWebView) {
@@ -292,7 +590,7 @@ struct EditorWebView: NSViewRepresentable {
             self.webView = webView
 
             if isNewWebView {
-                isPageReady = false
+                pageLoadState.prepareForPageLoad()
             }
 
             flushPendingScriptsIfPossible()
@@ -304,20 +602,28 @@ struct EditorWebView: NSViewRepresentable {
             }
 
             self.webView = nil
-            isPageReady = false
+            pageLoadState.prepareForPageLoad()
             pendingScripts.removeAll()
         }
 
+        func prepareForPageLoad() {
+            pageLoadState.prepareForPageLoad()
+        }
+
         func markPageReady() {
-            isPageReady = true
+            pageLoadState.markReady()
             flushPendingScriptsIfPossible()
+        }
+
+        var debugIsPageReady: Bool {
+            pageLoadState.isReady
         }
 
         func evaluateJavaScript(
             _ javaScript: String,
             completion: ((Result<Any?, Error>) -> Void)? = nil
         ) {
-            guard let webView, isPageReady else {
+            guard let webView, pageLoadState.isReady else {
                 pendingScripts.append(PendingScript(javaScript: javaScript, completion: completion))
                 return
             }
@@ -451,7 +757,7 @@ struct EditorWebView: NSViewRepresentable {
         }
 
         func exportPDF(completion: @escaping (Result<Data, Error>) -> Void) {
-            guard let webView, isPageReady else {
+            guard let webView, pageLoadState.isReady else {
                 completion(.failure(EditorWebViewControllerError.pageNotReady))
                 return
             }
@@ -470,7 +776,7 @@ struct EditorWebView: NSViewRepresentable {
         }
 
         func printDocument() throws {
-            guard let webView, isPageReady else {
+            guard let webView, pageLoadState.isReady else {
                 throw EditorWebViewControllerError.pageNotReady
             }
 
@@ -481,7 +787,7 @@ struct EditorWebView: NSViewRepresentable {
         }
 
         private func flushPendingScriptsIfPossible() {
-            guard let webView, isPageReady, !pendingScripts.isEmpty else {
+            guard let webView, pageLoadState.isReady, !pendingScripts.isEmpty else {
                 return
             }
 
@@ -502,14 +808,17 @@ struct EditorWebView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        private enum PageLoadSource {
+            case bundledFile
+            case inlineFallback
+        }
+
         var parent: EditorWebView
-        private var lastSyncedMarkdown: String?
-        private var lastSyncedDocumentBaseURL: URL?
-        private var lastSyncedPresentation: Presentation?
-        private var lastRevealRequestID: UUID?
+        private var synchronizedPageState = SynchronizedPageState()
         private var didAttemptInlineFallback = false
         private var didReceiveEditorReady = false
         private var readyFallbackWorkItem: DispatchWorkItem?
+        private var pageLoadSource: PageLoadSource = .bundledFile
 
         init(parent: EditorWebView) {
             self.parent = parent
@@ -522,38 +831,36 @@ struct EditorWebView: NSViewRepresentable {
                 return
             }
 
-            didAttemptInlineFallback = false
-            didReceiveEditorReady = false
-            cancelReadyFallback()
+            pageLoadSource = .bundledFile
+            prepareForPageLoad(in: webView, resetInlineFallbackAttempt: true)
             let readAccessURL = URL(fileURLWithPath: "/", isDirectory: true)
-            scheduleReadyFallback(for: webView)
             webView.loadFileURL(indexURL, allowingReadAccessTo: readAccessURL)
         }
 
         func syncMarkdownToJavaScript() {
-            guard parent.markdown != lastSyncedMarkdown else {
+            guard parent.markdown != synchronizedPageState.markdown else {
                 return
             }
 
-            lastSyncedMarkdown = parent.markdown
+            synchronizedPageState.markdown = parent.markdown
             parent.controller.loadMarkdown(parent.markdown)
         }
 
         func syncDocumentBaseURLToJavaScript() {
-            guard parent.documentBaseURL != lastSyncedDocumentBaseURL else {
+            guard parent.documentBaseURL != synchronizedPageState.documentBaseURL else {
                 return
             }
 
-            lastSyncedDocumentBaseURL = parent.documentBaseURL
+            synchronizedPageState.documentBaseURL = parent.documentBaseURL
             parent.controller.setDocumentBaseURL(parent.documentBaseURL)
         }
 
         func syncPresentationToJavaScript() {
-            guard parent.presentation != lastSyncedPresentation else {
+            guard parent.presentation != synchronizedPageState.presentation else {
                 return
             }
 
-            lastSyncedPresentation = parent.presentation
+            synchronizedPageState.presentation = parent.presentation
 
             let theme = EditorWebView.javaScriptStringLiteral(for: parent.presentation.theme)
             let focusMode = parent.presentation.focusMode ? "true" : "false"
@@ -626,14 +933,22 @@ struct EditorWebView: NSViewRepresentable {
                 return
             }
 
-            guard revealRequest.id != lastRevealRequestID else {
+            guard revealRequest.id != synchronizedPageState.revealRequestID else {
                 return
             }
 
-            lastRevealRequestID = revealRequest.id
+            synchronizedPageState.revealRequestID = revealRequest.id
             parent.controller.revealOffset(
                 revealRequest.offset,
                 length: revealRequest.length
+            )
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            NSLog("[EditorWebView] didStartProvisionalNavigation url=%@", webView.url?.absoluteString ?? "<nil>")
+            prepareForPageLoad(
+                in: webView,
+                resetInlineFallbackAttempt: pageLoadSource != .inlineFallback
             )
         }
 
@@ -650,7 +965,7 @@ struct EditorWebView: NSViewRepresentable {
                 message.name == EditorWebView.contentChangedMessageName,
                 let content = message.body as? String
             {
-                lastSyncedMarkdown = content
+                synchronizedPageState.markdown = content
 
                 if parent.markdown != content {
                     parent.markdown = content
@@ -681,6 +996,11 @@ struct EditorWebView: NSViewRepresentable {
                 return
             }
 
+            if message.name == EditorWebView.contextMenuRequestMessageName {
+                handleContextMenuRequest(message)
+                return
+            }
+
             if
                 message.name == EditorWebView.consoleMessageName,
                 let body = message.body as? [String: Any],
@@ -689,6 +1009,21 @@ struct EditorWebView: NSViewRepresentable {
             {
                 NSLog("[EditorWebView][JS][%@] %@", level.uppercased(), messageText)
             }
+        }
+
+        private func handleContextMenuRequest(_ message: WKScriptMessage) {
+            guard let webView = message.webView as? ContextMenuWebView else {
+                return
+            }
+
+            let body = message.body as? [String: Any]
+            let clientX = body?["clientX"] as? Double
+            let clientY = body?["clientY"] as? Double
+            let viewportPoint = clientX.flatMap { x in
+                clientY.map { y in CGPoint(x: x, y: y) }
+            }
+
+            webView.presentEditorContextMenu(atViewportPoint: viewportPoint)
         }
 
         private func handleImageAssetRequest(_ message: WKScriptMessage) {
@@ -802,6 +1137,7 @@ struct EditorWebView: NSViewRepresentable {
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             NSLog("[EditorWebView] web content process terminated")
+            loadLocalEditor(in: webView)
         }
 
         private static func editorIndexURL() -> URL? {
@@ -819,12 +1155,23 @@ struct EditorWebView: NSViewRepresentable {
                 return
             }
 
+            pageLoadSource = .inlineFallback
             didAttemptInlineFallback = true
-            didReceiveEditorReady = false
-            cancelReadyFallback()
+            prepareForPageLoad(in: webView, resetInlineFallbackAttempt: false)
             let baseURL = indexURL.deletingLastPathComponent()
-            scheduleReadyFallback(for: webView)
             webView.loadHTMLString(inlinedHTML, baseURL: baseURL)
+        }
+
+        private func prepareForPageLoad(in webView: WKWebView, resetInlineFallbackAttempt: Bool) {
+            if resetInlineFallbackAttempt {
+                didAttemptInlineFallback = false
+            }
+
+            didReceiveEditorReady = false
+            synchronizedPageState.resetForPageLoad()
+            parent.controller.prepareForPageLoad()
+            cancelReadyFallback()
+            scheduleReadyFallback(for: webView)
         }
 
         private static func inlinedEditorHTML(from indexURL: URL) -> String? {

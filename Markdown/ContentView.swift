@@ -1075,7 +1075,8 @@ struct ContentView: View {
                     documentBaseURL: documentController.currentFileURL?.deletingLastPathComponent(),
                     presentation: documentController.currentPresentation,
                     revealRequest: documentController.revealRequest,
-                    onImageAssetRequest: documentController.persistImageAsset
+                    onImageAssetRequest: documentController.persistImageAsset,
+                    onContextMenuCommand: documentController.executeEditorCommand(_:)
                 )
             }
 

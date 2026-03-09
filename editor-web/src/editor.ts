@@ -18,6 +18,7 @@ import {
   defaultEditorPresentation,
   type EditorPresentation
 } from './editor-presentation'
+import { applyEditableRootRuntimeOptions } from './editor-runtime-options'
 import type { EditorRuntimeState } from './editor-state'
 
 type Root = HTMLElement | string
@@ -1223,7 +1224,7 @@ export const createMarkdownEditor = async ({
         continue
       }
 
-      root.setAttribute('spellcheck', currentPresentation.spellCheckEnabled ? 'true' : 'false')
+      applyEditableRootRuntimeOptions(root, currentPresentation)
     }
 
     if (runtime.options?.preview?.markdown) {

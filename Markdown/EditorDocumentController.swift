@@ -2472,15 +2472,12 @@ final class EditorDocumentController: ObservableObject {
 private final class WorkspaceFileSystemMonitor {
     private let queue = DispatchQueue(label: "Markdown.WorkspaceFileSystemMonitor")
     private var sources: [String: DispatchSourceFileSystemObject] = [:]
-    private var fileDescriptors: [String: Int32] = [:]
     private var pendingRefreshWorkItem: DispatchWorkItem?
 
     func startMonitoring(
         directoryURLs: [URL],
         onChange: @escaping @Sendable () -> Void
     ) {
-        stopMonitoring()
-
         var seenPaths: Set<String> = []
         let uniqueDirectoryURLs = directoryURLs.compactMap { directoryURL -> URL? in
             let normalizedURL = directoryURL.standardizedFileURL
@@ -2491,43 +2488,51 @@ private final class WorkspaceFileSystemMonitor {
             return normalizedURL
         }
 
-        for directoryURL in uniqueDirectoryURLs {
-            let fileDescriptor = open(directoryURL.path, O_EVTONLY)
-            guard fileDescriptor >= 0 else {
-                continue
-            }
+        queue.sync {
+            stopMonitoringLocked()
 
-            let source = DispatchSource.makeFileSystemObjectSource(
-                fileDescriptor: fileDescriptor,
-                eventMask: [.attrib, .delete, .extend, .link, .rename, .revoke, .write],
-                queue: queue
-            )
-            let path = directoryURL.path
+            for directoryURL in uniqueDirectoryURLs {
+                let fileDescriptor = open(directoryURL.path, O_EVTONLY)
+                guard fileDescriptor >= 0 else {
+                    continue
+                }
 
-            source.setEventHandler { [weak self] in
-                self?.scheduleRefresh(onChange: onChange)
-            }
-            source.setCancelHandler { [weak self] in
-                close(fileDescriptor)
-                self?.fileDescriptors.removeValue(forKey: path)
-            }
+                let source = DispatchSource.makeFileSystemObjectSource(
+                    fileDescriptor: fileDescriptor,
+                    eventMask: [.attrib, .delete, .extend, .link, .rename, .revoke, .write],
+                    queue: queue
+                )
+                let path = directoryURL.path
 
-            fileDescriptors[path] = fileDescriptor
-            sources[path] = source
-            source.resume()
+                source.setEventHandler { [weak self] in
+                    self?.scheduleRefresh(onChange: onChange)
+                }
+                source.setCancelHandler {
+                    close(fileDescriptor)
+                }
+
+                sources[path] = source
+                source.resume()
+            }
         }
     }
 
     func stopMonitoring() {
+        queue.sync {
+            stopMonitoringLocked()
+        }
+    }
+
+    private func stopMonitoringLocked() {
         pendingRefreshWorkItem?.cancel()
         pendingRefreshWorkItem = nil
 
-        for source in sources.values {
+        let activeSources = Array(sources.values)
+        sources.removeAll()
+
+        for source in activeSources {
             source.cancel()
         }
-
-        sources.removeAll()
-        fileDescriptors.removeAll()
     }
 
     private func scheduleRefresh(onChange: @escaping @Sendable () -> Void) {

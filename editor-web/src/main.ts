@@ -41,6 +41,7 @@ const applyAppearance = (appearance: EditorPresentation) => {
   document.documentElement.style.setProperty('--editor-page-width', appearance.pageWidth)
   document.documentElement.style.setProperty('--editor-code-font-family', appearance.codeFontFamily)
   document.documentElement.style.setProperty('--editor-code-font-size', `${appearance.codeFontSize}px`)
+  document.documentElement.style.setProperty('--editor-tab-size', String(appearance.indentWidth))
   document.documentElement.dataset.spellCheckEnabled = appearance.spellCheckEnabled ? 'true' : 'false'
   document.documentElement.dataset.indentWidth = String(appearance.indentWidth)
   document.documentElement.dataset.useSpacesForIndent = appearance.useSpacesForIndent ? 'true' : 'false'

@@ -5,6 +5,7 @@
   --editor-line-height: 1.72;
   --editor-code-font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
   --editor-code-font-size: 14px;
+  --editor-tab-size: 4;
   --editor-text: #2e241b;
   --editor-muted: #796d60;
   --editor-heading: #17120d;
@@ -26,7 +27,9 @@
   --editor-toolbar-icon: rgba(46, 36, 27, 0.84);
   --editor-toolbar-icon-active: #17120d;
   --editor-quote-surface: transparent;
-  --editor-selection: rgba(201, 135, 70, 0.18);
+  --editor-selection: rgba(191, 127, 56, 0.28);
+  --editor-selection-text: #17120d;
+  --editor-selection-ui: rgba(201, 135, 70, 0.18);
   --editor-quote: #b16d34;
   --editor-canvas: transparent;
   --editor-shadow: none;
@@ -56,7 +59,9 @@
   --editor-toolbar-icon: rgba(249, 245, 239, 0.82);
   --editor-toolbar-icon-active: #f9f5ef;
   --editor-quote-surface: transparent;
-  --editor-selection: rgba(240, 163, 92, 0.2);
+  --editor-selection: rgba(240, 163, 92, 0.3);
+  --editor-selection-text: #fff8f0;
+  --editor-selection-ui: rgba(240, 163, 92, 0.2);
   --editor-quote: #f0a35c;
   --editor-shadow: none;
   color-scheme: dark;
@@ -84,7 +89,9 @@
   --editor-toolbar-icon: rgba(75, 71, 63, 0.82);
   --editor-toolbar-icon-active: #302d28;
   --editor-quote-surface: transparent;
-  --editor-selection: rgba(111, 116, 93, 0.16);
+  --editor-selection: rgba(127, 133, 104, 0.26);
+  --editor-selection-text: #302d28;
+  --editor-selection-ui: rgba(111, 116, 93, 0.16);
   --editor-quote: #8a9071;
   --editor-shadow: none;
   color-scheme: light;
@@ -148,7 +155,17 @@ body {
   font-family: var(--editor-font-family);
   font-size: var(--editor-font-size);
   line-height: var(--editor-line-height);
+  tab-size: var(--editor-tab-size);
+  -moz-tab-size: var(--editor-tab-size);
   background: transparent !important;
+}
+
+.vditor-ir pre,
+.vditor-ir code,
+.vditor-reset pre,
+.vditor-reset code {
+  tab-size: var(--editor-tab-size);
+  -moz-tab-size: var(--editor-tab-size);
 }
 
 .vditor-ir,
@@ -168,6 +185,8 @@ body {
 .vditor-reset::selection,
 .vditor-reset *::selection {
   background: var(--editor-selection);
+  color: var(--editor-selection-text);
+  -webkit-text-fill-color: var(--editor-selection-text);
 }
 
 .vditor-ir p,
@@ -560,7 +579,7 @@ body {
 
 .editor-table-toolbar__grid-cell[data-active='true'] {
   border-color: transparent;
-  background: var(--editor-selection);
+  background: var(--editor-selection-ui);
   opacity: 1;
 }
 
@@ -612,7 +631,7 @@ body {
 .editor-table-toolbar__menu-button[data-active='true'],
 .editor-table-toolbar__menu-button:focus,
 .editor-table-toolbar__menu-button:focus-visible {
-  background: var(--editor-selection);
+  background: var(--editor-selection-ui);
   color: var(--editor-heading);
   outline: none;
 }
