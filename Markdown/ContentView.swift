@@ -28,26 +28,55 @@ struct ContentView: View {
         var id: String { item.id }
     }
 
-    private enum Metrics {
-        static let sidebarWidth: CGFloat = 286
-        static let minWidth: CGFloat = 1080
-        static let minHeight: CGFloat = 720
-        static let topBarHeight: CGFloat = 38
-        static let trafficLightsInset: CGFloat = 84
-        static let sidebarMinWidth: CGFloat = 220
-        static let sidebarMaxWidth: CGFloat = 420
-        static let sidebarInset: CGFloat = 8
-        static let segmentedHeight: CGFloat = 32
-        static let panelRadius: CGFloat = 10
-        static let tabStripHeight: CGFloat = 38
-        static let tabCellMinWidth: CGFloat = 84
-        static let tabCellMaxWidth: CGFloat = 168
-        static let tabListButtonWidth: CGFloat = 34
-        static let tabAddButtonWidth: CGFloat = 36
-        static let editorTopInset: CGFloat = 54
-        static let editorLeadingInset: CGFloat = 84
-        static let toolbarButtonSize: CGFloat = 28
-        static let footerButtonHeight: CGFloat = 34
+    private struct LayoutMetrics {
+        let sidebarWidth: CGFloat
+        let minWidth: CGFloat
+        let minHeight: CGFloat
+        let topBarHeight: CGFloat
+        let trafficLightsInset: CGFloat
+        let sidebarInset: CGFloat
+        let segmentedHeight: CGFloat
+        let tabStripHeight: CGFloat
+        let tabCellMinWidth: CGFloat
+        let tabCellMaxWidth: CGFloat
+        let tabListButtonWidth: CGFloat
+        let tabAddButtonWidth: CGFloat
+        let toolbarButtonSize: CGFloat
+        let footerButtonHeight: CGFloat
+
+        static let standard = LayoutMetrics(
+            sidebarWidth: 286,
+            minWidth: 1080,
+            minHeight: 720,
+            topBarHeight: 38,
+            trafficLightsInset: 84,
+            sidebarInset: 8,
+            segmentedHeight: 32,
+            tabStripHeight: 38,
+            tabCellMinWidth: 84,
+            tabCellMaxWidth: 168,
+            tabListButtonWidth: 34,
+            tabAddButtonWidth: 36,
+            toolbarButtonSize: 28,
+            footerButtonHeight: 34
+        )
+
+        static let compact = LayoutMetrics(
+            sidebarWidth: 268,
+            minWidth: 1040,
+            minHeight: 700,
+            topBarHeight: 34,
+            trafficLightsInset: 80,
+            sidebarInset: 7,
+            segmentedHeight: 30,
+            tabStripHeight: 34,
+            tabCellMinWidth: 78,
+            tabCellMaxWidth: 156,
+            tabListButtonWidth: 32,
+            tabAddButtonWidth: 34,
+            toolbarButtonSize: 26,
+            footerButtonHeight: 32
+        )
     }
 
     private var interfaceStyle: EditorInterfaceStyle {
@@ -59,7 +88,11 @@ struct ContentView: View {
     }
 
     private var palette: EditorPalette {
-        .forTheme(documentController.editorTheme, style: interfaceStyle)
+        .forStyle(interfaceStyle)
+    }
+
+    private var metrics: LayoutMetrics {
+        documentController.interfaceDensity == .compact ? .compact : .standard
     }
 
     private var markdownBinding: Binding<String> {
@@ -90,7 +123,7 @@ struct ContentView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(preferredColorScheme)
-        .frame(minWidth: Metrics.minWidth, minHeight: Metrics.minHeight)
+        .frame(minWidth: metrics.minWidth, minHeight: metrics.minHeight)
         .onAppear {
             titleDraft = displayTitle
         }
@@ -176,7 +209,7 @@ struct ContentView: View {
         HStack(spacing: 0) {
             if isSidebarVisible {
                 sidebarChromeBar
-                    .frame(width: Metrics.sidebarWidth)
+                    .frame(width: metrics.sidebarWidth)
 
                 Rectangle()
                     .fill(palette.separator)
@@ -185,7 +218,7 @@ struct ContentView: View {
 
             editorChromeBar
         }
-        .frame(height: Metrics.topBarHeight)
+        .frame(height: metrics.topBarHeight)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(palette.separator)
@@ -196,7 +229,7 @@ struct ContentView: View {
     private var sidebarChromeBar: some View {
         HStack(spacing: 0) {
             Color.clear
-                .frame(width: Metrics.trafficLightsInset)
+                .frame(width: metrics.trafficLightsInset)
 
             Spacer(minLength: 0)
 
@@ -218,7 +251,7 @@ struct ContentView: View {
                 if !isSidebarVisible {
                     HStack(spacing: 0) {
                         Color.clear
-                            .frame(width: Metrics.trafficLightsInset)
+                            .frame(width: metrics.trafficLightsInset)
 
                         chromeButton(
                             systemName: "line.3.horizontal",
@@ -238,11 +271,13 @@ struct ContentView: View {
                         action: documentController.saveDocument
                     )
 
-                    Text("\(documentController.characterCount) 字")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(palette.mutedText)
-                        .monospacedDigit()
-                        .frame(minWidth: 34, alignment: .leading)
+                    if documentController.alwaysShowWordCount {
+                        Text("\(documentController.characterCount) 字")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(palette.mutedText)
+                            .monospacedDigit()
+                            .frame(minWidth: 34, alignment: .leading)
+                    }
                 }
                 .padding(.trailing, 12)
             }
@@ -302,7 +337,7 @@ struct ContentView: View {
         HStack(spacing: 0) {
             if isSidebarVisible {
                 sidebar
-                    .frame(width: Metrics.sidebarWidth)
+                    .frame(width: metrics.sidebarWidth)
 
                 Rectangle()
                     .fill(palette.separator)
@@ -353,12 +388,12 @@ struct ContentView: View {
             }
         }
         .padding(2)
-        .frame(height: Metrics.segmentedHeight)
+        .frame(height: metrics.segmentedHeight)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(palette.segmentedTrack)
         )
-        .padding(.horizontal, Metrics.sidebarInset)
+        .padding(.horizontal, metrics.sidebarInset)
         .padding(.top, 8)
         .padding(.bottom, 8)
     }
@@ -396,8 +431,8 @@ struct ContentView: View {
                 outlinePanel
             }
         }
-        .padding(.horizontal, Metrics.sidebarInset)
-        .padding(.bottom, Metrics.sidebarInset)
+        .padding(.horizontal, metrics.sidebarInset)
+        .padding(.bottom, metrics.sidebarInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -445,7 +480,7 @@ struct ContentView: View {
                 }
                 .foregroundStyle(palette.secondaryText)
                 .frame(maxWidth: .infinity, alignment: .center)
-                .frame(height: Metrics.footerButtonHeight)
+                .frame(height: metrics.footerButtonHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -649,7 +684,18 @@ struct ContentView: View {
     }
 
     private func isOutlineItemExpanded(_ item: EditorOutlineItem) -> Bool {
-        outlineExpansionOverrides[item.id] ?? false
+        outlineExpansionOverrides[item.id] ?? defaultOutlineExpanded(for: item)
+    }
+
+    private func defaultOutlineExpanded(for item: EditorOutlineItem) -> Bool {
+        switch documentController.outlineVisibilityMode {
+        case .expanded:
+            return true
+        case .collapseToLevel1:
+            return false
+        case .collapseToLevel2:
+            return item.level == outlineBaseLevel
+        }
     }
 
     private func toggleOutlineExpansion(for item: EditorOutlineItem) {
@@ -837,7 +883,7 @@ struct ContentView: View {
 
             newTabButton
         }
-        .frame(height: Metrics.tabStripHeight)
+        .frame(height: metrics.tabStripHeight)
         .background(palette.editorChrome)
     }
 
@@ -885,8 +931,8 @@ struct ContentView: View {
             .opacity(isActive ? 1 : 0.7)
         }
         .padding(.horizontal, 12)
-        .frame(minWidth: Metrics.tabCellMinWidth, maxWidth: Metrics.tabCellMaxWidth)
-        .frame(height: Metrics.tabStripHeight)
+        .frame(minWidth: metrics.tabCellMinWidth, maxWidth: metrics.tabCellMaxWidth)
+        .frame(height: metrics.tabStripHeight)
         .background(isActive ? palette.activeTabSurface : .clear)
         .overlay(alignment: .trailing) {
             Rectangle()
@@ -909,7 +955,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .buttonStyle(.plain)
-        .frame(width: Metrics.tabAddButtonWidth, height: Metrics.tabStripHeight)
+        .frame(width: metrics.tabAddButtonWidth, height: metrics.tabStripHeight)
         .background(palette.editorChrome)
         .contentShape(Rectangle())
         .help("新建标签页")
@@ -945,7 +991,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .menuStyle(.borderlessButton)
-        .frame(width: Metrics.tabListButtonWidth, height: Metrics.tabStripHeight)
+        .frame(width: metrics.tabListButtonWidth, height: metrics.tabStripHeight)
         .background(palette.editorChrome)
         .contentShape(Rectangle())
         .help("显示所有标签页")
@@ -1089,7 +1135,7 @@ struct ContentView: View {
             Image(systemName: systemName)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(palette.secondaryText)
-                .frame(width: Metrics.toolbarButtonSize, height: Metrics.toolbarButtonSize)
+                .frame(width: metrics.toolbarButtonSize, height: metrics.toolbarButtonSize)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .fill(Color.clear)
@@ -1182,9 +1228,7 @@ private struct EditorPalette {
     let accentText: Color
     let emptyStateText: Color
 
-    static func forTheme(_ theme: EditorTheme, style: EditorInterfaceStyle) -> EditorPalette {
-        _ = theme
-
+    static func forStyle(_ style: EditorInterfaceStyle) -> EditorPalette {
         switch style {
         case .dark:
             return EditorPalette(
@@ -1235,6 +1279,31 @@ private struct EditorPalette {
                 titleText: Color.black.opacity(0.85),
                 accentText: Color(hex: 0x007AFF),
                 emptyStateText: Color.black.opacity(0.35)
+            )
+        case .sepia:
+            return EditorPalette(
+                windowBackground: Color(hex: 0xECE8DB),
+                windowTint: Color(hex: 0x6F745D, alpha: 0.025),
+                sidebarTopBarSurface: Color(hex: 0xE3DED0, alpha: 0.92),
+                topBarSurface: Color(hex: 0xF0ECE0, alpha: 0.9),
+                sidebarSurface: Color(hex: 0xE4DFD2, alpha: 0.94),
+                sidebarHighlight: Color.white.opacity(0.08),
+                panelSurface: Color(hex: 0xF4F0E5, alpha: 0.88),
+                editorChrome: Color(hex: 0xDFD9CB),
+                editorSurface: Color(hex: 0xF1EDE2),
+                controlSurface: Color(hex: 0xF7F3E8),
+                controlBorder: Color(hex: 0x777164, alpha: 0.14),
+                segmentedTrack: Color(hex: 0xDDD7C9),
+                segmentedSelected: Color(hex: 0xF7F3E8),
+                activeTabSurface: Color(hex: 0xF1EDE2),
+                rowHover: Color(hex: 0x6F745D, alpha: 0.05),
+                separator: Color(hex: 0x6F745D, alpha: 0.12),
+                primaryText: Color(hex: 0x403C36),
+                secondaryText: Color(hex: 0x5B564E, alpha: 0.72),
+                mutedText: Color(hex: 0x6A655C, alpha: 0.46),
+                titleText: Color(hex: 0x34312C),
+                accentText: Color(hex: 0x687052),
+                emptyStateText: Color(hex: 0x6A655C, alpha: 0.4)
             )
         }
     }

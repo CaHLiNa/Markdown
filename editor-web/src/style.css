@@ -63,29 +63,29 @@
 }
 
 :root[data-editor-theme='sepia'] {
-  --editor-text: #533f2e;
-  --editor-muted: #8f7458;
-  --editor-heading: #34261c;
-  --editor-link: #9c6332;
-  --editor-border: rgba(92, 69, 44, 0.12);
-  --editor-inline-code: rgba(238, 219, 184, 0.34);
-  --editor-inline-code-border: rgba(140, 99, 56, 0.08);
-  --editor-code-block: rgba(244, 232, 211, 0.3);
-  --editor-code-block-border: rgba(104, 79, 52, 0.03);
-  --editor-code-block-focus: rgba(241, 228, 205, 0.42);
+  --editor-text: #4b473f;
+  --editor-muted: #7b756a;
+  --editor-heading: #302d28;
+  --editor-link: #687152;
+  --editor-border: rgba(74, 68, 59, 0.1);
+  --editor-inline-code: rgba(233, 229, 219, 0.58);
+  --editor-inline-code-border: rgba(92, 88, 80, 0.08);
+  --editor-code-block: rgba(238, 234, 225, 0.78);
+  --editor-code-block-border: rgba(92, 88, 80, 0.06);
+  --editor-code-block-focus: rgba(232, 227, 217, 0.9);
   --editor-math-block: transparent;
   --editor-math-border: transparent;
-  --editor-table-head: rgba(112, 87, 58, 0.07);
-  --editor-table-cell: rgba(112, 87, 58, 0.025);
-  --editor-floating-surface: rgba(251, 245, 234, 0.9);
-  --editor-floating-border: rgba(92, 69, 44, 0.08);
-  --editor-toolbar-surface: rgba(251, 245, 234, 0.82);
-  --editor-toolbar-line: rgba(92, 69, 44, 0.18);
-  --editor-toolbar-icon: rgba(83, 63, 46, 0.84);
-  --editor-toolbar-icon-active: #34261c;
+  --editor-table-head: rgba(74, 68, 59, 0.045);
+  --editor-table-cell: rgba(74, 68, 59, 0.015);
+  --editor-floating-surface: rgba(247, 243, 235, 0.92);
+  --editor-floating-border: rgba(74, 68, 59, 0.08);
+  --editor-toolbar-surface: rgba(247, 243, 235, 0.84);
+  --editor-toolbar-line: rgba(74, 68, 59, 0.14);
+  --editor-toolbar-icon: rgba(75, 71, 63, 0.82);
+  --editor-toolbar-icon-active: #302d28;
   --editor-quote-surface: transparent;
-  --editor-selection: rgba(166, 111, 59, 0.18);
-  --editor-quote: #a15f28;
+  --editor-selection: rgba(111, 116, 93, 0.16);
+  --editor-quote: #8a9071;
   --editor-shadow: none;
   color-scheme: light;
 }

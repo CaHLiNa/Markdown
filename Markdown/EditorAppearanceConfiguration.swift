@@ -10,12 +10,14 @@ import Foundation
 enum EditorInterfaceStyle: Equatable {
     case light
     case dark
+    case sepia
 }
 
 enum EditorAppearanceMode: String, CaseIterable, Identifiable, Codable {
     case followSystem = "跟随系统"
     case light = "浅色"
     case dark = "深色"
+    case sepia = "护眼"
 
     var id: String { rawValue }
 
@@ -27,36 +29,19 @@ enum EditorAppearanceMode: String, CaseIterable, Identifiable, Codable {
             return .light
         case .dark:
             return .dark
-        }
-    }
-}
-
-enum EditorTheme: String, CaseIterable, Identifiable, Codable {
-    case defaultTheme = "默认"
-    case codexPaper = "codex-paper"
-    case nightInk = "night-ink"
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .defaultTheme:
-            return "系统默认"
-        case .codexPaper:
-            return "纸页"
-        case .nightInk:
-            return "夜墨"
+        case .sepia:
+            return .sepia
         }
     }
 
     func webTheme(for style: EditorInterfaceStyle) -> String {
-        switch self {
-        case .defaultTheme:
-            return style == .dark ? "dark" : "light"
-        case .codexPaper:
-            return "sepia"
-        case .nightInk:
+        switch style {
+        case .light:
+            return "light"
+        case .dark:
             return "dark"
+        case .sepia:
+            return "sepia"
         }
     }
 }

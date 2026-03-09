@@ -111,16 +111,21 @@ enum EditorUnsavedChangesDecision {
 
 @MainActor
 final class EditorDocumentController: ObservableObject {
-    @Published private(set) var tabs: [EditorTab]
+    @Published private(set) var tabs: [EditorTab] {
+        didSet { persistEditorSession() }
+    }
     @Published var activeTabID: UUID? {
         didSet {
             refreshDocumentSearchResults(
                 selectActiveMatch: isDocumentSearchPresented,
                 resetToFirst: true
             )
+            persistEditorSession()
         }
     }
-    @Published private(set) var folderURL: URL?
+    @Published private(set) var folderURL: URL? {
+        didSet { persistEditorSession() }
+    }
     @Published private(set) var folderFiles: [EditorWorkspaceFile] = []
     @Published private(set) var workspaceTree: [EditorWorkspaceNode] = []
     @Published var workspaceSearchQuery = "" {
@@ -139,13 +144,12 @@ final class EditorDocumentController: ObservableObject {
     @Published var appearanceMode: EditorAppearanceMode {
         didSet { persistPreferences() }
     }
-    @Published var editorTheme: EditorTheme {
-        didSet { persistPreferences() }
-    }
     @Published var htmlExportTheme: MarkdownExportTheme {
         didSet { persistPreferences() }
     }
-    @Published var isSidebarVisible = true
+    @Published var isSidebarVisible: Bool {
+        didSet { persistPreferences() }
+    }
     @Published var isFocusModeEnabled: Bool {
         didSet { persistPreferences() }
     }
@@ -173,6 +177,51 @@ final class EditorDocumentController: ObservableObject {
     @Published var codeFontSize: Double {
         didSet { persistPreferences() }
     }
+    @Published var editorIndentWidth: Int {
+        didSet { persistPreferences() }
+    }
+    @Published var useSpacesForIndent: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var isSpellCheckEnabled: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var alwaysShowWordCount: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var readingSpeedWPM: Int {
+        didSet { persistPreferences() }
+    }
+    @Published var outlineVisibilityMode: EditorOutlineVisibilityMode {
+        didSet { persistPreferences() }
+    }
+    @Published var interfaceDensity: EditorInterfaceDensity {
+        didSet { persistPreferences() }
+    }
+    @Published var imageCopyToAssetFolder: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var imageFolderMode: EditorImageFolderMode {
+        didSet { persistPreferences() }
+    }
+    @Published var imageCustomFolder: String {
+        didSet { persistPreferences() }
+    }
+    @Published var imageUseRelativePath: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var imagePreferDotSlash: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var imageAutoEncodeURL: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var imageRootURL: String {
+        didSet { persistPreferences() }
+    }
+    @Published var confirmDeleteImageFile: Bool {
+        didSet { persistPreferences() }
+    }
     @Published var hideQuickInsertHint: Bool {
         didSet { persistPreferences() }
     }
@@ -183,6 +232,76 @@ final class EditorDocumentController: ObservableObject {
         didSet { persistPreferences() }
     }
     @Published var autoPairQuote: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var enableTables: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var enableTaskList: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var enableStrikethrough: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var enableFootnotes: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var enableTOC: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var enableMath: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var enableMermaid: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var enableYAMLFrontMatter: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var defaultExportFormat: EditorExportFormat {
+        didSet { persistPreferences() }
+    }
+    @Published var exportDestinationMode: EditorExportDestinationMode {
+        didSet { persistPreferences() }
+    }
+    @Published var openExportedFile: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var revealExportedFileInFinder: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var pdfPaperSize: EditorPDFPaperSize {
+        didSet { persistPreferences() }
+    }
+    @Published var pdfMargin: Double {
+        didSet { persistPreferences() }
+    }
+    @Published var pdfPrintBackground: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var allowYAMLExportOverrides: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var startupBehavior: EditorStartupBehavior {
+        didSet { persistPreferences() }
+    }
+    @Published var recentFileLimit: Int {
+        didSet {
+            recentFiles = Array(recentFiles.prefix(recentFileLimit))
+            persistPreferences()
+            Self.persistRecentFiles(recentFiles)
+        }
+    }
+    @Published var alwaysConfirmUnsavedChanges: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var defaultDocumentExtension: EditorDocumentExtension {
+        didSet { persistPreferences() }
+    }
+    @Published var inheritWorkspaceOnNewWindow: Bool {
+        didSet { persistPreferences() }
+    }
+    @Published var linkOpenRequiresCommand: Bool {
         didSet { persistPreferences() }
     }
     @Published var isCommandPalettePresented = false
@@ -223,6 +342,7 @@ final class EditorDocumentController: ObservableObject {
 
     let editorController = EditorWebView.Controller()
     private var untitledDocumentCount = 1
+    private var lastExportDirectoryURL: URL?
     var unsavedChangesDecisionHandler: ((EditorTab) -> EditorUnsavedChangesDecision)?
     var saveTabOverride: ((UUID, @escaping (Bool) -> Void) -> Void)?
 
@@ -236,10 +356,10 @@ final class EditorDocumentController: ObservableObject {
             self.tabs = []
             self.activeTabID = nil
         }
-        self.recentFiles = Self.loadRecentFiles()
+        self.recentFiles = Array(Self.loadRecentFiles().prefix(preferences.recentFileLimit))
         self.appearanceMode = preferences.appearanceMode
-        self.editorTheme = preferences.editorTheme
         self.htmlExportTheme = preferences.exportTheme
+        self.isSidebarVisible = preferences.sidebarVisibility
         self.isFocusModeEnabled = preferences.focusMode
         self.isTypewriterModeEnabled = preferences.typewriterMode
         self.isTabStripVisible = preferences.tabBarVisibility
@@ -249,10 +369,49 @@ final class EditorDocumentController: ObservableObject {
         self.editorPageWidth = preferences.pageWidth
         self.codeFontFamily = preferences.codeFontFamily
         self.codeFontSize = preferences.codeFontSize
+        self.editorIndentWidth = preferences.indentWidth
+        self.useSpacesForIndent = preferences.useSpacesForIndent
+        self.isSpellCheckEnabled = preferences.spellCheckEnabled
+        self.alwaysShowWordCount = preferences.alwaysShowWordCount
+        self.readingSpeedWPM = preferences.readingSpeedWPM
+        self.outlineVisibilityMode = preferences.outlineVisibility
+        self.interfaceDensity = preferences.interfaceDensity
+        self.imageCopyToAssetFolder = preferences.imageCopyToAssetFolder
+        self.imageFolderMode = preferences.imageFolderMode
+        self.imageCustomFolder = preferences.imageCustomFolder
+        self.imageUseRelativePath = preferences.imageUseRelativePath
+        self.imagePreferDotSlash = preferences.imagePreferDotSlash
+        self.imageAutoEncodeURL = preferences.imageAutoEncodeURL
+        self.imageRootURL = preferences.imageRootURL
+        self.confirmDeleteImageFile = preferences.confirmDeleteImageFile
         self.hideQuickInsertHint = preferences.hideQuickInsertHint
         self.autoPairBracket = preferences.autoPairBracket
         self.autoPairMarkdownSyntax = preferences.autoPairMarkdownSyntax
         self.autoPairQuote = preferences.autoPairQuote
+        self.enableTables = preferences.enableTables
+        self.enableTaskList = preferences.enableTaskList
+        self.enableStrikethrough = preferences.enableStrikethrough
+        self.enableFootnotes = preferences.enableFootnotes
+        self.enableTOC = preferences.enableTOC
+        self.enableMath = preferences.enableMath
+        self.enableMermaid = preferences.enableMermaid
+        self.enableYAMLFrontMatter = preferences.enableYAMLFrontMatter
+        self.defaultExportFormat = preferences.defaultExportFormat
+        self.exportDestinationMode = preferences.exportDestinationMode
+        self.openExportedFile = preferences.openExportedFile
+        self.revealExportedFileInFinder = preferences.revealExportedFileInFinder
+        self.pdfPaperSize = preferences.pdfPaperSize
+        self.pdfMargin = preferences.pdfMargin
+        self.pdfPrintBackground = preferences.pdfPrintBackground
+        self.allowYAMLExportOverrides = preferences.allowYAMLExportOverrides
+        self.startupBehavior = preferences.startupBehavior
+        self.recentFileLimit = preferences.recentFileLimit
+        self.alwaysConfirmUnsavedChanges = preferences.alwaysConfirmUnsavedChanges
+        self.defaultDocumentExtension = preferences.defaultDocumentExtension
+        self.inheritWorkspaceOnNewWindow = preferences.inheritWorkspaceOnNewWindow
+        self.linkOpenRequiresCommand = preferences.linkOpenRequiresCommand
+        self.lastExportDirectoryURL = Self.loadLastExportDirectory()
+        restoreInitialSessionIfNeeded()
     }
 
     var currentMarkdown: String {
@@ -324,7 +483,7 @@ final class EditorDocumentController: ObservableObject {
 
     var currentPresentation: EditorWebView.Presentation {
         .init(
-            theme: editorTheme.webTheme(for: effectiveInterfaceStyle),
+            theme: appearanceMode.webTheme(for: effectiveInterfaceStyle),
             focusMode: isFocusModeEnabled,
             typewriterMode: isTypewriterModeEnabled,
             fontFamily: editorFontFamily,
@@ -333,16 +492,90 @@ final class EditorDocumentController: ObservableObject {
             pageWidth: editorPageWidth,
             codeFontFamily: codeFontFamily,
             codeFontSize: codeFontSize,
+            spellCheckEnabled: isSpellCheckEnabled,
+            indentWidth: editorIndentWidth,
+            useSpacesForIndent: useSpacesForIndent,
             hideQuickInsertHint: hideQuickInsertHint,
             autoPairBracket: autoPairBracket,
             autoPairMarkdownSyntax: autoPairMarkdownSyntax,
-            autoPairQuote: autoPairQuote
+            autoPairQuote: autoPairQuote,
+            enableTables: enableTables,
+            enableTaskList: enableTaskList,
+            enableStrikethrough: enableStrikethrough,
+            enableFootnotes: enableFootnotes,
+            enableTOC: enableTOC,
+            enableMath: enableMath,
+            enableMermaid: enableMermaid,
+            enableYAMLFrontMatter: enableYAMLFrontMatter,
+            imageRootURL: imageRootURL,
+            imagePreferDotSlash: imagePreferDotSlash,
+            imageAutoEncodeURL: imageAutoEncodeURL,
+            linkOpenRequiresCommand: linkOpenRequiresCommand
         )
     }
 
     var currentExportTheme: MarkdownRenderedTheme {
         htmlExportTheme.resolvedTheme(
-            matching: editorTheme.webTheme(for: effectiveInterfaceStyle)
+            matching: appearanceMode,
+            style: effectiveInterfaceStyle
+        )
+    }
+
+    var currentPreferences: EditorPreferences {
+        EditorPreferences(
+            appearanceMode: appearanceMode,
+            exportTheme: htmlExportTheme,
+            tabBarVisibility: isTabStripVisible,
+            sidebarVisibility: isSidebarVisible,
+            typewriterMode: isTypewriterModeEnabled,
+            focusMode: isFocusModeEnabled,
+            fontFamily: editorFontFamily,
+            fontSize: editorFontSize,
+            lineHeight: editorLineHeight,
+            pageWidth: editorPageWidth,
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            indentWidth: editorIndentWidth,
+            useSpacesForIndent: useSpacesForIndent,
+            spellCheckEnabled: isSpellCheckEnabled,
+            alwaysShowWordCount: alwaysShowWordCount,
+            readingSpeedWPM: readingSpeedWPM,
+            outlineVisibility: outlineVisibilityMode,
+            interfaceDensity: interfaceDensity,
+            imageCopyToAssetFolder: imageCopyToAssetFolder,
+            imageFolderMode: imageFolderMode,
+            imageCustomFolder: imageCustomFolder,
+            imageUseRelativePath: imageUseRelativePath,
+            imagePreferDotSlash: imagePreferDotSlash,
+            imageAutoEncodeURL: imageAutoEncodeURL,
+            imageRootURL: imageRootURL,
+            confirmDeleteImageFile: confirmDeleteImageFile,
+            hideQuickInsertHint: hideQuickInsertHint,
+            autoPairBracket: autoPairBracket,
+            autoPairMarkdownSyntax: autoPairMarkdownSyntax,
+            autoPairQuote: autoPairQuote,
+            enableTables: enableTables,
+            enableTaskList: enableTaskList,
+            enableStrikethrough: enableStrikethrough,
+            enableFootnotes: enableFootnotes,
+            enableTOC: enableTOC,
+            enableMath: enableMath,
+            enableMermaid: enableMermaid,
+            enableYAMLFrontMatter: enableYAMLFrontMatter,
+            defaultExportFormat: defaultExportFormat,
+            exportDestinationMode: exportDestinationMode,
+            openExportedFile: openExportedFile,
+            revealExportedFileInFinder: revealExportedFileInFinder,
+            pdfPaperSize: pdfPaperSize,
+            pdfMargin: pdfMargin,
+            pdfPrintBackground: pdfPrintBackground,
+            allowYAMLExportOverrides: allowYAMLExportOverrides,
+            startupBehavior: startupBehavior,
+            recentFileLimit: recentFileLimit,
+            alwaysConfirmUnsavedChanges: alwaysConfirmUnsavedChanges,
+            defaultDocumentExtension: defaultDocumentExtension,
+            inheritWorkspaceOnNewWindow: inheritWorkspaceOnNewWindow,
+            linkOpenRequiresCommand: linkOpenRequiresCommand
         )
     }
 
@@ -432,17 +665,7 @@ final class EditorDocumentController: ObservableObject {
         }
 
         do {
-            folderURL = selectedURL
-            let files = try Self.workspaceFiles(in: selectedURL)
-            folderFiles = files
-            workspaceTree = EditorWorkspaceTreeBuilder.build(from: files)
-            expandedFolderIDs = EditorWorkspaceTreeBuilder.folderIDs(in: workspaceTree)
-            refreshWorkspaceSearchResults()
-
-            if tabs.count == 1, tabs[0].fileURL == nil, let firstURL = folderFiles.first?.url {
-                openDocument(at: firstURL)
-                closeTab(id: tabs[0].id)
-            }
+            try openFolder(at: selectedURL)
         } catch {
             presentError(error, title: "无法打开文件夹")
         }
@@ -750,7 +973,8 @@ final class EditorDocumentController: ObservableObject {
                     try MarkdownFileService.write(markdown, to: fileURL)
                     try MarkdownFileService.removeUnusedSiblingImageAssets(
                         for: markdown,
-                        alongsideMarkdownFile: fileURL
+                        alongsideMarkdownFile: fileURL,
+                        preferences: currentPreferences
                     )
                     self.updateTab(id: id) {
                         $0.markdown = markdown
@@ -796,7 +1020,7 @@ final class EditorDocumentController: ObservableObject {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [MarkdownFileService.markdownContentType]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = tab.fileURL?.lastPathComponent ?? "\(tab.title).md"
+        panel.nameFieldStringValue = tab.fileURL?.lastPathComponent ?? "\(tab.title)\(defaultDocumentExtension.rawValue)"
         panel.directoryURL = tab.fileURL?.deletingLastPathComponent() ?? folderURL
         panel.prompt = "保存"
 
@@ -815,7 +1039,8 @@ final class EditorDocumentController: ObservableObject {
                 markdownToSave = try MarkdownFileService.relocateSiblingImageAssetsForSaveAs(
                     saveMarkdown,
                     from: sourceURL,
-                    to: destinationURL
+                    to: destinationURL,
+                    preferences: currentPreferences
                 )
             } else {
                 markdownToSave = saveMarkdown
@@ -824,7 +1049,8 @@ final class EditorDocumentController: ObservableObject {
             try MarkdownFileService.write(markdownToSave, to: destinationURL)
             try MarkdownFileService.removeUnusedSiblingImageAssets(
                 for: markdownToSave,
-                alongsideMarkdownFile: destinationURL
+                alongsideMarkdownFile: destinationURL,
+                preferences: currentPreferences
             )
             updateTab(id: id) {
                 $0.fileURL = destinationURL
@@ -846,7 +1072,7 @@ final class EditorDocumentController: ObservableObject {
         panel.allowedContentTypes = [MarkdownFileService.htmlContentType]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "\(exportBaseName).html"
-        panel.directoryURL = currentFileURL?.deletingLastPathComponent() ?? folderURL
+        panel.directoryURL = preferredExportDirectoryURL()
         panel.prompt = "导出"
 
         guard panel.runModal() == .OK, let selectedURL = panel.url else {
@@ -874,6 +1100,7 @@ final class EditorDocumentController: ObservableObject {
 
                     do {
                         try MarkdownFileService.writeHTMLDocument(document, to: destinationURL)
+                        self.finalizeExport(at: destinationURL)
                     } catch {
                         self.presentError(error, title: "无法导出 HTML")
                     }
@@ -884,12 +1111,21 @@ final class EditorDocumentController: ObservableObject {
         }
     }
 
+    func exportDocument() {
+        switch defaultExportFormat {
+        case .html:
+            exportHTMLDocument()
+        case .pdf:
+            exportPDFDocument()
+        }
+    }
+
     func exportPDFDocument() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [MarkdownFileService.pdfContentType]
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "\(exportBaseName).pdf"
-        panel.directoryURL = currentFileURL?.deletingLastPathComponent() ?? folderURL
+        panel.directoryURL = preferredExportDirectoryURL()
         panel.prompt = "导出"
 
         guard panel.runModal() == .OK, let selectedURL = panel.url else {
@@ -911,6 +1147,7 @@ final class EditorDocumentController: ObservableObject {
                 case .success(let data):
                     do {
                         try MarkdownFileService.writePDF(data, to: destinationURL)
+                        self.finalizeExport(at: destinationURL)
                     } catch {
                         self.presentError(error, title: "无法导出 PDF")
                     }
@@ -946,7 +1183,8 @@ final class EditorDocumentController: ObservableObject {
                 request.data,
                 originalFilename: request.filename,
                 mimeType: request.mimeType,
-                alongsideMarkdownFile: currentFileURL
+                alongsideMarkdownFile: currentFileURL,
+                preferences: currentPreferences
             )
             completion(.success(relativePath))
         } catch {
@@ -1066,13 +1304,14 @@ final class EditorDocumentController: ObservableObject {
         }
     }
 
-    private func openDocument(at fileURL: URL) {
+    @discardableResult
+    private func openDocument(at fileURL: URL, silently: Bool = false) -> UUID? {
         let normalizedURL = fileURL.standardizedFileURL
 
         if let existingTab = tabs.first(where: { $0.fileURL?.standardizedFileURL == normalizedURL }) {
             activeTabID = existingTab.id
             addRecentFile(normalizedURL)
-            return
+            return existingTab.id
         }
 
         do {
@@ -1087,8 +1326,26 @@ final class EditorDocumentController: ObservableObject {
             tabs.append(tab)
             activeTabID = tab.id
             addRecentFile(normalizedURL)
+            return tab.id
         } catch {
-            presentError(error, title: "无法打开文件")
+            if !silently {
+                presentError(error, title: "无法打开文件")
+            }
+            return nil
+        }
+    }
+
+    private func openFolder(at selectedURL: URL) throws {
+        folderURL = selectedURL
+        let files = try Self.workspaceFiles(in: selectedURL)
+        folderFiles = files
+        workspaceTree = EditorWorkspaceTreeBuilder.build(from: files)
+        expandedFolderIDs = EditorWorkspaceTreeBuilder.folderIDs(in: workspaceTree)
+        refreshWorkspaceSearchResults()
+
+        if tabs.count == 1, tabs[0].fileURL == nil, let firstURL = folderFiles.first?.url {
+            openDocument(at: firstURL)
+            closeTab(id: tabs[0].id)
         }
     }
 
@@ -1131,7 +1388,7 @@ final class EditorDocumentController: ObservableObject {
     private func addRecentFile(_ fileURL: URL) {
         recentFiles.removeAll { $0.standardizedFileURL == fileURL.standardizedFileURL }
         recentFiles.insert(fileURL, at: 0)
-        recentFiles = Array(recentFiles.prefix(12))
+        recentFiles = Array(recentFiles.prefix(recentFileLimit))
         Self.persistRecentFiles(recentFiles)
     }
 
@@ -1246,6 +1503,8 @@ final class EditorDocumentController: ObservableObject {
             openFolder()
         case "file.save":
             saveDocument()
+        case "file.export-default":
+            exportDocument()
         case "file.export-html":
             exportHTMLDocument()
         case "file.export-pdf":
@@ -1276,29 +1535,61 @@ final class EditorDocumentController: ObservableObject {
     }
 
     private func persistPreferences() {
-        let preferences = EditorPreferences(
-            appearanceMode: appearanceMode,
-            editorTheme: editorTheme,
-            exportTheme: htmlExportTheme,
-            tabBarVisibility: isTabStripVisible,
-            typewriterMode: isTypewriterModeEnabled,
-            focusMode: isFocusModeEnabled,
-            fontFamily: editorFontFamily,
-            fontSize: editorFontSize,
-            lineHeight: editorLineHeight,
-            pageWidth: editorPageWidth,
-            codeFontFamily: codeFontFamily,
-            codeFontSize: codeFontSize,
-            hideQuickInsertHint: hideQuickInsertHint,
-            autoPairBracket: autoPairBracket,
-            autoPairMarkdownSyntax: autoPairMarkdownSyntax,
-            autoPairQuote: autoPairQuote
-        )
+        Self.persistPreferences(currentPreferences)
+    }
 
-        Self.persistPreferences(preferences)
+    private func restoreInitialSessionIfNeeded() {
+        guard startupBehavior == .restoreLastSession, tabs.isEmpty else {
+            return
+        }
+
+        guard let session = Self.loadPersistedEditorSession() else {
+            return
+        }
+
+        if let folderPath = session.folderPath {
+            let restoredFolderURL = URL(fileURLWithPath: folderPath)
+            if FileManager.default.fileExists(atPath: restoredFolderURL.path) {
+                try? openFolder(at: restoredFolderURL)
+            }
+        }
+
+        var restoredTabIDsByPath: [String: UUID] = [:]
+        for path in session.openFilePaths {
+            let fileURL = URL(fileURLWithPath: path).standardizedFileURL
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                continue
+            }
+
+            if let restoredTabID = openDocument(at: fileURL, silently: true) {
+                restoredTabIDsByPath[fileURL.path] = restoredTabID
+            }
+        }
+
+        guard
+            let activeFilePath = session.activeFilePath,
+            let restoredActiveTabID = restoredTabIDsByPath[URL(fileURLWithPath: activeFilePath).standardizedFileURL.path]
+        else {
+            return
+        }
+
+        activeTabID = restoredActiveTabID
+    }
+
+    private func persistEditorSession() {
+        let session = PersistedEditorSession(
+            folderPath: folderURL?.standardizedFileURL.path,
+            openFilePaths: tabs.compactMap { $0.fileURL?.standardizedFileURL.path },
+            activeFilePath: activeTab?.fileURL?.standardizedFileURL.path
+        )
+        Self.persistEditorSession(session)
     }
 
     private func decideUnsavedChanges(for tab: EditorTab) -> EditorUnsavedChangesDecision {
+        if !alwaysConfirmUnsavedChanges, tab.fileURL != nil {
+            return .save
+        }
+
         if let unsavedChangesDecisionHandler {
             return unsavedChangesDecisionHandler(tab)
         }
@@ -1327,6 +1618,28 @@ final class EditorDocumentController: ObservableObject {
         }
 
         return currentTitle
+    }
+
+    private func preferredExportDirectoryURL() -> URL? {
+        switch exportDestinationMode {
+        case .askEveryTime, .sameAsDocument:
+            return currentFileURL?.deletingLastPathComponent() ?? folderURL ?? lastExportDirectoryURL
+        case .lastUsed:
+            return lastExportDirectoryURL ?? currentFileURL?.deletingLastPathComponent() ?? folderURL
+        }
+    }
+
+    private func finalizeExport(at destinationURL: URL) {
+        lastExportDirectoryURL = destinationURL.deletingLastPathComponent()
+        Self.persistLastExportDirectory(lastExportDirectoryURL)
+
+        if openExportedFile {
+            NSWorkspace.shared.open(destinationURL)
+        }
+
+        if revealExportedFileInFinder {
+            NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
+        }
     }
 
     private func presentError(_ error: Error, title: String) {
@@ -1423,13 +1736,34 @@ final class EditorDocumentController: ObservableObject {
         UserDefaults.standard.set(paths, forKey: recentFilesDefaultsKey)
     }
 
+    private static func loadLastExportDirectory() -> URL? {
+        guard let path = UserDefaults.standard.string(forKey: lastExportDirectoryDefaultsKey) else {
+            return nil
+        }
+
+        let url = URL(fileURLWithPath: path)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private static func persistLastExportDirectory(_ url: URL?) {
+        UserDefaults.standard.set(url?.path, forKey: lastExportDirectoryDefaultsKey)
+    }
+
     private static let recentFilesDefaultsKey = "recentMarkdownFiles"
+    private static let lastExportDirectoryDefaultsKey = "lastMarkdownExportDirectory"
     private static let preferencesDefaultsKey = "editorPreferences"
+    private static let editorSessionDefaultsKey = "editorSession"
     private static var systemPrefersDarkAppearance: Bool {
         let bestMatch = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
         return bestMatch == .darkAqua
     }
     private static let defaultMarkdown = ""
+
+    private struct PersistedEditorSession: Codable {
+        let folderPath: String?
+        let openFilePaths: [String]
+        let activeFilePath: String?
+    }
 
     private static func loadPreferences() -> EditorPreferences {
         guard
@@ -1448,5 +1782,24 @@ final class EditorDocumentController: ObservableObject {
         }
 
         UserDefaults.standard.set(data, forKey: preferencesDefaultsKey)
+    }
+
+    private static func loadPersistedEditorSession() -> PersistedEditorSession? {
+        guard
+            let data = UserDefaults.standard.data(forKey: editorSessionDefaultsKey),
+            let session = try? JSONDecoder().decode(PersistedEditorSession.self, from: data)
+        else {
+            return nil
+        }
+
+        return session
+    }
+
+    private static func persistEditorSession(_ session: PersistedEditorSession) {
+        guard let data = try? JSONEncoder().encode(session) else {
+            return
+        }
+
+        UserDefaults.standard.set(data, forKey: editorSessionDefaultsKey)
     }
 }

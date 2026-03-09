@@ -203,6 +203,12 @@ enum EditorCommandPaletteCatalog {
             keywords: ["quick", "open", "palette"]
         ),
         EditorCommandPaletteItem(
+            id: "file.export-default",
+            title: "按默认格式导出",
+            category: "文件",
+            keywords: ["export", "default", "html", "pdf"]
+        ),
+        EditorCommandPaletteItem(
             id: "file.export-html",
             title: "导出 HTML",
             category: "文件",

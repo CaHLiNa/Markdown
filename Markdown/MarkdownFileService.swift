@@ -14,32 +14,6 @@ enum MarkdownRenderedTheme: String {
     case sepia
 }
 
-enum MarkdownExportTheme: String, CaseIterable, Identifiable, Codable {
-    case matchEditor = "跟随编辑器"
-    case light = "浅色"
-    case dark = "深色"
-    case sepia = "纸张"
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        rawValue
-    }
-
-    func resolvedTheme(matching editorTheme: String) -> MarkdownRenderedTheme {
-        switch self {
-        case .matchEditor:
-            return MarkdownRenderedTheme(rawValue: editorTheme) ?? .light
-        case .light:
-            return .light
-        case .dark:
-            return .dark
-        case .sepia:
-            return .sepia
-        }
-    }
-}
-
 enum MarkdownFileService {
     static let markdownContentType = UTType(filenameExtension: "md") ?? .plainText
     static let htmlContentType = UTType.html
@@ -62,9 +36,13 @@ enum MarkdownFileService {
         _ data: Data,
         originalFilename: String,
         mimeType: String,
-        alongsideMarkdownFile markdownFileURL: URL
+        alongsideMarkdownFile markdownFileURL: URL,
+        preferences: EditorPreferences
     ) throws -> String {
-        let assetDirectoryURL = siblingAssetDirectoryURL(for: markdownFileURL)
+        let assetDirectoryURL = imageAssetDirectoryURL(
+            for: markdownFileURL,
+            preferences: preferences
+        )
 
         try FileManager.default.createDirectory(
             at: assetDirectoryURL,
@@ -84,20 +62,49 @@ enum MarkdownFileService {
 
         try data.write(to: destinationURL, options: .atomic)
 
-        return "\(assetDirectoryURL.lastPathComponent)/\(destinationURL.lastPathComponent)"
+        let relativePath = relativeImagePath(
+            from: markdownFileURL.deletingLastPathComponent(),
+            to: destinationURL
+        )
+
+        let rawPath = preferences.imageUseRelativePath
+            ? relativePath
+            : destinationURL.standardizedFileURL.path
+
+        let normalizedPath: String
+        if preferences.imageUseRelativePath &&
+            preferences.imagePreferDotSlash &&
+            !rawPath.hasPrefix("./") &&
+            !rawPath.hasPrefix("../")
+        {
+            normalizedPath = "./\(rawPath)"
+        } else {
+            normalizedPath = rawPath
+        }
+
+        return preferences.imageAutoEncodeURL
+            ? encodeMarkdownPath(normalizedPath)
+            : normalizedPath
     }
 
     static func relocateSiblingImageAssetsForSaveAs(
         _ markdown: String,
         from originalMarkdownFileURL: URL,
-        to destinationMarkdownFileURL: URL
+        to destinationMarkdownFileURL: URL,
+        preferences: EditorPreferences
     ) throws -> String {
         guard originalMarkdownFileURL.standardizedFileURL != destinationMarkdownFileURL.standardizedFileURL else {
             return markdown
         }
 
-        let originalAssetDirectoryURL = siblingAssetDirectoryURL(for: originalMarkdownFileURL)
-        let destinationAssetDirectoryURL = siblingAssetDirectoryURL(for: destinationMarkdownFileURL)
+        let originalAssetDirectoryURL = imageAssetDirectoryURL(
+            for: originalMarkdownFileURL,
+            preferences: preferences
+        )
+        let destinationAssetDirectoryURL = imageAssetDirectoryURL(
+            for: destinationMarkdownFileURL,
+            preferences: preferences
+        )
         let originalAssetDirectoryName = originalAssetDirectoryURL.lastPathComponent
         let destinationAssetDirectoryName = destinationAssetDirectoryURL.lastPathComponent
         let sourceRootURL = originalMarkdownFileURL.deletingLastPathComponent()
@@ -155,9 +162,13 @@ enum MarkdownFileService {
 
     static func removeUnusedSiblingImageAssets(
         for markdown: String,
-        alongsideMarkdownFile markdownFileURL: URL
+        alongsideMarkdownFile markdownFileURL: URL,
+        preferences: EditorPreferences
     ) throws {
-        let assetDirectoryURL = siblingAssetDirectoryURL(for: markdownFileURL)
+        let assetDirectoryURL = imageAssetDirectoryURL(
+            for: markdownFileURL,
+            preferences: preferences
+        )
         let fileManager = FileManager.default
 
         guard fileManager.fileExists(atPath: assetDirectoryURL.path) else {
@@ -463,15 +474,15 @@ enum MarkdownFileService {
         case .sepia:
             return ExportPalette(
                 colorScheme: "light",
-                backgroundColor: "#f4ead9",
-                textColor: "#4a392a",
-                headingColor: "#2f241a",
-                codeBackgroundColor: "#ead7b7",
-                codeTextColor: "#3b2d20",
-                tableBorderColor: "#cfba95",
-                tableHeaderBackgroundColor: "#efe0c2",
-                blockquoteBorderColor: "#af7d46",
-                blockquoteTextColor: "#71563d"
+                backgroundColor: "#f3efe6",
+                textColor: "#4a463f",
+                headingColor: "#2f2c27",
+                codeBackgroundColor: "#ebe6dc",
+                codeTextColor: "#454039",
+                tableBorderColor: "#cbc5b8",
+                tableHeaderBackgroundColor: "#e6e0d5",
+                blockquoteBorderColor: "#88906f",
+                blockquoteTextColor: "#666055"
             )
         }
     }
@@ -489,6 +500,44 @@ enum MarkdownFileService {
         markdownFileURL
             .deletingPathExtension()
             .appendingPathExtension("assets")
+    }
+
+    private static func imageAssetDirectoryURL(
+        for markdownFileURL: URL,
+        preferences: EditorPreferences
+    ) -> URL {
+        switch preferences.imageFolderMode {
+        case .documentAssets:
+            return siblingAssetDirectoryURL(for: markdownFileURL)
+        case .customRelativePath:
+            let trimmed = preferences.imageCustomFolder.trimmingCharacters(in: .whitespacesAndNewlines)
+            let folderName = trimmed.isEmpty ? "assets" : trimmed
+            return markdownFileURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(folderName, isDirectory: true)
+        }
+    }
+
+    private static func relativeImagePath(from baseDirectory: URL, to targetURL: URL) -> String {
+        let baseComponents = baseDirectory.standardizedFileURL.pathComponents
+        let targetComponents = targetURL.standardizedFileURL.pathComponents
+        var sharedCount = 0
+
+        while sharedCount < min(baseComponents.count, targetComponents.count),
+              baseComponents[sharedCount] == targetComponents[sharedCount]
+        {
+            sharedCount += 1
+        }
+
+        let parentComponents = Array(repeating: "..", count: max(0, baseComponents.count - sharedCount))
+        let childComponents = Array(targetComponents.dropFirst(sharedCount))
+        return (parentComponents + childComponents).joined(separator: "/")
+    }
+
+    private static func encodeMarkdownPath(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: " ", with: "%20")
+            .replacingOccurrences(of: "#", with: "%23")
     }
 
     private static func referencedSiblingAssetRelativePaths(

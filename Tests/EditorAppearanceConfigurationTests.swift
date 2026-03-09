@@ -1,6 +1,7 @@
 import XCTest
 @testable import Markdown
 
+@MainActor
 final class EditorAppearanceConfigurationTests: XCTestCase {
     func testFollowSystemResolvesToSystemStyle() {
         let darkStyle = EditorAppearanceMode.followSystem.resolvedInterfaceStyle(systemPrefersDark: true)
@@ -10,42 +11,15 @@ final class EditorAppearanceConfigurationTests: XCTestCase {
         XCTAssertEqual(lightStyle, .light, "Expected followSystem to resolve to light when system prefers light.")
     }
 
-    func testDefaultThemeFollowsResolvedStyle() {
-        XCTAssertEqual(
-            EditorTheme.defaultTheme.webTheme(for: .light),
-            "light",
-            "Expected default theme to use the light web theme."
-        )
-        XCTAssertEqual(
-            EditorTheme.defaultTheme.webTheme(for: .dark),
-            "dark",
-            "Expected default theme to use the dark web theme."
-        )
+    func testExplicitAppearanceModesResolveExpectedStyles() {
+        XCTAssertEqual(EditorAppearanceMode.light.resolvedInterfaceStyle(systemPrefersDark: true), .light)
+        XCTAssertEqual(EditorAppearanceMode.dark.resolvedInterfaceStyle(systemPrefersDark: false), .dark)
+        XCTAssertEqual(EditorAppearanceMode.sepia.resolvedInterfaceStyle(systemPrefersDark: true), .sepia)
     }
 
-    func testCodexPaperUsesSepiaTheme() {
-        XCTAssertEqual(
-            EditorTheme.codexPaper.webTheme(for: .light),
-            "sepia",
-            "Expected codex-paper to use the sepia web theme in light mode."
-        )
-        XCTAssertEqual(
-            EditorTheme.codexPaper.webTheme(for: .dark),
-            "sepia",
-            "Expected codex-paper to use the sepia web theme in dark mode."
-        )
-    }
-
-    func testNightInkUsesDarkTheme() {
-        XCTAssertEqual(
-            EditorTheme.nightInk.webTheme(for: .light),
-            "dark",
-            "Expected night-ink to use the dark web theme in light mode."
-        )
-        XCTAssertEqual(
-            EditorTheme.nightInk.webTheme(for: .dark),
-            "dark",
-            "Expected night-ink to use the dark web theme in dark mode."
-        )
+    func testAppearanceModeMapsToExpectedWebTheme() {
+        XCTAssertEqual(EditorAppearanceMode.light.webTheme(for: .light), "light")
+        XCTAssertEqual(EditorAppearanceMode.dark.webTheme(for: .dark), "dark")
+        XCTAssertEqual(EditorAppearanceMode.sepia.webTheme(for: .sepia), "sepia")
     }
 }

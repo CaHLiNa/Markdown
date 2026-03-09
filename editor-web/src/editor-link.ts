@@ -10,8 +10,8 @@ export const shouldActivateLinkOnCommandClick = (event: {
   button: number
   metaKey: boolean
   defaultPrevented: boolean
-}) => {
-  return !event.defaultPrevented && event.button === 0 && event.metaKey
+}, requireCommand = true) => {
+  return !event.defaultPrevented && event.button === 0 && (requireCommand ? event.metaKey : true)
 }
 
 export const getCommandClickLinkHref = (target: EventTarget | null) => {

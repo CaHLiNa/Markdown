@@ -14,7 +14,10 @@ import {
   findHeadingOffset,
   type MarkdownBlock
 } from './editor-markdown'
-import type { EditorPresentation } from './editor-presentation'
+import {
+  defaultEditorPresentation,
+  type EditorPresentation
+} from './editor-presentation'
 import type { EditorRuntimeState } from './editor-state'
 
 type Root = HTMLElement | string
@@ -879,6 +882,117 @@ const applyDeleteBlockTransform = (
   }
 }
 
+const countLeadingSpaces = (line: string) => {
+  const match = line.match(/^ */)
+  return match?.[0].length ?? 0
+}
+
+const applyIndentTransform = (
+  markdown: string,
+  selection: NormalizedSelection,
+  indentUnit: string
+): MarkdownTransform => {
+  if (selection.start === selection.end) {
+    return {
+      markdown: insertAt(markdown, selection.start, indentUnit),
+      selectionStart: selection.start + indentUnit.length,
+      selectionEnd: selection.start + indentUnit.length
+    }
+  }
+
+  const lineRange = getSelectedLineRange(markdown, selection)
+  const nextLines = markdown
+    .slice(lineRange.start, lineRange.end)
+    .split('\n')
+    .map((line) => `${indentUnit}${line}`)
+  const replacement = nextLines.join('\n')
+
+  return {
+    markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
+    selectionStart: selection.start + indentUnit.length,
+    selectionEnd: selection.end + indentUnit.length * nextLines.length
+  }
+}
+
+const applyOutdentTransform = (
+  markdown: string,
+  selection: NormalizedSelection,
+  indentUnit: string,
+  indentWidth: number,
+  useSpacesForIndent: boolean
+): MarkdownTransform => {
+  if (selection.start === selection.end) {
+    const lineStart = getLineStart(markdown, selection.start)
+    const line = markdown.slice(lineStart, selection.start)
+
+    if (useSpacesForIndent) {
+      const removable = Math.min(indentWidth, countLeadingSpaces(line))
+
+      if (removable === 0) {
+        return {
+          markdown,
+          selectionStart: selection.start,
+          selectionEnd: selection.end
+        }
+      }
+
+      return {
+        markdown: replaceRange(markdown, lineStart, lineStart + removable, ''),
+        selectionStart: selection.start - removable,
+        selectionEnd: selection.end - removable
+      }
+    }
+
+    if (!line.endsWith(indentUnit)) {
+      return {
+        markdown,
+        selectionStart: selection.start,
+        selectionEnd: selection.end
+      }
+    }
+
+    return {
+      markdown: replaceRange(markdown, selection.start - indentUnit.length, selection.start, ''),
+      selectionStart: selection.start - indentUnit.length,
+      selectionEnd: selection.end - indentUnit.length
+    }
+  }
+
+  const lineRange = getSelectedLineRange(markdown, selection)
+  const sourceLines = markdown.slice(lineRange.start, lineRange.end).split('\n')
+  let removedBeforeSelectionStart = 0
+  let totalRemoved = 0
+
+  const nextLines = sourceLines.map((line, index) => {
+    if (useSpacesForIndent) {
+      const removable = Math.min(indentWidth, countLeadingSpaces(line))
+      totalRemoved += removable
+
+      if (index === 0) {
+        removedBeforeSelectionStart = removable
+      }
+
+      return line.slice(removable)
+    }
+
+    const removable = line.startsWith(indentUnit) ? indentUnit.length : 0
+    totalRemoved += removable
+
+    if (index === 0) {
+      removedBeforeSelectionStart = removable
+    }
+
+    return removable > 0 ? line.slice(removable) : line
+  })
+  const replacement = nextLines.join('\n')
+
+  return {
+    markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
+    selectionStart: Math.max(lineRange.start, selection.start - removedBeforeSelectionStart),
+    selectionEnd: Math.max(lineRange.start, selection.end - totalRemoved)
+  }
+}
+
 type MarkdownTableModel = {
   header: string[]
   aligns: Array<TableAlignment | null>
@@ -1031,6 +1145,7 @@ export const createMarkdownEditor = async ({
   let instance: Vditor | null = null
   let currentMarkdown = initialMarkdown
   let currentDocumentBaseURL = initialDocumentBaseURL
+  let currentPresentation: EditorPresentation = defaultEditorPresentation
   let appliedDocumentBaseURL: string | null = null
   let currentMode: EditorVisualMode = 'ir'
   let currentSelection: SelectionOffsets = {
@@ -1039,6 +1154,7 @@ export const createMarkdownEditor = async ({
   }
   let suppressInputDepth = 0
   let removeBackgroundPointerListener: (() => void) | null = null
+  let removeIndentKeydownListener: (() => void) | null = null
   let removeLinkActivationListener: (() => void) | null = null
   let removeTableToolbarListeners: (() => void) | null = null
   let tableToolbarRefreshFrame = 0
@@ -1063,6 +1179,58 @@ export const createMarkdownEditor = async ({
 
   const getRuntime = () => {
     return getInstance().vditor as VditorRuntime
+  }
+
+  const getIndentUnit = () => {
+    return currentPresentation.useSpacesForIndent ? ' '.repeat(currentPresentation.indentWidth) : '\t'
+  }
+
+  const getResolvedLinkBase = () => {
+    const imageRootURL = currentPresentation.imageRootURL.trim()
+    return imageRootURL.length > 0 ? imageRootURL : currentDocumentBaseURL ?? ''
+  }
+
+  const isCommandEnabled = (command: RuntimeEditorCommand) => {
+    switch (normalizeRuntimeCommand(command)) {
+      case 'task-list':
+        return currentPresentation.enableTaskList
+      case 'table':
+        return currentPresentation.enableTables
+      case 'strikethrough':
+        return currentPresentation.enableStrikethrough
+      case 'math-block':
+      case 'inline-math':
+        return currentPresentation.enableMath
+      case 'front-matter':
+        return currentPresentation.enableYAMLFrontMatter
+      default:
+        return true
+    }
+  }
+
+  const applyEditableRuntimeOptions = () => {
+    if (!instance) {
+      return
+    }
+
+    const runtime = getRuntime()
+    const nextLinkBase = getResolvedLinkBase()
+
+    runtime.lute?.SetLinkBase?.(nextLinkBase)
+
+    for (const root of [getRuntime().ir?.element, getRuntime().sv?.element]) {
+      if (!root) {
+        continue
+      }
+
+      root.setAttribute('spellcheck', currentPresentation.spellCheckEnabled ? 'true' : 'false')
+    }
+
+    if (runtime.options?.preview?.markdown) {
+      runtime.options.preview.markdown.footnotes = currentPresentation.enableFootnotes
+      runtime.options.preview.markdown.mathBlockPreview = currentPresentation.enableMath
+      runtime.options.preview.markdown.linkBase = nextLinkBase
+    }
   }
 
   const withSuppressedInput = (callback: () => void) => {
@@ -1303,7 +1471,7 @@ export const createMarkdownEditor = async ({
         }
       }
     }
-    const nextLinkBase = currentDocumentBaseURL ?? ''
+    const nextLinkBase = getResolvedLinkBase()
 
     runtime.lute?.SetLinkBase?.(nextLinkBase)
     appliedDocumentBaseURL = currentDocumentBaseURL
@@ -2561,6 +2729,11 @@ export const createMarkdownEditor = async ({
 
   const runCommand = (command: RuntimeEditorCommand) => {
     const normalizedCommand = normalizeRuntimeCommand(command)
+
+    if (!isCommandEnabled(normalizedCommand)) {
+      return false
+    }
+
     const markdown = readMarkdown()
     const selection = normalizeSelection(getSelectionOffsets())
 
@@ -2690,10 +2863,10 @@ export const createMarkdownEditor = async ({
       delay: 0,
       markdown: {
         codeBlockPreview: true,
-        footnotes: true,
+        footnotes: currentPresentation.enableFootnotes,
         gfmAutoLink: true,
-        linkBase: currentDocumentBaseURL ?? '',
-        mathBlockPreview: true,
+        linkBase: getResolvedLinkBase(),
+        mathBlockPreview: currentPresentation.enableMath,
         sanitize: false
       },
       math: {
@@ -2744,6 +2917,7 @@ export const createMarkdownEditor = async ({
       setEditorDebugPhase('vditor-after')
       instance?.focus()
       applyDocumentBaseURL(currentDocumentBaseURL, false)
+      applyEditableRuntimeOptions()
 
       if (initialMarkdown.length > 0) {
         applyMarkdown(initialMarkdown, { clearStack: true })
@@ -2800,8 +2974,31 @@ export const createMarkdownEditor = async ({
     focusDocumentEnd()
   }
 
+  const handleIndentKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Tab' || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+      return
+    }
+
+    event.preventDefault()
+
+    const indentUnit = getIndentUnit()
+    const markdown = readMarkdown()
+    const selection = normalizeSelection(getSelectionOffsets())
+    const transform = event.shiftKey
+      ? applyOutdentTransform(
+          markdown,
+          selection,
+          indentUnit,
+          currentPresentation.indentWidth,
+          currentPresentation.useSpacesForIndent
+        )
+      : applyIndentTransform(markdown, selection, indentUnit)
+
+    applyTransform(transform)
+  }
+
   const handleLinkActivationClick = (event: MouseEvent) => {
-    if (!shouldActivateLinkOnCommandClick(event)) {
+    if (!shouldActivateLinkOnCommandClick(event, currentPresentation.linkOpenRequiresCommand)) {
       return
     }
 
@@ -2814,7 +3011,7 @@ export const createMarkdownEditor = async ({
     event.preventDefault()
     event.stopPropagation()
 
-    const resolvedHref = resolveLinkURL(href, currentDocumentBaseURL)
+    const resolvedHref = resolveLinkURL(href, getResolvedLinkBase())
 
     if (openLink) {
       openLink(resolvedHref)
@@ -2825,9 +3022,13 @@ export const createMarkdownEditor = async ({
   }
 
   host.addEventListener('pointerdown', handleBackgroundPointerDown)
+  host.addEventListener('keydown', handleIndentKeyDown, true)
   host.addEventListener('click', handleLinkActivationClick, true)
   removeBackgroundPointerListener = () => {
     host.removeEventListener('pointerdown', handleBackgroundPointerDown)
+  }
+  removeIndentKeydownListener = () => {
+    host.removeEventListener('keydown', handleIndentKeyDown, true)
   }
   removeLinkActivationListener = () => {
     host.removeEventListener('click', handleLinkActivationClick, true)
@@ -2837,6 +3038,7 @@ export const createMarkdownEditor = async ({
   scheduleTableToolbarRefresh()
 
   const setPresentation = (presentation: EditorPresentation) => {
+    currentPresentation = presentation
     host.dataset.focusMode = presentation.focusMode ? 'true' : 'false'
     host.dataset.typewriterMode = presentation.typewriterMode ? 'true' : 'false'
 
@@ -2845,6 +3047,7 @@ export const createMarkdownEditor = async ({
       presentation.theme === 'dark' ? 'dark' : 'light',
       presentation.theme === 'dark' ? 'github-dark' : 'github'
     )
+    applyEditableRuntimeOptions()
   }
 
   return {
@@ -2942,6 +3145,8 @@ export const createMarkdownEditor = async ({
     async destroy() {
       removeBackgroundPointerListener?.()
       removeBackgroundPointerListener = null
+      removeIndentKeydownListener?.()
+      removeIndentKeydownListener = null
       removeLinkActivationListener?.()
       removeLinkActivationListener = null
       removeTableToolbarListeners?.()

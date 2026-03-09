@@ -223,10 +223,25 @@ struct EditorWebView: NSViewRepresentable {
         var pageWidth: String
         var codeFontFamily: String
         var codeFontSize: Double
+        var spellCheckEnabled: Bool
+        var indentWidth: Int
+        var useSpacesForIndent: Bool
         var hideQuickInsertHint: Bool
         var autoPairBracket: Bool
         var autoPairMarkdownSyntax: Bool
         var autoPairQuote: Bool
+        var enableTables: Bool
+        var enableTaskList: Bool
+        var enableStrikethrough: Bool
+        var enableFootnotes: Bool
+        var enableTOC: Bool
+        var enableMath: Bool
+        var enableMermaid: Bool
+        var enableYAMLFrontMatter: Bool
+        var imageRootURL: String
+        var imagePreferDotSlash: Bool
+        var imageAutoEncodeURL: Bool
+        var linkOpenRequiresCommand: Bool
 
         static let `default` = Presentation(
             theme: "light",
@@ -238,10 +253,25 @@ struct EditorWebView: NSViewRepresentable {
             pageWidth: "860px",
             codeFontFamily: "\"SF Mono\", \"JetBrains Mono\", ui-monospace, monospace",
             codeFontSize: 14,
+            spellCheckEnabled: true,
+            indentWidth: 4,
+            useSpacesForIndent: true,
             hideQuickInsertHint: false,
             autoPairBracket: true,
             autoPairMarkdownSyntax: true,
-            autoPairQuote: true
+            autoPairQuote: true,
+            enableTables: true,
+            enableTaskList: true,
+            enableStrikethrough: true,
+            enableFootnotes: true,
+            enableTOC: true,
+            enableMath: true,
+            enableMermaid: true,
+            enableYAMLFrontMatter: true,
+            imageRootURL: "",
+            imagePreferDotSlash: false,
+            imageAutoEncodeURL: true,
+            linkOpenRequiresCommand: true
         )
     }
 
@@ -534,10 +564,25 @@ struct EditorWebView: NSViewRepresentable {
             let pageWidth = EditorWebView.javaScriptStringLiteral(for: parent.presentation.pageWidth)
             let codeFontFamily = EditorWebView.javaScriptStringLiteral(for: parent.presentation.codeFontFamily)
             let codeFontSize = String(parent.presentation.codeFontSize)
+            let spellCheckEnabled = parent.presentation.spellCheckEnabled ? "true" : "false"
+            let indentWidth = String(parent.presentation.indentWidth)
+            let useSpacesForIndent = parent.presentation.useSpacesForIndent ? "true" : "false"
             let hideQuickInsertHint = parent.presentation.hideQuickInsertHint ? "true" : "false"
             let autoPairBracket = parent.presentation.autoPairBracket ? "true" : "false"
             let autoPairMarkdownSyntax = parent.presentation.autoPairMarkdownSyntax ? "true" : "false"
             let autoPairQuote = parent.presentation.autoPairQuote ? "true" : "false"
+            let enableTables = parent.presentation.enableTables ? "true" : "false"
+            let enableTaskList = parent.presentation.enableTaskList ? "true" : "false"
+            let enableStrikethrough = parent.presentation.enableStrikethrough ? "true" : "false"
+            let enableFootnotes = parent.presentation.enableFootnotes ? "true" : "false"
+            let enableTOC = parent.presentation.enableTOC ? "true" : "false"
+            let enableMath = parent.presentation.enableMath ? "true" : "false"
+            let enableMermaid = parent.presentation.enableMermaid ? "true" : "false"
+            let enableYAMLFrontMatter = parent.presentation.enableYAMLFrontMatter ? "true" : "false"
+            let imageRootURL = EditorWebView.javaScriptStringLiteral(for: parent.presentation.imageRootURL)
+            let imagePreferDotSlash = parent.presentation.imagePreferDotSlash ? "true" : "false"
+            let imageAutoEncodeURL = parent.presentation.imageAutoEncodeURL ? "true" : "false"
+            let linkOpenRequiresCommand = parent.presentation.linkOpenRequiresCommand ? "true" : "false"
             let script = """
             if (typeof window.setEditorAppearance === 'function') {
                 window.setEditorAppearance({
@@ -550,10 +595,25 @@ struct EditorWebView: NSViewRepresentable {
                     pageWidth: \(pageWidth),
                     codeFontFamily: \(codeFontFamily),
                     codeFontSize: \(codeFontSize),
+                    spellCheckEnabled: \(spellCheckEnabled),
+                    indentWidth: \(indentWidth),
+                    useSpacesForIndent: \(useSpacesForIndent),
                     hideQuickInsertHint: \(hideQuickInsertHint),
                     autoPairBracket: \(autoPairBracket),
                     autoPairMarkdownSyntax: \(autoPairMarkdownSyntax),
-                    autoPairQuote: \(autoPairQuote)
+                    autoPairQuote: \(autoPairQuote),
+                    enableTables: \(enableTables),
+                    enableTaskList: \(enableTaskList),
+                    enableStrikethrough: \(enableStrikethrough),
+                    enableFootnotes: \(enableFootnotes),
+                    enableTOC: \(enableTOC),
+                    enableMath: \(enableMath),
+                    enableMermaid: \(enableMermaid),
+                    enableYAMLFrontMatter: \(enableYAMLFrontMatter),
+                    imageRootURL: \(imageRootURL),
+                    imagePreferDotSlash: \(imagePreferDotSlash),
+                    imageAutoEncodeURL: \(imageAutoEncodeURL),
+                    linkOpenRequiresCommand: \(linkOpenRequiresCommand)
                 });
             }
             """

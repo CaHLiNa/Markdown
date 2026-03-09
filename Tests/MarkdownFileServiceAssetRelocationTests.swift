@@ -2,6 +2,8 @@ import XCTest
 @testable import Markdown
 
 final class MarkdownFileServiceAssetRelocationTests: XCTestCase {
+    private let preferences = EditorPreferences.defaultValue
+
     func testRelocatesSiblingImageAssetsDuringSaveAs() throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
@@ -29,7 +31,8 @@ final class MarkdownFileServiceAssetRelocationTests: XCTestCase {
         let relocatedMarkdown = try MarkdownFileService.relocateSiblingImageAssetsForSaveAs(
             markdown,
             from: originalFileURL,
-            to: destinationFileURL
+            to: destinationFileURL,
+            preferences: preferences
         )
 
         let relocatedAssetURL = tempDirectory
@@ -73,7 +76,8 @@ final class MarkdownFileServiceAssetRelocationTests: XCTestCase {
         let relocatedMarkdown = try MarkdownFileService.relocateSiblingImageAssetsForSaveAs(
             markdown,
             from: originalFileURL,
-            to: destinationFileURL
+            to: destinationFileURL,
+            preferences: preferences
         )
 
         let unexpectedAssetURL = tempDirectory

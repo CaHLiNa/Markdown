@@ -3,19 +3,18 @@ import XCTest
 
 @MainActor
 final class EditorPreferencesTests: XCTestCase {
-    func testDefaultPreferencesProduceExpectedPresentation() {
+    func testDefaultPreferencesUseExpectedEditorDefaults() {
         let preferences = EditorPreferences.defaultValue
-        let presentation = preferences.presentation(theme: .light)
 
-        XCTAssertEqual(presentation.theme, "light", "Expected default preferences to use the light web theme.")
         XCTAssertTrue(preferences.tabBarVisibility, "Expected the tab bar to be visible by default.")
-        XCTAssertFalse(presentation.focusMode, "Expected focus mode to default to false.")
-        XCTAssertFalse(presentation.typewriterMode, "Expected typewriter mode to default to false.")
-        XCTAssertEqual(presentation.fontSize, 17, "Expected default font size to be 17.")
-        XCTAssertEqual(presentation.pageWidth, "860px", "Expected default page width to match the editor web default.")
+        XCTAssertFalse(preferences.focusMode, "Expected focus mode to default to false.")
+        XCTAssertFalse(preferences.typewriterMode, "Expected typewriter mode to default to false.")
+        XCTAssertEqual(preferences.fontSize, 17, "Expected default font size to be 17.")
+        XCTAssertEqual(preferences.pageWidth, "860px", "Expected default page width to match the editor web default.")
+        XCTAssertEqual(preferences.indentWidth, 4, "Expected default indent width to be 4 spaces.")
     }
 
-    func testCustomizedPreferencesCarryAcrossPresentationFields() {
+    func testCustomizedPreferencesPreserveConfiguredFields() {
         let preferences = EditorPreferences(
             tabBarVisibility: true,
             typewriterMode: true,
@@ -32,14 +31,12 @@ final class EditorPreferencesTests: XCTestCase {
             autoPairQuote: false
         )
 
-        let presentation = preferences.presentation(theme: .sepia)
-
-        XCTAssertEqual(presentation.theme, "sepia", "Expected customized preferences to pass the selected theme through.")
-        XCTAssertTrue(presentation.focusMode, "Expected focus mode to be enabled in presentation snapshot.")
-        XCTAssertTrue(presentation.typewriterMode, "Expected typewriter mode to be enabled in presentation snapshot.")
-        XCTAssertEqual(presentation.fontFamily, "LXGW WenKai", "Expected custom font family to be preserved.")
-        XCTAssertEqual(presentation.codeFontFamily, "JetBrains Mono", "Expected custom code font family to be preserved.")
-        XCTAssertFalse(presentation.autoPairMarkdownSyntax, "Expected autoPairMarkdownSyntax override to be preserved.")
+        XCTAssertTrue(preferences.focusMode, "Expected focus mode to be preserved.")
+        XCTAssertTrue(preferences.typewriterMode, "Expected typewriter mode to be preserved.")
+        XCTAssertEqual(preferences.fontFamily, "LXGW WenKai", "Expected custom font family to be preserved.")
+        XCTAssertEqual(preferences.codeFontFamily, "JetBrains Mono", "Expected custom code font family to be preserved.")
+        XCTAssertFalse(preferences.autoPairMarkdownSyntax, "Expected autoPairMarkdownSyntax override to be preserved.")
+        XCTAssertFalse(preferences.autoPairBracket, "Expected autoPairBracket override to be preserved.")
     }
 
     func testLegacyEditorModePreferenceDoesNotBreakDecoding() throws {
@@ -51,12 +48,12 @@ final class EditorPreferencesTests: XCTestCase {
         let preferences = try JSONDecoder().decode(EditorPreferences.self, from: data)
 
         XCTAssertEqual(preferences.appearanceMode, .followSystem, "Expected legacy payloads to keep decoding appearance mode.")
-        XCTAssertEqual(preferences.exportTheme, .matchEditor, "Expected legacy payloads to keep decoding export theme.")
+        XCTAssertEqual(preferences.exportTheme, .matchAppearance, "Expected legacy payloads to keep decoding export theme.")
     }
 
     func testDefaultExportThemeMatchesEditor() {
         let preferences = EditorPreferences.defaultValue
 
-        XCTAssertEqual(preferences.exportTheme, .matchEditor, "Expected export theme to default to following the editor theme.")
+        XCTAssertEqual(preferences.exportTheme, .matchAppearance, "Expected export theme to default to following the editor appearance.")
     }
 }

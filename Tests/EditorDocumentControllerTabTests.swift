@@ -65,6 +65,40 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         XCTAssertNil(controller.activeTabID, "Expected there to be no active tab after saving and closing the last tab.")
     }
 
+    func testRestoreLastSessionReopensFileBackedTabs() {
+        resetPersistentState()
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        XCTAssertNoThrow(try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true))
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let fileURL = temporaryDirectory.appendingPathComponent("notes.md")
+        XCTAssertNoThrow(try "# Restored".write(to: fileURL, atomically: true, encoding: .utf8))
+
+        do {
+            let preferences = EditorPreferences(appearanceMode: .followSystem, startupBehavior: .restoreLastSession)
+            let preferencesData = try JSONEncoder().encode(preferences)
+            UserDefaults.standard.set(preferencesData, forKey: "editorPreferences")
+
+            let sessionObject: [String: Any] = [
+                "folderPath": temporaryDirectory.path,
+                "openFilePaths": [fileURL.path],
+                "activeFilePath": fileURL.path
+            ]
+            let sessionData = try JSONSerialization.data(withJSONObject: sessionObject)
+            UserDefaults.standard.set(sessionData, forKey: "editorSession")
+        } catch {
+            XCTFail("Failed to seed persisted session: \(error)")
+        }
+
+        let controller = EditorDocumentController()
+
+        XCTAssertEqual(controller.tabs.count, 1, "Expected restoreLastSession to reopen the last file-backed tab.")
+        XCTAssertEqual(controller.currentFileURL?.standardizedFileURL, fileURL.standardizedFileURL)
+        XCTAssertEqual(controller.currentMarkdown, "# Restored")
+    }
+
     func testCompactTitlePreservesBothEndsForLongTitles() {
         let tab = EditorTab(
             id: UUID(),
@@ -84,5 +118,7 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
     private func resetPersistentState() {
         UserDefaults.standard.removeObject(forKey: "editorPreferences")
         UserDefaults.standard.removeObject(forKey: "recentMarkdownFiles")
+        UserDefaults.standard.removeObject(forKey: "editorSession")
+        UserDefaults.standard.removeObject(forKey: "lastMarkdownExportDirectory")
     }
 }

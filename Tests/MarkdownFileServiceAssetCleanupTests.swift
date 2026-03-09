@@ -2,6 +2,8 @@ import XCTest
 @testable import Markdown
 
 final class MarkdownFileServiceAssetCleanupTests: XCTestCase {
+    private let preferences = EditorPreferences.defaultValue
+
     func testRemovesUnreferencedSiblingAssets() throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
@@ -29,7 +31,8 @@ final class MarkdownFileServiceAssetCleanupTests: XCTestCase {
 
         try MarkdownFileService.removeUnusedSiblingImageAssets(
             for: markdown,
-            alongsideMarkdownFile: markdownFileURL
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
         )
 
         XCTAssertTrue(fileManager.fileExists(atPath: keptAssetURL.path), "Expected referenced sibling image asset to be preserved.")
@@ -62,7 +65,8 @@ final class MarkdownFileServiceAssetCleanupTests: XCTestCase {
 
         try MarkdownFileService.removeUnusedSiblingImageAssets(
             for: markdown,
-            alongsideMarkdownFile: markdownFileURL
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
         )
 
         XCTAssertTrue(fileManager.fileExists(atPath: nestedAssetURL.path), "Expected referenced nested asset to be preserved.")

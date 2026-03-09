@@ -2,6 +2,8 @@ import XCTest
 @testable import Markdown
 
 final class MarkdownFileServiceImageTests: XCTestCase {
+    private let preferences = EditorPreferences.defaultValue
+
     func testPersistImageAssetCreatesSiblingAssetsDirectory() throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
@@ -19,7 +21,8 @@ final class MarkdownFileServiceImageTests: XCTestCase {
             Data([0x89, 0x50, 0x4E, 0x47]),
             originalFilename: "diagram.png",
             mimeType: "image/png",
-            alongsideMarkdownFile: markdownFileURL
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
         )
 
         let expectedURL = tempDirectory
@@ -54,14 +57,16 @@ final class MarkdownFileServiceImageTests: XCTestCase {
             Data([0x89, 0x50, 0x4E, 0x47]),
             originalFilename: "diagram.png",
             mimeType: "image/png",
-            alongsideMarkdownFile: markdownFileURL
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
         )
 
         let secondRelativePath = try MarkdownFileService.persistImageAsset(
             Data([0x89, 0x50, 0x4E, 0x47]),
             originalFilename: "diagram.png",
             mimeType: "image/png",
-            alongsideMarkdownFile: markdownFileURL
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
         )
 
         XCTAssertEqual(
@@ -88,7 +93,8 @@ final class MarkdownFileServiceImageTests: XCTestCase {
             Data([0xFF, 0xD8, 0xFF]),
             originalFilename: "clipboard-image",
             mimeType: "image/jpeg",
-            alongsideMarkdownFile: markdownFileURL
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
         )
 
         XCTAssertEqual(

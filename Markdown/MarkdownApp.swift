@@ -15,6 +15,10 @@ struct MarkdownApp: App {
 
     @StateObject private var documentController = EditorDocumentController()
 
+    init() {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     var body: some Scene {
         WindowGroup {
             if Self.isRunningUnitTests {
@@ -56,6 +60,7 @@ struct MarkdownApp: App {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.styleMask.insert(.fullSizeContentView)
+        window.tabbingMode = .disallowed
         window.isOpaque = false
         window.backgroundColor = .clear
 
@@ -107,6 +112,10 @@ private struct EditorAppCommands: Commands {
 
 private struct EditorFileCommands: Commands {
     @ObservedObject var documentController: EditorDocumentController
+
+    private var defaultExportTitle: String {
+        "导出 \(documentController.defaultExportFormat.rawValue)..."
+    }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -164,6 +173,12 @@ private struct EditorFileCommands: Commands {
         }
 
         CommandGroup(after: .saveItem) {
+            Button(defaultExportTitle) {
+                documentController.exportDocument()
+            }
+            .keyboardShortcut("e", modifiers: [.command])
+            .disabled(!documentController.canExportRenderedDocument)
+
             Menu("导出为") {
                 Button("HTML...") {
                     documentController.exportHTMLDocument()
@@ -468,25 +483,16 @@ private struct EditorViewCommands: Commands {
     }
 
     var body: some Commands {
-        CommandMenu("视图") {
-            Button("切换源码模式") {
-                documentController.toggleGlobalSourceMode()
-            }
-            .keyboardShortcut("/", modifiers: [.command])
-
-            Toggle("专注模式", isOn: focusModeBinding)
-                .keyboardShortcut("j", modifiers: [.command, .shift])
-
-            Toggle("打字机模式", isOn: typewriterModeBinding)
-                .keyboardShortcut("t", modifiers: [.command, .option])
-
-            Divider()
-
+        CommandGroup(replacing: .sidebar) {
             Toggle("显示侧边栏", isOn: sidebarVisibilityBinding)
                 .keyboardShortcut("j", modifiers: [.command])
+        }
 
+        CommandGroup(after: .sidebar) {
             Toggle("显示标签栏", isOn: tabStripVisibilityBinding)
                 .keyboardShortcut("b", modifiers: [.command, .option])
+
+            Divider()
 
             Button("显示文件面板") {
                 documentController.showFilesPane()
@@ -505,15 +511,22 @@ private struct EditorViewCommands: Commands {
 
             Divider()
 
+            Toggle("专注模式", isOn: focusModeBinding)
+                .keyboardShortcut("j", modifiers: [.command, .shift])
+
+            Toggle("打字机模式", isOn: typewriterModeBinding)
+                .keyboardShortcut("t", modifiers: [.command, .option])
+
+            Button("切换源码模式") {
+                documentController.toggleGlobalSourceMode()
+            }
+            .keyboardShortcut("/", modifiers: [.command])
+
+            Divider()
+
             Picker("界面外观", selection: $documentController.appearanceMode) {
                 ForEach(EditorAppearanceMode.allCases) { mode in
                     Text(mode.rawValue).tag(mode)
-                }
-            }
-
-            Picker("编辑器主题", selection: $documentController.editorTheme) {
-                ForEach(EditorTheme.allCases) { theme in
-                    Text(theme.displayName).tag(theme)
                 }
             }
         }
@@ -521,24 +534,27 @@ private struct EditorViewCommands: Commands {
 }
 
 private enum EditorSettingsSection: String, CaseIterable, Identifiable {
-    case appearance
     case editor
+    case image
     case markdown
     case export
+    case appearance
     case general
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .appearance:
-            return "外观"
         case .editor:
             return "编辑器"
+        case .image:
+            return "图像"
         case .markdown:
             return "Markdown"
         case .export:
             return "导出"
+        case .appearance:
+            return "外观"
         case .general:
             return "通用"
         }
@@ -546,14 +562,16 @@ private enum EditorSettingsSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .appearance:
-            return "paintbrush"
         case .editor:
-            return "pencil.and.ruler"
+            return "slider.horizontal.3"
+        case .image:
+            return "photo.on.rectangle"
         case .markdown:
             return "chevron.left.forwardslash.chevron.right"
         case .export:
             return "square.and.arrow.up"
+        case .appearance:
+            return "circle.lefthalf.filled"
         case .general:
             return "gearshape"
         }
@@ -561,16 +579,18 @@ private enum EditorSettingsSection: String, CaseIterable, Identifiable {
 
     var keywords: [String] {
         switch self {
-        case .appearance:
-            return ["主题", "颜色", "深色", "浅色"]
         case .editor:
-            return ["字体", "字号", "行高", "宽度", "代码"]
+            return ["字体", "字号", "行高", "宽度", "代码", "缩进", "拼写"]
+        case .image:
+            return ["图片", "路径", "资源", "根路径", "相对路径"]
         case .markdown:
-            return ["括号", "引号", "自动配对", "提示"]
+            return ["括号", "引号", "自动配对", "提示", "表格", "数学", "mermaid"]
         case .export:
-            return ["HTML", "PDF", "导出", "主题"]
+            return ["HTML", "PDF", "导出", "目录", "页边距"]
+        case .appearance:
+            return ["外观", "浅色", "深色", "护眼", "侧边栏", "标签栏", "字数"]
         case .general:
-            return ["标签栏", "专注", "打字机", "窗口"]
+            return ["启动", "最近文件", "关闭确认", "扩展名", "链接"]
         }
     }
 }
@@ -584,8 +604,8 @@ private struct EditorSettingsView: View {
         documentController.effectiveInterfaceStyle == .dark ? .dark : .light
     }
 
-    private var sidebarSelectionFill: Color {
-        Color.accentColor.opacity(preferredColorScheme == .dark ? 0.22 : 0.12)
+    private var palette: SettingsPalette {
+        .forStyle(documentController.effectiveInterfaceStyle)
     }
 
     private var filteredSections: [EditorSettingsSection] {
@@ -611,231 +631,434 @@ private struct EditorSettingsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(palette.secondaryText)
 
-                    TextField("查找...", text: $settingsQuery)
+                    TextField("查找", text: $settingsQuery)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(palette.primaryText)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(nsColor: .controlBackgroundColor))
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(palette.controlSurface)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(palette.controlBorder, lineWidth: 1)
                 )
 
-                VStack(spacing: 4) {
-                    ForEach(filteredSections) { section in
-                        Button {
-                            selectedSection = section
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: section.systemImage)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .frame(width: 18)
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(filteredSections) { section in
+                            Button {
+                                selectedSection = section
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: section.systemImage)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .frame(width: 18)
 
-                                Text(section.title)
-                                    .font(.system(size: 14, weight: .medium))
+                                    Text(section.title)
+                                        .font(.system(size: 14, weight: .medium))
 
-                                Spacer(minLength: 0)
+                                    Spacer(minLength: 0)
+                                }
+                                .foregroundStyle(selectedSection == section ? palette.primaryText : palette.secondaryText)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(selectedSection == section ? palette.selectionFill : Color.clear)
+                                )
                             }
-                            .foregroundStyle(selectedSection == section ? .primary : .secondary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(selectedSection == section ? sidebarSelectionFill : Color.clear)
-                            )
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
-
-                Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 18)
-            .frame(width: 232)
+            .frame(width: 236)
             .frame(maxHeight: .infinity, alignment: .topLeading)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(palette.sidebarSurface)
 
-            Divider()
+            Rectangle()
+                .fill(palette.separator)
+                .frame(width: 1)
 
             ScrollView(.vertical, showsIndicators: false) {
                 if let activeSection {
-                    VStack(alignment: .leading, spacing: 26) {
+                    VStack(alignment: .leading, spacing: 28) {
                         switch activeSection {
-                        case .appearance:
-                            appearanceSettingsContent
                         case .editor:
                             editorSettingsContent
+                        case .image:
+                            imageSettingsContent
                         case .markdown:
                             markdownSettingsContent
                         case .export:
                             exportSettingsContent
+                        case .appearance:
+                            appearanceSettingsContent
                         case .general:
                             generalSettingsContent
                         }
                     }
-                    .frame(maxWidth: 720, alignment: .leading)
+                    .frame(maxWidth: 760, alignment: .leading)
                     .padding(.horizontal, 36)
                     .padding(.vertical, 28)
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("没有匹配项")
-                            .font(.system(size: 22, weight: .semibold))
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(palette.primaryText)
                         Text("换个关键词再试。")
                             .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(palette.secondaryText)
                     }
                     .frame(maxWidth: .infinity, minHeight: 360, alignment: .topLeading)
                     .padding(.horizontal, 36)
-                    .padding(.vertical, 32)
+                    .padding(.vertical, 30)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(palette.windowBackground)
         }
+        .background(palette.windowBackground)
+        .tint(palette.accentText)
+        .environment(\.settingsPalette, palette)
         .preferredColorScheme(preferredColorScheme)
     }
 
-    private var appearanceSettingsContent: some View {
-        VStack(alignment: .leading, spacing: 26) {
-            SettingsSectionGroup(title: "界面") {
-                SettingsFieldBlock(title: "颜色模式") {
-                    SettingsRadioStrip {
-                        ForEach(EditorAppearanceMode.allCases) { mode in
-                            SettingsRadioOption(value: mode, selection: $documentController.appearanceMode, title: mode.rawValue)
-                        }
-                    }
-                }
-
-                SettingsFieldBlock(title: "编辑器主题") {
-                    SettingsRadioStrip {
-                        ForEach(EditorTheme.allCases) { theme in
-                            SettingsRadioOption(value: theme, selection: $documentController.editorTheme, title: theme.displayName)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private var editorSettingsContent: some View {
-        VStack(alignment: .leading, spacing: 26) {
-            SettingsSectionGroup(title: "正文") {
-                SettingsFieldBlock(title: "字体") {
+        VStack(alignment: .leading, spacing: 30) {
+            SettingsSectionGroup(title: "排版") {
+                SettingsControlRow(title: "正文") {
                     TextField("", text: $documentController.editorFontFamily)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 280)
+                        .frame(width: 320)
                 }
 
-                SettingsFieldBlock(title: "字号") {
+                SettingsControlRow(title: "正文字号") {
                     SettingsStepperField(
                         value: $documentController.editorFontSize,
                         range: 12...32,
                         step: 1,
                         format: .number.precision(.fractionLength(0)),
                         suffix: "pt",
-                        width: 82
+                        width: 88
                     )
                 }
 
-                SettingsFieldBlock(title: "行高") {
+                SettingsControlRow(title: "行高") {
                     SettingsStepperField(
                         value: $documentController.editorLineHeight,
                         range: 1.2...2.4,
                         step: 0.05,
                         format: .number.precision(.fractionLength(2)),
                         suffix: nil,
-                        width: 82
+                        width: 88
                     )
                 }
 
-                SettingsFieldBlock(title: "页面宽度") {
+                SettingsControlRow(title: "页面宽度") {
                     TextField("", text: $documentController.editorPageWidth)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 140)
+                        .frame(width: 150)
                 }
             }
 
-            Divider()
-
             SettingsSectionGroup(title: "代码") {
-                SettingsFieldBlock(title: "字体") {
+                SettingsControlRow(title: "代码字体") {
                     TextField("", text: $documentController.codeFontFamily)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 280)
+                        .frame(width: 320)
                 }
 
-                SettingsFieldBlock(title: "字号") {
+                SettingsControlRow(title: "代码字号") {
                     SettingsStepperField(
                         value: $documentController.codeFontSize,
                         range: 12...28,
                         step: 1,
                         format: .number.precision(.fractionLength(0)),
                         suffix: "pt",
-                        width: 82
+                        width: 88
                     )
                 }
+            }
+
+            SettingsSectionGroup(title: "输入") {
+                SettingsControlRow(title: "默认缩进") {
+                    Picker("", selection: $documentController.editorIndentWidth) {
+                        Text("2").tag(2)
+                        Text("4").tag(4)
+                        Text("6").tag(6)
+                        Text("8").tag(8)
+                    }
+                    .labelsHidden()
+                    .frame(width: 120)
+                }
+
+                SettingsSwitchRow(title: "使用空格缩进", isOn: $documentController.useSpacesForIndent)
+                SettingsSwitchRow(title: "启用拼写检查", isOn: $documentController.isSpellCheckEnabled)
+                SettingsSwitchRow(title: "默认启用专注模式", isOn: $documentController.isFocusModeEnabled)
+                SettingsSwitchRow(title: "默认启用打字机模式", isOn: $documentController.isTypewriterModeEnabled)
+                SettingsSwitchRow(title: "始终显示字数统计", isOn: $documentController.alwaysShowWordCount)
+            }
+        }
+    }
+
+    private var imageSettingsContent: some View {
+        VStack(alignment: .leading, spacing: 30) {
+            SettingsSectionGroup(title: "存储") {
+                SettingsSwitchRow(title: "插图时复制到资源目录", isOn: $documentController.imageCopyToAssetFolder)
+
+                SettingsControlRow(title: "资源目录") {
+                    Picker("", selection: $documentController.imageFolderMode) {
+                        ForEach(EditorImageFolderMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 220)
+                }
+
+                if documentController.imageFolderMode == .customRelativePath {
+                    SettingsControlRow(title: "相对子目录") {
+                        TextField("", text: $documentController.imageCustomFolder)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                    }
+                }
+            }
+
+            SettingsSectionGroup(title: "路径") {
+                SettingsSwitchRow(title: "使用相对路径", isOn: $documentController.imageUseRelativePath)
+                SettingsSwitchRow(title: "相对路径加 ./ 前缀", isOn: $documentController.imagePreferDotSlash)
+                SettingsSwitchRow(title: "自动转义 URL", isOn: $documentController.imageAutoEncodeURL)
+
+                SettingsControlRow(title: "图片根路径") {
+                    TextField("", text: $documentController.imageRootURL)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 320)
+                }
+
+                SettingsSwitchRow(title: "删除引用时询问是否删除本地图片", isOn: $documentController.confirmDeleteImageFile)
             }
         }
     }
 
     private var markdownSettingsContent: some View {
-        VStack(alignment: .leading, spacing: 26) {
+        VStack(alignment: .leading, spacing: 30) {
             SettingsSectionGroup(title: "输入辅助") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Toggle("隐藏快速插入提示", isOn: $documentController.hideQuickInsertHint)
-                    Toggle("括号自动配对", isOn: $documentController.autoPairBracket)
-                    Toggle("Markdown 语法自动配对", isOn: $documentController.autoPairMarkdownSyntax)
-                    Toggle("引号自动配对", isOn: $documentController.autoPairQuote)
-                }
+                SettingsSwitchRow(title: "隐藏快速插入提示", isOn: $documentController.hideQuickInsertHint)
+                SettingsSwitchRow(title: "括号自动配对", isOn: $documentController.autoPairBracket)
+                SettingsSwitchRow(title: "Markdown 语法自动配对", isOn: $documentController.autoPairMarkdownSyntax)
+                SettingsSwitchRow(title: "引号自动配对", isOn: $documentController.autoPairQuote)
+            }
+
+            SettingsSectionGroup(title: "语法扩展") {
+                SettingsSwitchRow(title: "启用表格", isOn: $documentController.enableTables)
+                SettingsSwitchRow(title: "启用任务列表", isOn: $documentController.enableTaskList)
+                SettingsSwitchRow(title: "启用删除线", isOn: $documentController.enableStrikethrough)
+                SettingsSwitchRow(title: "启用脚注", isOn: $documentController.enableFootnotes)
+                SettingsSwitchRow(title: "启用目录块", isOn: $documentController.enableTOC)
+                SettingsSwitchRow(title: "启用数学公式", isOn: $documentController.enableMath)
+                SettingsSwitchRow(title: "启用 Mermaid", isOn: $documentController.enableMermaid)
+                SettingsSwitchRow(title: "启用 YAML Front Matter", isOn: $documentController.enableYAMLFrontMatter)
             }
         }
     }
 
     private var exportSettingsContent: some View {
-        VStack(alignment: .leading, spacing: 26) {
-            SettingsSectionGroup(title: "HTML") {
-                SettingsFieldBlock(title: "主题") {
+        VStack(alignment: .leading, spacing: 30) {
+            SettingsSectionGroup(title: "默认行为") {
+                SettingsControlRow(title: "默认格式") {
+                    Picker("", selection: $documentController.defaultExportFormat) {
+                        ForEach(EditorExportFormat.allCases) { format in
+                            Text(format.rawValue).tag(format)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                }
+
+                SettingsControlRow(title: "导出位置") {
+                    Picker("", selection: $documentController.exportDestinationMode) {
+                        ForEach(EditorExportDestinationMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 180)
+                }
+
+                SettingsSwitchRow(title: "导出后打开文件", isOn: $documentController.openExportedFile)
+                SettingsSwitchRow(title: "导出后打开所在目录", isOn: $documentController.revealExportedFileInFinder)
+            }
+
+            SettingsSectionGroup(title: "导出外观") {
+                SettingsControlRow(title: "颜色方案") {
                     Picker("", selection: $documentController.htmlExportTheme) {
                         ForEach(MarkdownExportTheme.allCases) { theme in
                             Text(theme.displayName).tag(theme)
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 220)
+                    .frame(width: 180)
+                }
+            }
+
+            SettingsSectionGroup(title: "PDF") {
+                SettingsControlRow(title: "纸张尺寸") {
+                    Picker("", selection: $documentController.pdfPaperSize) {
+                        ForEach(EditorPDFPaperSize.allCases) { size in
+                            Text(size.rawValue).tag(size)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                }
+
+                SettingsControlRow(title: "页边距") {
+                    SettingsStepperField(
+                        value: $documentController.pdfMargin,
+                        range: 8...64,
+                        step: 2,
+                        format: .number.precision(.fractionLength(0)),
+                        suffix: "pt",
+                        width: 88
+                    )
+                }
+
+                SettingsSwitchRow(title: "打印背景", isOn: $documentController.pdfPrintBackground)
+                SettingsSwitchRow(title: "允许 YAML 覆盖导出设置", isOn: $documentController.allowYAMLExportOverrides)
+            }
+        }
+    }
+
+    private var appearanceSettingsContent: some View {
+        VStack(alignment: .leading, spacing: 30) {
+            SettingsSectionGroup(title: "外观") {
+                SettingsControlRow(title: "颜色模式") {
+                    Picker("", selection: $documentController.appearanceMode) {
+                        ForEach(EditorAppearanceMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 320)
+                }
+
+                SettingsSwitchRow(title: "默认显示侧边栏", isOn: $documentController.isSidebarVisible)
+                SettingsSwitchRow(title: "默认显示标签栏", isOn: $documentController.isTabStripVisible)
+            }
+
+            SettingsSectionGroup(title: "目录与统计") {
+                SettingsControlRow(title: "目录折叠") {
+                    Picker("", selection: $documentController.outlineVisibilityMode) {
+                        ForEach(EditorOutlineVisibilityMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 160)
+                }
+
+                SettingsControlRow(title: "阅读速度") {
+                    SettingsStepperField(
+                        value: Binding(
+                            get: { Double(documentController.readingSpeedWPM) },
+                            set: { documentController.readingSpeedWPM = Int($0.rounded()) }
+                        ),
+                        range: 100...1200,
+                        step: 10,
+                        format: .number.precision(.fractionLength(0)),
+                        suffix: "字/分钟",
+                        width: 96
+                    )
+                }
+
+                SettingsControlRow(title: "界面密度") {
+                    Picker("", selection: $documentController.interfaceDensity) {
+                        ForEach(EditorInterfaceDensity.allCases) { density in
+                            Text(density.rawValue).tag(density)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 180)
                 }
             }
         }
     }
 
     private var generalSettingsContent: some View {
-        VStack(alignment: .leading, spacing: 26) {
-            SettingsSectionGroup(title: "窗口") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Toggle("默认显示标签栏", isOn: $documentController.isTabStripVisible)
-                    Toggle("默认启用专注模式", isOn: $documentController.isFocusModeEnabled)
-                    Toggle("默认启用打字机模式", isOn: $documentController.isTypewriterModeEnabled)
+        VStack(alignment: .leading, spacing: 30) {
+            SettingsSectionGroup(title: "启动与窗口") {
+                SettingsControlRow(title: "启动行为") {
+                    Picker("", selection: $documentController.startupBehavior) {
+                        ForEach(EditorStartupBehavior.allCases) { behavior in
+                            Text(behavior.rawValue).tag(behavior)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 180)
                 }
+
+                SettingsSwitchRow(title: "新窗口继承当前工作目录", isOn: $documentController.inheritWorkspaceOnNewWindow)
+                SettingsSwitchRow(title: "关闭未保存文档时总是询问", isOn: $documentController.alwaysConfirmUnsavedChanges)
+            }
+
+            SettingsSectionGroup(title: "文件") {
+                SettingsControlRow(title: "默认扩展名") {
+                    Picker("", selection: $documentController.defaultDocumentExtension) {
+                        ForEach(EditorDocumentExtension.allCases) { ext in
+                            Text(ext.rawValue).tag(ext)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 120)
+                }
+
+                SettingsControlRow(title: "最近文件") {
+                    SettingsStepperField(
+                        value: Binding(
+                            get: { Double(documentController.recentFileLimit) },
+                            set: { documentController.recentFileLimit = Int($0.rounded()) }
+                        ),
+                        range: 5...50,
+                        step: 1,
+                        format: .number.precision(.fractionLength(0)),
+                        suffix: "个",
+                        width: 88
+                    )
+                }
+            }
+
+            SettingsSectionGroup(title: "链接") {
+                SettingsSwitchRow(title: "按住 Command 再点击链接", isOn: $documentController.linkOpenRequiresCommand)
             }
         }
     }
 }
 
 private struct SettingsSectionGroup<Content: View>: View {
+    @Environment(\.settingsPalette) private var palette
     let title: String
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(palette.secondaryText)
 
             content
         }
@@ -843,54 +1066,41 @@ private struct SettingsSectionGroup<Content: View>: View {
     }
 }
 
-private struct SettingsFieldBlock<Content: View>: View {
+private struct SettingsControlRow<Content: View>: View {
+    @Environment(\.settingsPalette) private var palette
     let title: String
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        HStack(alignment: .center, spacing: 28) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(palette.secondaryText)
+                .frame(width: 108, alignment: .leading)
 
             content
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
 
-private struct SettingsRadioStrip<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 32) {
-            content
-        }
-    }
-}
-
-private struct SettingsRadioOption<Value: Hashable>: View {
-    let value: Value
-    @Binding var selection: Value
+private struct SettingsSwitchRow: View {
+    @Environment(\.settingsPalette) private var palette
     let title: String
+    @Binding var isOn: Bool
 
     var body: some View {
-        Button {
-            selection = value
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: selection == value ? "smallcircle.filled.circle.fill" : "circle")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(selection == value ? Color.accentColor : .secondary)
-
-                Text(title)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.primary)
-            }
+        Toggle(isOn: $isOn) {
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(palette.primaryText)
         }
-        .buttonStyle(.plain)
+        .toggleStyle(.switch)
     }
 }
 
 private struct SettingsStepperField: View {
+    @Environment(\.settingsPalette) private var palette
     @Binding var value: Double
     let range: ClosedRange<Double>
     let step: Double
@@ -901,8 +1111,19 @@ private struct SettingsStepperField: View {
     var body: some View {
         HStack(spacing: 10) {
             TextField("", value: $value, format: format)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.controlSurface)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(palette.controlBorder, lineWidth: 1)
+                )
                 .frame(width: width)
+                .foregroundStyle(palette.primaryText)
 
             Stepper("", value: $value, in: range, step: step)
                 .labelsHidden()
@@ -910,9 +1131,82 @@ private struct SettingsStepperField: View {
             if let suffix {
                 Text(suffix)
                     .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(palette.secondaryText)
             }
         }
+    }
+}
+
+private struct SettingsPalette {
+    let windowBackground: Color
+    let sidebarSurface: Color
+    let controlSurface: Color
+    let controlBorder: Color
+    let separator: Color
+    let primaryText: Color
+    let secondaryText: Color
+    let accentText: Color
+    let selectionFill: Color
+
+    static func forStyle(_ style: EditorInterfaceStyle) -> SettingsPalette {
+        switch style {
+        case .dark:
+            return SettingsPalette(
+                windowBackground: Color(hex: 0x1D1D1F),
+                sidebarSurface: Color(hex: 0x252527),
+                controlSurface: Color(hex: 0x333336),
+                controlBorder: Color.white.opacity(0.08),
+                separator: Color.white.opacity(0.08),
+                primaryText: Color.white.opacity(0.88),
+                secondaryText: Color.white.opacity(0.58),
+                accentText: Color(hex: 0x0A84FF),
+                selectionFill: Color.white.opacity(0.08)
+            )
+        case .light:
+            return SettingsPalette(
+                windowBackground: Color(hex: 0xFAFAFB),
+                sidebarSurface: Color(hex: 0xF3F3F5),
+                controlSurface: Color.white,
+                controlBorder: Color.black.opacity(0.08),
+                separator: Color.black.opacity(0.08),
+                primaryText: Color.black.opacity(0.88),
+                secondaryText: Color.black.opacity(0.58),
+                accentText: Color(hex: 0x007AFF),
+                selectionFill: Color.black.opacity(0.05)
+            )
+        case .sepia:
+            return SettingsPalette(
+                windowBackground: Color(hex: 0xF1EDE2),
+                sidebarSurface: Color(hex: 0xE2DDD0),
+                controlSurface: Color(hex: 0xF7F3E8),
+                controlBorder: Color(hex: 0x777164, alpha: 0.16),
+                separator: Color(hex: 0x6F745D, alpha: 0.12),
+                primaryText: Color(hex: 0x403C36),
+                secondaryText: Color(hex: 0x5B564E, alpha: 0.72),
+                accentText: Color(hex: 0x687052),
+                selectionFill: Color(hex: 0x6F745D, alpha: 0.08)
+            )
+        }
+    }
+}
+
+private struct SettingsPaletteKey: EnvironmentKey {
+    static let defaultValue = SettingsPalette.forStyle(.light)
+}
+
+private extension EnvironmentValues {
+    var settingsPalette: SettingsPalette {
+        get { self[SettingsPaletteKey.self] }
+        set { self[SettingsPaletteKey.self] = newValue }
+    }
+}
+
+private extension Color {
+    init(hex: UInt32, alpha: Double = 1) {
+        let red = Double((hex >> 16) & 0xFF) / 255
+        let green = Double((hex >> 8) & 0xFF) / 255
+        let blue = Double(hex & 0xFF) / 255
+        self.init(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
     }
 }
 

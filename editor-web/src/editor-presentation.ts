@@ -10,10 +10,25 @@ export type EditorPresentation = {
   pageWidth: string
   codeFontFamily: string
   codeFontSize: number
+  spellCheckEnabled: boolean
+  indentWidth: number
+  useSpacesForIndent: boolean
   hideQuickInsertHint: boolean
   autoPairBracket: boolean
   autoPairMarkdownSyntax: boolean
   autoPairQuote: boolean
+  enableTables: boolean
+  enableTaskList: boolean
+  enableStrikethrough: boolean
+  enableFootnotes: boolean
+  enableTOC: boolean
+  enableMath: boolean
+  enableMermaid: boolean
+  enableYAMLFrontMatter: boolean
+  imageRootURL: string
+  imagePreferDotSlash: boolean
+  imageAutoEncodeURL: boolean
+  linkOpenRequiresCommand: boolean
 }
 
 export const defaultEditorPresentation: EditorPresentation = Object.freeze({
@@ -26,10 +41,25 @@ export const defaultEditorPresentation: EditorPresentation = Object.freeze({
   pageWidth: '860px',
   codeFontFamily: '"SF Mono", "JetBrains Mono", ui-monospace, monospace',
   codeFontSize: 14,
+  spellCheckEnabled: true,
+  indentWidth: 4,
+  useSpacesForIndent: true,
   hideQuickInsertHint: false,
   autoPairBracket: true,
   autoPairMarkdownSyntax: true,
-  autoPairQuote: true
+  autoPairQuote: true,
+  enableTables: true,
+  enableTaskList: true,
+  enableStrikethrough: true,
+  enableFootnotes: true,
+  enableTOC: true,
+  enableMath: true,
+  enableMermaid: true,
+  enableYAMLFrontMatter: true,
+  imageRootURL: '',
+  imagePreferDotSlash: false,
+  imageAutoEncodeURL: true,
+  linkOpenRequiresCommand: true
 })
 
 const normalizeBoolean = (value: unknown, fallback: boolean) => {
@@ -50,6 +80,14 @@ const normalizeNumber = (value: unknown, fallback: number, minimum: number, maxi
   }
 
   return value
+}
+
+const normalizeInteger = (value: unknown, fallback: number, minimum: number, maximum: number) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return fallback
+  }
+
+  return Math.min(Math.max(Math.round(value), minimum), maximum)
 }
 
 const normalizeTheme = (value: unknown): EditorTheme => {
@@ -87,6 +125,20 @@ export const normalizeEditorPresentation = (value: unknown): EditorPresentation 
       12,
       28
     ),
+    spellCheckEnabled: normalizeBoolean(
+      presentation.spellCheckEnabled,
+      defaultEditorPresentation.spellCheckEnabled
+    ),
+    indentWidth: normalizeInteger(
+      presentation.indentWidth,
+      defaultEditorPresentation.indentWidth,
+      2,
+      8
+    ),
+    useSpacesForIndent: normalizeBoolean(
+      presentation.useSpacesForIndent,
+      defaultEditorPresentation.useSpacesForIndent
+    ),
     hideQuickInsertHint: normalizeBoolean(
       presentation.hideQuickInsertHint,
       defaultEditorPresentation.hideQuickInsertHint
@@ -102,6 +154,51 @@ export const normalizeEditorPresentation = (value: unknown): EditorPresentation 
     autoPairQuote: normalizeBoolean(
       presentation.autoPairQuote,
       defaultEditorPresentation.autoPairQuote
+    ),
+    enableTables: normalizeBoolean(
+      presentation.enableTables,
+      defaultEditorPresentation.enableTables
+    ),
+    enableTaskList: normalizeBoolean(
+      presentation.enableTaskList,
+      defaultEditorPresentation.enableTaskList
+    ),
+    enableStrikethrough: normalizeBoolean(
+      presentation.enableStrikethrough,
+      defaultEditorPresentation.enableStrikethrough
+    ),
+    enableFootnotes: normalizeBoolean(
+      presentation.enableFootnotes,
+      defaultEditorPresentation.enableFootnotes
+    ),
+    enableTOC: normalizeBoolean(
+      presentation.enableTOC,
+      defaultEditorPresentation.enableTOC
+    ),
+    enableMath: normalizeBoolean(
+      presentation.enableMath,
+      defaultEditorPresentation.enableMath
+    ),
+    enableMermaid: normalizeBoolean(
+      presentation.enableMermaid,
+      defaultEditorPresentation.enableMermaid
+    ),
+    enableYAMLFrontMatter: normalizeBoolean(
+      presentation.enableYAMLFrontMatter,
+      defaultEditorPresentation.enableYAMLFrontMatter
+    ),
+    imageRootURL: normalizeString(presentation.imageRootURL, defaultEditorPresentation.imageRootURL),
+    imagePreferDotSlash: normalizeBoolean(
+      presentation.imagePreferDotSlash,
+      defaultEditorPresentation.imagePreferDotSlash
+    ),
+    imageAutoEncodeURL: normalizeBoolean(
+      presentation.imageAutoEncodeURL,
+      defaultEditorPresentation.imageAutoEncodeURL
+    ),
+    linkOpenRequiresCommand: normalizeBoolean(
+      presentation.linkOpenRequiresCommand,
+      defaultEditorPresentation.linkOpenRequiresCommand
     )
   }
 }

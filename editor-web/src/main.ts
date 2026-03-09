@@ -41,11 +41,29 @@ const applyAppearance = (appearance: EditorPresentation) => {
   document.documentElement.style.setProperty('--editor-page-width', appearance.pageWidth)
   document.documentElement.style.setProperty('--editor-code-font-family', appearance.codeFontFamily)
   document.documentElement.style.setProperty('--editor-code-font-size', `${appearance.codeFontSize}px`)
+  document.documentElement.dataset.spellCheckEnabled = appearance.spellCheckEnabled ? 'true' : 'false'
+  document.documentElement.dataset.indentWidth = String(appearance.indentWidth)
+  document.documentElement.dataset.useSpacesForIndent = appearance.useSpacesForIndent ? 'true' : 'false'
   document.documentElement.dataset.hideQuickInsertHint = appearance.hideQuickInsertHint ? 'true' : 'false'
   document.documentElement.dataset.autoPairBracket = appearance.autoPairBracket ? 'true' : 'false'
   document.documentElement.dataset.autoPairMarkdownSyntax =
     appearance.autoPairMarkdownSyntax ? 'true' : 'false'
   document.documentElement.dataset.autoPairQuote = appearance.autoPairQuote ? 'true' : 'false'
+  document.documentElement.dataset.enableTables = appearance.enableTables ? 'true' : 'false'
+  document.documentElement.dataset.enableTaskList = appearance.enableTaskList ? 'true' : 'false'
+  document.documentElement.dataset.enableStrikethrough = appearance.enableStrikethrough ? 'true' : 'false'
+  document.documentElement.dataset.enableFootnotes = appearance.enableFootnotes ? 'true' : 'false'
+  document.documentElement.dataset.enableTOC = appearance.enableTOC ? 'true' : 'false'
+  document.documentElement.dataset.enableMath = appearance.enableMath ? 'true' : 'false'
+  document.documentElement.dataset.enableMermaid = appearance.enableMermaid ? 'true' : 'false'
+  document.documentElement.dataset.enableYAMLFrontMatter = appearance.enableYAMLFrontMatter
+    ? 'true'
+    : 'false'
+  document.documentElement.dataset.imagePreferDotSlash = appearance.imagePreferDotSlash ? 'true' : 'false'
+  document.documentElement.dataset.imageAutoEncodeURL = appearance.imageAutoEncodeURL ? 'true' : 'false'
+  document.documentElement.dataset.linkOpenRequiresCommand = appearance.linkOpenRequiresCommand
+    ? 'true'
+    : 'false'
 }
 
 const bridge = createEditorBridge({

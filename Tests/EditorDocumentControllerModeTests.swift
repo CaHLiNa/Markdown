@@ -22,5 +22,7 @@ final class EditorDocumentControllerModeTests: HostedXCTestCase {
     private func resetPersistentState() {
         UserDefaults.standard.removeObject(forKey: "editorPreferences")
         UserDefaults.standard.removeObject(forKey: "recentMarkdownFiles")
+        UserDefaults.standard.removeObject(forKey: "editorSession")
+        UserDefaults.standard.removeObject(forKey: "lastMarkdownExportDirectory")
     }
 }
