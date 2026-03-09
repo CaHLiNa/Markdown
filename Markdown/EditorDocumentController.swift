@@ -7,6 +7,7 @@
 
 import AppKit
 import Combine
+import Darwin
 import Foundation
 import UniformTypeIdentifiers
 
@@ -139,6 +140,7 @@ final class EditorDocumentController: ObservableObject {
     }
     @Published private(set) var workspaceSearchResults: [EditorWorkspaceSearchResult] = []
     @Published private(set) var expandedFolderIDs: Set<String> = []
+    @Published private(set) var selectedWorkspaceItemIDs: Set<String> = []
     @Published private(set) var recentFiles: [URL]
     @Published var sidebarPane: EditorSidebarPane = .files
     @Published var appearanceMode: EditorAppearanceMode {
@@ -343,6 +345,8 @@ final class EditorDocumentController: ObservableObject {
     let editorController = EditorWebView.Controller()
     private var untitledDocumentCount = 1
     private var lastExportDirectoryURL: URL?
+    private var lastSelectedWorkspaceItemID: String?
+    private let workspaceMonitor = WorkspaceFileSystemMonitor()
     var unsavedChangesDecisionHandler: ((EditorTab) -> EditorUnsavedChangesDecision)?
     var saveTabOverride: ((UUID, @escaping (Bool) -> Void) -> Void)?
 
@@ -412,6 +416,10 @@ final class EditorDocumentController: ObservableObject {
         self.linkOpenRequiresCommand = preferences.linkOpenRequiresCommand
         self.lastExportDirectoryURL = Self.loadLastExportDirectory()
         restoreInitialSessionIfNeeded()
+    }
+
+    deinit {
+        workspaceMonitor.stopMonitoring()
     }
 
     var currentMarkdown: String {
@@ -678,16 +686,252 @@ final class EditorDocumentController: ObservableObject {
 
         do {
             let files = try Self.workspaceFiles(in: folderURL)
-            folderFiles = files
-            workspaceTree = EditorWorkspaceTreeBuilder.build(from: files)
-            expandedFolderIDs = EditorWorkspaceTreeBuilder.folderIDs(in: workspaceTree)
-            refreshWorkspaceSearchResults()
+            try applyWorkspaceSnapshot(
+                files,
+                rootFolderURL: folderURL,
+                expandedFolderSeed: expandedFolderIDs
+            )
         } catch {
             presentError(error, title: "无法刷新工作区")
         }
     }
 
+    func createWorkspaceFile(in directoryURL: URL) {
+        guard let targetDirectoryURL = resolveWorkspaceDirectory(from: directoryURL) else {
+            return
+        }
+
+        guard let proposedName = promptForWorkspaceItemName(
+            title: "新建文件",
+            message: "输入新 Markdown 文件名称。",
+            defaultValue: "Untitled.md",
+            actionTitle: "创建"
+        ) else {
+            return
+        }
+
+        do {
+            let fileURL = try MarkdownFileService.createMarkdownFile(
+                named: proposedName,
+                in: targetDirectoryURL
+            )
+            refreshWorkspace(expanding: [targetDirectoryURL])
+            openDocument(at: fileURL)
+        } catch {
+            presentError(error, title: "无法创建文件")
+        }
+    }
+
+    func createWorkspaceFolder(in directoryURL: URL) {
+        guard let targetDirectoryURL = resolveWorkspaceDirectory(from: directoryURL) else {
+            return
+        }
+
+        guard let proposedName = promptForWorkspaceItemName(
+            title: "新建文件夹",
+            message: "输入新文件夹名称。",
+            defaultValue: "New Folder",
+            actionTitle: "创建"
+        ) else {
+            return
+        }
+
+        do {
+            let folderURL = try MarkdownFileService.createFolder(
+                named: proposedName,
+                in: targetDirectoryURL
+            )
+            refreshWorkspace(expanding: [targetDirectoryURL, folderURL])
+        } catch {
+            presentError(error, title: "无法创建文件夹")
+        }
+    }
+
+    func renameWorkspaceItem(at itemURL: URL) {
+        let defaultName: String
+
+        if workspaceItemIsDirectory(itemURL) {
+            defaultName = itemURL.lastPathComponent
+        } else {
+            defaultName = itemURL.deletingPathExtension().lastPathComponent
+        }
+
+        guard let proposedName = promptForWorkspaceItemName(
+            title: "重命名",
+            message: "输入新的名称。",
+            defaultValue: defaultName,
+            actionTitle: "重命名"
+        ) else {
+            return
+        }
+
+        performWorkspaceRename(
+            at: itemURL,
+            to: proposedName,
+            errorTitle: "无法重命名项目"
+        )
+    }
+
+    func deleteWorkspaceItem(at itemURL: URL) {
+        let isDirectory = workspaceItemIsDirectory(itemURL)
+        let affectedOpenTabs = tabs.filter { tab in
+            guard let fileURL = tab.fileURL else {
+                return false
+            }
+
+            return workspaceReference(fileURL, matches: itemURL, isDirectory: isDirectory)
+        }.count
+
+        guard confirmWorkspaceItemDeletion(
+            at: itemURL,
+            isDirectory: isDirectory,
+            affectedOpenTabs: affectedOpenTabs
+        ) else {
+            return
+        }
+
+        do {
+            try MarkdownFileService.deleteWorkspaceItem(at: itemURL)
+            closeTabsReferencingWorkspaceItem(at: itemURL, isDirectory: isDirectory)
+            removeRecentFiles(matching: itemURL, isDirectory: isDirectory)
+            removeExpandedFolderState(for: itemURL, isDirectory: isDirectory)
+            refreshWorkspace()
+        } catch {
+            presentError(error, title: "无法删除项目")
+        }
+    }
+
+    func revealWorkspaceItemInFinder(_ itemURL: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([itemURL])
+    }
+
+    func performWorkspacePrimaryAction(
+        for node: EditorWorkspaceNode,
+        modifierFlags: NSEvent.ModifierFlags
+    ) {
+        if modifierFlags.contains(.shift) {
+            extendWorkspaceSelection(to: node.id)
+            return
+        }
+
+        if modifierFlags.contains(.command) {
+            toggleWorkspaceSelection(id: node.id)
+            return
+        }
+
+        selectSingleWorkspaceItem(id: node.id)
+
+        if node.isFolder {
+            toggleFolderExpansion(node.id)
+        } else {
+            openWorkspaceFile(EditorWorkspaceFile(url: node.url, relativePath: node.relativePath))
+        }
+    }
+
+    func clearWorkspaceSelection() {
+        selectedWorkspaceItemIDs = []
+        lastSelectedWorkspaceItemID = nil
+    }
+
+    func isWorkspaceItemSelected(_ itemURL: URL) -> Bool {
+        guard let itemID = workspaceRelativePath(for: itemURL) else {
+            return false
+        }
+
+        return selectedWorkspaceItemIDs.contains(itemID)
+    }
+
+    func workspaceDragItemURLs(from originURL: URL) -> [URL] {
+        guard let originItemID = workspaceRelativePath(for: originURL) else {
+            return [originURL.standardizedFileURL]
+        }
+
+        let dragItemIDs = selectedWorkspaceItemIDs.contains(originItemID)
+            ? selectedWorkspaceItemIDs
+            : [originItemID]
+
+        let dragItemURLs = dragItemIDs.compactMap(workspaceURL(for:))
+        let normalizedURLs = normalizedWorkspaceMoveSources(dragItemURLs)
+        return normalizedURLs.isEmpty ? [originURL.standardizedFileURL] : normalizedURLs
+    }
+
+    func moveWorkspaceItems(_ itemURLs: [URL], to destinationDirectoryURL: URL) {
+        guard let targetDirectoryURL = resolveWorkspaceDirectory(from: destinationDirectoryURL) else {
+            return
+        }
+
+        let normalizedSourceURLs = normalizedWorkspaceMoveSources(itemURLs)
+        guard !normalizedSourceURLs.isEmpty else {
+            return
+        }
+
+        do {
+            var plannedMoves: [(sourceURL: URL, destinationURL: URL, isDirectory: Bool)] = []
+
+            for sourceURL in normalizedSourceURLs {
+                let isDirectory = workspaceItemIsDirectory(sourceURL)
+
+                guard !workspaceReference(targetDirectoryURL, matches: sourceURL, isDirectory: isDirectory) else {
+                    throw NSError(
+                        domain: "Markdown",
+                        code: 71,
+                        userInfo: [NSLocalizedDescriptionKey: "不能将项目移动到自身或其子目录中。"]
+                    )
+                }
+
+                let destinationURL = targetDirectoryURL.appendingPathComponent(
+                    sourceURL.lastPathComponent,
+                    isDirectory: isDirectory
+                )
+
+                guard destinationURL.standardizedFileURL != sourceURL.standardizedFileURL else {
+                    continue
+                }
+
+                guard !FileManager.default.fileExists(atPath: destinationURL.path) else {
+                    throw NSError(
+                        domain: NSCocoaErrorDomain,
+                        code: CocoaError.fileWriteFileExists.rawValue,
+                        userInfo: [NSLocalizedDescriptionKey: "目标位置已存在同名项目。"]
+                    )
+                }
+
+                plannedMoves.append((sourceURL, destinationURL, isDirectory))
+            }
+
+            guard !plannedMoves.isEmpty else {
+                return
+            }
+
+            for move in plannedMoves {
+                try FileManager.default.moveItem(at: move.sourceURL, to: move.destinationURL)
+                replaceWorkspaceReferencesAfterRename(
+                    from: move.sourceURL,
+                    to: move.destinationURL,
+                    isDirectory: move.isDirectory
+                )
+                replaceExpandedFolderStateAfterRename(
+                    from: move.sourceURL,
+                    to: move.destinationURL,
+                    isDirectory: move.isDirectory
+                )
+            }
+
+            let movedItemIDs = Set(plannedMoves.compactMap { workspaceRelativePath(for: $0.destinationURL) })
+            selectedWorkspaceItemIDs = movedItemIDs
+            lastSelectedWorkspaceItemID = plannedMoves.last.flatMap { workspaceRelativePath(for: $0.destinationURL) }
+            refreshWorkspace(expanding: [targetDirectoryURL])
+        } catch {
+            presentError(error, title: "无法移动项目")
+        }
+    }
+
     func openWorkspaceFile(_ item: EditorWorkspaceFile) {
+        if let itemID = workspaceRelativePath(for: item.url) {
+            selectedWorkspaceItemIDs = [itemID]
+            lastSelectedWorkspaceItemID = itemID
+        }
+
         openDocument(at: item.url)
     }
 
@@ -1243,25 +1487,19 @@ final class EditorDocumentController: ObservableObject {
             return
         }
 
-        do {
-            let destinationURL = try MarkdownFileService.renameMarkdownFile(at: fileURL, to: trimmedName)
-            updateActiveTab {
-                $0.fileURL = destinationURL
-                $0.title = destinationURL.lastPathComponent
-            }
-            addRecentFile(destinationURL)
-            refreshWorkspace()
-        } catch {
-            presentError(error, title: "无法重命名文件")
-        }
+        performWorkspaceRename(at: fileURL, to: trimmedName, errorTitle: "无法重命名文件")
     }
 
     func toggleFolderExpansion(_ id: String) {
-        if expandedFolderIDs.contains(id) {
-            expandedFolderIDs.remove(id)
+        var nextExpandedFolderIDs = expandedFolderIDs
+
+        if nextExpandedFolderIDs.contains(id) {
+            nextExpandedFolderIDs.remove(id)
         } else {
-            expandedFolderIDs.insert(id)
+            nextExpandedFolderIDs.insert(id)
         }
+
+        expandedFolderIDs = nextExpandedFolderIDs
     }
 
     func isFolderExpanded(_ id: String) -> Bool {
@@ -1336,12 +1574,10 @@ final class EditorDocumentController: ObservableObject {
     }
 
     private func openFolder(at selectedURL: URL) throws {
-        folderURL = selectedURL
-        let files = try Self.workspaceFiles(in: selectedURL)
-        folderFiles = files
-        workspaceTree = EditorWorkspaceTreeBuilder.build(from: files)
-        expandedFolderIDs = EditorWorkspaceTreeBuilder.folderIDs(in: workspaceTree)
-        refreshWorkspaceSearchResults()
+        let normalizedFolderURL = selectedURL.standardizedFileURL
+        let files = try Self.workspaceFiles(in: normalizedFolderURL)
+        folderURL = normalizedFolderURL
+        try applyWorkspaceSnapshot(files, rootFolderURL: normalizedFolderURL)
 
         if tabs.count == 1, tabs[0].fileURL == nil, let firstURL = folderFiles.first?.url {
             openDocument(at: firstURL)
@@ -1390,6 +1626,435 @@ final class EditorDocumentController: ObservableObject {
         recentFiles.insert(fileURL, at: 0)
         recentFiles = Array(recentFiles.prefix(recentFileLimit))
         Self.persistRecentFiles(recentFiles)
+    }
+
+    private func applyWorkspaceSnapshot(
+        _ files: [EditorWorkspaceFile],
+        rootFolderURL: URL,
+        expandedFolderSeed: Set<String>? = nil
+    ) throws {
+        folderFiles = files
+        workspaceTree = try EditorWorkspaceTreeBuilder.buildWorkspace(from: rootFolderURL)
+
+        let validItemIDs = EditorWorkspaceTreeBuilder.itemIDs(in: workspaceTree)
+        let validFolderIDs = EditorWorkspaceTreeBuilder.folderIDs(in: workspaceTree)
+        if let expandedFolderSeed {
+            expandedFolderIDs = expandedFolderSeed.intersection(validFolderIDs)
+        } else {
+            expandedFolderIDs = EditorWorkspaceTreeBuilder.rootFolderIDs(in: workspaceTree)
+        }
+
+        selectedWorkspaceItemIDs = selectedWorkspaceItemIDs.intersection(validItemIDs)
+        if let lastSelectedWorkspaceItemID, !validItemIDs.contains(lastSelectedWorkspaceItemID) {
+            self.lastSelectedWorkspaceItemID = nil
+        }
+
+        if selectedWorkspaceItemIDs.isEmpty,
+           let currentFileURL,
+           let currentItemID = workspaceRelativePath(for: currentFileURL),
+           validItemIDs.contains(currentItemID)
+        {
+            selectedWorkspaceItemIDs = [currentItemID]
+            lastSelectedWorkspaceItemID = currentItemID
+        }
+
+        configureWorkspaceMonitor(rootFolderURL: rootFolderURL)
+        refreshWorkspaceSearchResults()
+    }
+
+    private func refreshWorkspace(expanding directoryURLs: [URL]) {
+        guard let folderURL else {
+            return
+        }
+
+        do {
+            let files = try Self.workspaceFiles(in: folderURL)
+            let expandedSeed = expandedFolderIDs.union(workspaceFolderIDs(for: directoryURLs))
+            try applyWorkspaceSnapshot(
+                files,
+                rootFolderURL: folderURL,
+                expandedFolderSeed: expandedSeed
+            )
+        } catch {
+            presentError(error, title: "无法刷新工作区")
+        }
+    }
+
+    private func resolveWorkspaceDirectory(from candidateURL: URL?) -> URL? {
+        guard let folderURL else {
+            return nil
+        }
+
+        guard let candidateURL else {
+            return folderURL
+        }
+
+        let normalizedCandidateURL = candidateURL.standardizedFileURL
+        let resolvedURL = workspaceItemIsDirectory(normalizedCandidateURL)
+            ? normalizedCandidateURL
+            : normalizedCandidateURL.deletingLastPathComponent()
+
+        guard workspaceReference(resolvedURL, matches: folderURL, isDirectory: true) else {
+            return nil
+        }
+
+        return resolvedURL
+    }
+
+    private func workspaceFolderIDs(for directoryURLs: [URL]) -> Set<String> {
+        Set(
+            directoryURLs.compactMap { workspaceRelativePath(for: $0) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private func workspaceRelativePath(for itemURL: URL) -> String? {
+        guard let folderURL else {
+            return nil
+        }
+
+        let rootPath = folderURL.standardizedFileURL.path
+        let itemPath = itemURL.standardizedFileURL.path
+
+        if itemPath == rootPath {
+            return ""
+        }
+
+        guard itemPath.hasPrefix(rootPath + "/") else {
+            return nil
+        }
+
+        return String(itemPath.dropFirst(rootPath.count + 1))
+    }
+
+    private func workspaceItemIsDirectory(_ itemURL: URL) -> Bool {
+        (try? itemURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+
+    private func workspaceReference(_ candidateURL: URL, matches itemURL: URL, isDirectory: Bool) -> Bool {
+        let normalizedCandidatePath = candidateURL.standardizedFileURL.path
+        let normalizedItemPath = itemURL.standardizedFileURL.path
+
+        guard isDirectory else {
+            return normalizedCandidatePath == normalizedItemPath
+        }
+
+        return normalizedCandidatePath == normalizedItemPath ||
+            normalizedCandidatePath.hasPrefix(normalizedItemPath + "/")
+    }
+
+    private func updatedWorkspaceReference(
+        for candidateURL: URL,
+        replacing sourceURL: URL,
+        with destinationURL: URL,
+        isDirectory: Bool
+    ) -> URL? {
+        guard workspaceReference(candidateURL, matches: sourceURL, isDirectory: isDirectory) else {
+            return nil
+        }
+
+        guard isDirectory else {
+            return destinationURL.standardizedFileURL
+        }
+
+        let sourcePath = sourceURL.standardizedFileURL.path
+        let candidatePath = candidateURL.standardizedFileURL.path
+        let suffix = String(candidatePath.dropFirst(sourcePath.count))
+        return URL(fileURLWithPath: destinationURL.standardizedFileURL.path + suffix)
+    }
+
+    private func performWorkspaceRename(at itemURL: URL, to proposedName: String, errorTitle: String) {
+        let normalizedItemURL = itemURL.standardizedFileURL
+        let isDirectory = workspaceItemIsDirectory(normalizedItemURL)
+
+        do {
+            let destinationURL = try MarkdownFileService.renameWorkspaceItem(
+                at: normalizedItemURL,
+                to: proposedName
+            )
+            let normalizedDestinationURL = destinationURL.standardizedFileURL
+
+            replaceWorkspaceReferencesAfterRename(
+                from: normalizedItemURL,
+                to: normalizedDestinationURL,
+                isDirectory: isDirectory
+            )
+            replaceExpandedFolderStateAfterRename(
+                from: normalizedItemURL,
+                to: normalizedDestinationURL,
+                isDirectory: isDirectory
+            )
+
+            if !isDirectory {
+                addRecentFile(normalizedDestinationURL)
+            }
+
+            refreshWorkspace()
+        } catch {
+            presentError(error, title: errorTitle)
+        }
+    }
+
+    private func replaceWorkspaceReferencesAfterRename(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        isDirectory: Bool
+    ) {
+        tabs = tabs.map { tab in
+            guard
+                let fileURL = tab.fileURL,
+                let updatedURL = updatedWorkspaceReference(
+                    for: fileURL,
+                    replacing: sourceURL,
+                    with: destinationURL,
+                    isDirectory: isDirectory
+                )
+            else {
+                return tab
+            }
+
+            var updatedTab = tab
+            updatedTab.fileURL = updatedURL
+            updatedTab.title = updatedURL.lastPathComponent
+            return updatedTab
+        }
+
+        setRecentFiles(
+            recentFiles.map { fileURL in
+                updatedWorkspaceReference(
+                    for: fileURL,
+                    replacing: sourceURL,
+                    with: destinationURL,
+                    isDirectory: isDirectory
+                ) ?? fileURL
+            }
+        )
+    }
+
+    private func replaceExpandedFolderStateAfterRename(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        isDirectory: Bool
+    ) {
+        guard
+            isDirectory,
+            let sourceRelativePath = workspaceRelativePath(for: sourceURL),
+            let destinationRelativePath = workspaceRelativePath(for: destinationURL),
+            !sourceRelativePath.isEmpty,
+            !destinationRelativePath.isEmpty
+        else {
+            return
+        }
+
+        expandedFolderIDs = Set(
+            expandedFolderIDs.map { folderID in
+                guard workspaceRelativePath(folderID, isWithin: sourceRelativePath) else {
+                    return folderID
+                }
+
+                return destinationRelativePath + String(folderID.dropFirst(sourceRelativePath.count))
+            }
+        )
+    }
+
+    private func closeTabsReferencingWorkspaceItem(at itemURL: URL, isDirectory: Bool) {
+        let matchingTabIDs = tabs.compactMap { tab -> UUID? in
+            guard let fileURL = tab.fileURL else {
+                return nil
+            }
+
+            return workspaceReference(fileURL, matches: itemURL, isDirectory: isDirectory) ? tab.id : nil
+        }
+
+        for tabID in matchingTabIDs {
+            closeTabImmediately(id: tabID)
+        }
+    }
+
+    private func removeRecentFiles(matching itemURL: URL, isDirectory: Bool) {
+        setRecentFiles(
+            recentFiles.filter { fileURL in
+                !workspaceReference(fileURL, matches: itemURL, isDirectory: isDirectory)
+            }
+        )
+    }
+
+    private func removeExpandedFolderState(for itemURL: URL, isDirectory: Bool) {
+        guard
+            isDirectory,
+            let relativePath = workspaceRelativePath(for: itemURL),
+            !relativePath.isEmpty
+        else {
+            return
+        }
+
+        expandedFolderIDs = expandedFolderIDs.filter { folderID in
+            !workspaceRelativePath(folderID, isWithin: relativePath)
+        }
+    }
+
+    private func workspaceRelativePath(_ folderID: String, isWithin parentFolderID: String) -> Bool {
+        folderID == parentFolderID || folderID.hasPrefix(parentFolderID + "/")
+    }
+
+    private func setRecentFiles(_ urls: [URL]) {
+        var normalizedURLs: [URL] = []
+        var seenPaths: Set<String> = []
+
+        for url in urls {
+            let normalizedURL = url.standardizedFileURL
+            guard FileManager.default.fileExists(atPath: normalizedURL.path) else {
+                continue
+            }
+
+            guard seenPaths.insert(normalizedURL.path).inserted else {
+                continue
+            }
+
+            normalizedURLs.append(normalizedURL)
+        }
+
+        recentFiles = Array(normalizedURLs.prefix(recentFileLimit))
+        Self.persistRecentFiles(recentFiles)
+    }
+
+    private func configureWorkspaceMonitor(rootFolderURL: URL) {
+        let directoryURLs = [rootFolderURL] + EditorWorkspaceTreeBuilder.folderURLs(in: workspaceTree)
+        workspaceMonitor.startMonitoring(directoryURLs: directoryURLs) { [weak self] in
+            Task { @MainActor in
+                self?.refreshWorkspace()
+            }
+        }
+    }
+
+    private func selectSingleWorkspaceItem(id: String) {
+        selectedWorkspaceItemIDs = [id]
+        lastSelectedWorkspaceItemID = id
+    }
+
+    private func toggleWorkspaceSelection(id: String) {
+        var nextSelectedWorkspaceItemIDs = selectedWorkspaceItemIDs
+
+        if nextSelectedWorkspaceItemIDs.contains(id) {
+            nextSelectedWorkspaceItemIDs.remove(id)
+        } else {
+            nextSelectedWorkspaceItemIDs.insert(id)
+        }
+
+        selectedWorkspaceItemIDs = nextSelectedWorkspaceItemIDs
+        lastSelectedWorkspaceItemID = id
+    }
+
+    private func extendWorkspaceSelection(to id: String) {
+        guard let lastSelectedWorkspaceItemID else {
+            selectSingleWorkspaceItem(id: id)
+            return
+        }
+
+        let visibleItemIDs = visibleWorkspaceItemIDs()
+        guard
+            let startIndex = visibleItemIDs.firstIndex(of: lastSelectedWorkspaceItemID),
+            let endIndex = visibleItemIDs.firstIndex(of: id)
+        else {
+            selectSingleWorkspaceItem(id: id)
+            return
+        }
+
+        let lowerBound = min(startIndex, endIndex)
+        let upperBound = max(startIndex, endIndex)
+        selectedWorkspaceItemIDs = Set(visibleItemIDs[lowerBound...upperBound])
+    }
+
+    private func visibleWorkspaceItemIDs() -> [String] {
+        visibleWorkspaceItemIDs(in: workspaceTree)
+    }
+
+    private func visibleWorkspaceItemIDs(in nodes: [EditorWorkspaceNode]) -> [String] {
+        nodes.flatMap { node -> [String] in
+            var itemIDs = [node.id]
+
+            if node.isFolder, isFolderExpanded(node.id) {
+                itemIDs.append(contentsOf: visibleWorkspaceItemIDs(in: node.children))
+            }
+
+            return itemIDs
+        }
+    }
+
+    private func workspaceURL(for itemID: String) -> URL? {
+        guard let folderURL, !itemID.isEmpty else {
+            return folderURL
+        }
+
+        return folderURL.appendingPathComponent(itemID)
+    }
+
+    private func normalizedWorkspaceMoveSources(_ itemURLs: [URL]) -> [URL] {
+        let normalizedURLs = Array(
+            Dictionary(
+                itemURLs.map { ($0.standardizedFileURL.path, $0.standardizedFileURL) },
+                uniquingKeysWith: { first, _ in first }
+            ).values
+        )
+
+        return normalizedURLs
+            .sorted { $0.path.count < $1.path.count }
+            .filter { candidateURL in
+                !normalizedURLs.contains { otherURL in
+                    guard otherURL != candidateURL, workspaceItemIsDirectory(otherURL) else {
+                        return false
+                    }
+
+                    return workspaceReference(candidateURL, matches: otherURL, isDirectory: true)
+                }
+            }
+    }
+
+    private func promptForWorkspaceItemName(
+        title: String,
+        message: String,
+        defaultValue: String,
+        actionTitle: String
+    ) -> String? {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = title
+        alert.informativeText = message
+
+        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        textField.stringValue = defaultValue
+        alert.accessoryView = textField
+        alert.addButton(withTitle: actionTitle)
+        alert.addButton(withTitle: "取消")
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return nil
+        }
+
+        return textField.stringValue
+    }
+
+    private func confirmWorkspaceItemDeletion(
+        at itemURL: URL,
+        isDirectory: Bool,
+        affectedOpenTabs: Int
+    ) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "要删除“\(itemURL.lastPathComponent)”吗？"
+
+        var message = isDirectory
+            ? "删除后，该文件夹及其内容会被移到废纸篓。"
+            : "删除后，该文件会被移到废纸篓。"
+
+        if affectedOpenTabs > 0 {
+            message += " 这会关闭 \(affectedOpenTabs) 个已打开的标签页。"
+        }
+
+        alert.informativeText = message
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func refreshWorkspaceSearchResults() {
@@ -1801,5 +2466,75 @@ final class EditorDocumentController: ObservableObject {
         }
 
         UserDefaults.standard.set(data, forKey: editorSessionDefaultsKey)
+    }
+}
+
+private final class WorkspaceFileSystemMonitor {
+    private let queue = DispatchQueue(label: "Markdown.WorkspaceFileSystemMonitor")
+    private var sources: [String: DispatchSourceFileSystemObject] = [:]
+    private var fileDescriptors: [String: Int32] = [:]
+    private var pendingRefreshWorkItem: DispatchWorkItem?
+
+    func startMonitoring(
+        directoryURLs: [URL],
+        onChange: @escaping @Sendable () -> Void
+    ) {
+        stopMonitoring()
+
+        var seenPaths: Set<String> = []
+        let uniqueDirectoryURLs = directoryURLs.compactMap { directoryURL -> URL? in
+            let normalizedURL = directoryURL.standardizedFileURL
+            guard seenPaths.insert(normalizedURL.path).inserted else {
+                return nil
+            }
+
+            return normalizedURL
+        }
+
+        for directoryURL in uniqueDirectoryURLs {
+            let fileDescriptor = open(directoryURL.path, O_EVTONLY)
+            guard fileDescriptor >= 0 else {
+                continue
+            }
+
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fileDescriptor,
+                eventMask: [.attrib, .delete, .extend, .link, .rename, .revoke, .write],
+                queue: queue
+            )
+            let path = directoryURL.path
+
+            source.setEventHandler { [weak self] in
+                self?.scheduleRefresh(onChange: onChange)
+            }
+            source.setCancelHandler { [weak self] in
+                close(fileDescriptor)
+                self?.fileDescriptors.removeValue(forKey: path)
+            }
+
+            fileDescriptors[path] = fileDescriptor
+            sources[path] = source
+            source.resume()
+        }
+    }
+
+    func stopMonitoring() {
+        pendingRefreshWorkItem?.cancel()
+        pendingRefreshWorkItem = nil
+
+        for source in sources.values {
+            source.cancel()
+        }
+
+        sources.removeAll()
+        fileDescriptors.removeAll()
+    }
+
+    private func scheduleRefresh(onChange: @escaping @Sendable () -> Void) {
+        pendingRefreshWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem(block: onChange)
+        pendingRefreshWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
     }
 }

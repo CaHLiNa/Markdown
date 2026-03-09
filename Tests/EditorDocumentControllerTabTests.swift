@@ -99,6 +99,122 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         XCTAssertEqual(controller.currentMarkdown, "# Restored")
     }
 
+    func testWorkspaceTreeShowsEmptyFoldersAndRefreshIncludesNewFolder() {
+        resetPersistentState()
+
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+        do {
+            try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: workspaceURL.appendingPathComponent("Existing", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            XCTFail("Failed to prepare workspace: \(error)")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+
+        let controller = makeControllerRestoringWorkspace(at: workspaceURL)
+
+        XCTAssertEqual(
+            controller.workspaceTree.map(\.name),
+            ["Existing"],
+            "Expected empty folders to remain visible in the workspace tree."
+        )
+        XCTAssertTrue(controller.workspaceTree.first?.isFolder == true)
+
+        do {
+            _ = try MarkdownFileService.createFolder(named: "Created", in: workspaceURL)
+        } catch {
+            XCTFail("Failed to create folder inside workspace: \(error)")
+            return
+        }
+
+        controller.refreshWorkspace()
+
+        XCTAssertEqual(
+            controller.workspaceTree.map(\.name),
+            ["Created", "Existing"],
+            "Expected refreshing the workspace to pick up newly created folders."
+        )
+    }
+
+    func testToggleFolderExpansionCollapsesAndExpandsRootFolder() {
+        resetPersistentState()
+
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+        do {
+            try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: workspaceURL.appendingPathComponent("notes", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            XCTFail("Failed to prepare workspace: \(error)")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+
+        let controller = makeControllerRestoringWorkspace(at: workspaceURL)
+
+        XCTAssertTrue(controller.isFolderExpanded("notes"))
+
+        controller.toggleFolderExpansion("notes")
+        XCTAssertFalse(controller.isFolderExpanded("notes"))
+        XCTAssertFalse(controller.expandedFolderIDs.contains("notes"))
+
+        controller.toggleFolderExpansion("notes")
+        XCTAssertTrue(controller.isFolderExpanded("notes"))
+        XCTAssertTrue(controller.expandedFolderIDs.contains("notes"))
+    }
+
+    func testWorkspaceRefreshPreservesCollapsedFolderState() {
+        resetPersistentState()
+
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let notesURL = workspaceURL.appendingPathComponent("notes", isDirectory: true)
+
+        do {
+            try FileManager.default.createDirectory(at: notesURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: notesURL.appendingPathComponent("drafts", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            XCTFail("Failed to prepare workspace: \(error)")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+
+        let controller = makeControllerRestoringWorkspace(at: workspaceURL)
+
+        controller.toggleFolderExpansion("notes")
+        XCTAssertFalse(controller.isFolderExpanded("notes"))
+
+        do {
+            try FileManager.default.createDirectory(
+                at: notesURL.appendingPathComponent("archive", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            XCTFail("Failed to create nested folder: \(error)")
+            return
+        }
+
+        controller.refreshWorkspace()
+
+        XCTAssertFalse(
+            controller.isFolderExpanded("notes"),
+            "Expected a manual collapse choice to survive workspace refresh."
+        )
+    }
+
     func testCompactTitlePreservesBothEndsForLongTitles() {
         let tab = EditorTab(
             id: UUID(),
@@ -120,5 +236,25 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         UserDefaults.standard.removeObject(forKey: "recentMarkdownFiles")
         UserDefaults.standard.removeObject(forKey: "editorSession")
         UserDefaults.standard.removeObject(forKey: "lastMarkdownExportDirectory")
+    }
+
+    private func makeControllerRestoringWorkspace(at workspaceURL: URL) -> EditorDocumentController {
+        do {
+            let preferences = EditorPreferences(appearanceMode: .followSystem, startupBehavior: .restoreLastSession)
+            let preferencesData = try JSONEncoder().encode(preferences)
+            UserDefaults.standard.set(preferencesData, forKey: "editorPreferences")
+
+            let sessionObject: [String: Any] = [
+                "folderPath": workspaceURL.path,
+                "openFilePaths": [],
+                "activeFilePath": NSNull()
+            ]
+            let sessionData = try JSONSerialization.data(withJSONObject: sessionObject)
+            UserDefaults.standard.set(sessionData, forKey: "editorSession")
+        } catch {
+            XCTFail("Failed to seed restored workspace session: \(error)")
+        }
+
+        return EditorDocumentController()
     }
 }

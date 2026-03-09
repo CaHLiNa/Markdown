@@ -2,6 +2,8 @@ import XCTest
 @testable import Markdown
 
 final class EditorWorkspaceTreeTests: HostedXCTestCase {
+    private let rootFolderURL = URL(fileURLWithPath: "/tmp/workspace", isDirectory: true)
+
     func testBuildsHierarchicalWorkspaceTree() {
         let files = [
             makeFile("README.md"),
@@ -10,7 +12,7 @@ final class EditorWorkspaceTreeTests: HostedXCTestCase {
             makeFile("notes/todo.md")
         ]
 
-        let tree = EditorWorkspaceTreeBuilder.build(from: files)
+        let tree = EditorWorkspaceTreeBuilder.build(from: files, rootFolderURL: rootFolderURL)
 
         XCTAssertEqual(tree.count, 2, "Expected two top-level nodes, got \(tree.count)")
         XCTAssertTrue(tree[0].isFolder, "Expected top-level folder 'notes'")
@@ -25,7 +27,7 @@ final class EditorWorkspaceTreeTests: HostedXCTestCase {
         XCTAssertTrue(notesChildren[1].isFile, "Expected file 'todo.md' under notes")
         XCTAssertEqual(notesChildren[1].name, "todo.md", "Expected file 'todo.md' under notes")
 
-        let mathChildren = notesChildren[0].children.map(\.name)
+        let mathChildren = notesChildren[0].children.map { $0.name }
         XCTAssertEqual(mathChildren, ["algebra.md", "geometry.md"], "Unexpected math folder contents: \(mathChildren)")
     }
 
@@ -36,7 +38,7 @@ final class EditorWorkspaceTreeTests: HostedXCTestCase {
             makeFile("notes/todo.md")
         ]
 
-        let tree = EditorWorkspaceTreeBuilder.build(from: files)
+        let tree = EditorWorkspaceTreeBuilder.build(from: files, rootFolderURL: rootFolderURL)
         let filtered = EditorWorkspaceTreeBuilder.filter(nodes: tree, query: "geo")
 
         XCTAssertEqual(filtered.count, 1, "Expected one top-level match branch, got \(filtered.count)")
@@ -58,7 +60,7 @@ final class EditorWorkspaceTreeTests: HostedXCTestCase {
             makeFile("notes/todo.md")
         ]
 
-        let tree = EditorWorkspaceTreeBuilder.build(from: files)
+        let tree = EditorWorkspaceTreeBuilder.build(from: files, rootFolderURL: rootFolderURL)
         let folderIDs = EditorWorkspaceTreeBuilder.folderIDs(in: tree)
 
         let expected: Set<String> = ["notes", "notes/math"]

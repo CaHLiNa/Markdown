@@ -258,6 +258,66 @@ enum MarkdownFileService {
         return destinationURL
     }
 
+    static func createMarkdownFile(
+        named proposedName: String,
+        in directoryURL: URL,
+        contents: String = ""
+    ) throws -> URL {
+        let trimmedName = try validatedWorkspaceItemName(proposedName)
+        let destinationURL = normalizedMarkdownURL(
+            from: directoryURL.appendingPathComponent(trimmedName, isDirectory: false)
+        )
+        try ensureWorkspaceItemDoesNotExist(at: destinationURL)
+        try contents.write(to: destinationURL, atomically: true, encoding: .utf8)
+        return destinationURL
+    }
+
+    static func createFolder(named proposedName: String, in directoryURL: URL) throws -> URL {
+        let trimmedName = try validatedWorkspaceItemName(proposedName)
+        let destinationURL = directoryURL.appendingPathComponent(trimmedName, isDirectory: true)
+        try ensureWorkspaceItemDoesNotExist(at: destinationURL)
+        try FileManager.default.createDirectory(
+            at: destinationURL,
+            withIntermediateDirectories: false,
+            attributes: nil
+        )
+        return destinationURL
+    }
+
+    static func renameWorkspaceItem(at itemURL: URL, to proposedName: String) throws -> URL {
+        let trimmedName = try validatedWorkspaceItemName(proposedName)
+        let resourceValues = try itemURL.resourceValues(forKeys: [.isDirectoryKey])
+        let isDirectory = resourceValues.isDirectory == true
+        let destinationURL: URL
+
+        if isDirectory {
+            destinationURL = itemURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(trimmedName, isDirectory: true)
+        } else {
+            destinationURL = renamedMarkdownURL(from: itemURL, to: trimmedName)
+        }
+
+        guard destinationURL.standardizedFileURL != itemURL.standardizedFileURL else {
+            return itemURL
+        }
+
+        try ensureWorkspaceItemDoesNotExist(at: destinationURL)
+        try FileManager.default.moveItem(at: itemURL, to: destinationURL)
+        return destinationURL
+    }
+
+    static func deleteWorkspaceItem(at itemURL: URL) throws {
+        do {
+            try FileManager.default.trashItem(at: itemURL, resultingItemURL: nil)
+        } catch let error as NSError
+            where error.domain == NSCocoaErrorDomain &&
+                error.code == CocoaError.featureUnsupported.rawValue
+        {
+            try FileManager.default.removeItem(at: itemURL)
+        }
+    }
+
     static func normalizedMarkdownURL(from fileURL: URL) -> URL {
         guard fileURL.pathExtension.isEmpty else {
             return fileURL
@@ -494,6 +554,37 @@ enum MarkdownFileService {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
+    private static func validatedWorkspaceItemName(_ proposedName: String) throws -> String {
+        let trimmedName = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw NSError(
+                domain: "Markdown",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "名称不能为空。"]
+            )
+        }
+
+        guard !trimmedName.contains("/") else {
+            throw NSError(
+                domain: "Markdown",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "名称不能包含“/”。"]
+            )
+        }
+
+        return trimmedName
+    }
+
+    private static func ensureWorkspaceItemDoesNotExist(at itemURL: URL) throws {
+        guard !FileManager.default.fileExists(atPath: itemURL.path) else {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: CocoaError.fileWriteFileExists.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "已存在同名项目。"]
+            )
+        }
     }
 
     private static func siblingAssetDirectoryURL(for markdownFileURL: URL) -> URL {

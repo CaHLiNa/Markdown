@@ -7,6 +7,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject private var documentController: EditorDocumentController
@@ -439,27 +440,59 @@ struct ContentView: View {
     private var filesPanel: some View {
         VStack(spacing: 0) {
             Group {
-                if documentController.folderFiles.isEmpty {
+                if let workspaceURL = documentController.folderURL {
+                    if documentController.workspaceTree.isEmpty {
+                        SidebarEmptyStateView(
+                            icon: "folder",
+                            title: "当前工作区没有 Markdown 文件",
+                            subtitle: "右键空白区域，或使用下方按钮创建文件/文件夹。",
+                            palette: palette
+                        )
+                        .contextMenu {
+                            workspaceBlankContextMenu(for: workspaceURL)
+                        }
+                        .onDrop(of: [WorkspaceTreeDragPayload.type], isTargeted: nil) { providers in
+                            handleWorkspaceDrop(providers, destinationDirectoryURL: workspaceURL)
+                        }
+                    } else {
+                        ScrollView(.vertical, showsIndicators: false) {
+                            WorkspaceTreeView(
+                                nodes: documentController.workspaceTree,
+                                depth: 0,
+                                selectedFileURL: documentController.currentFileURL,
+                                palette: palette,
+                                selectedWorkspaceItemIDs: documentController.selectedWorkspaceItemIDs,
+                                expandedFolderIDs: documentController.expandedFolderIDs,
+                                forceExpandFolders: !documentController.workspaceSearchQuery
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                    .isEmpty,
+                                onToggleFolder: documentController.toggleFolderExpansion(_:),
+                                onPrimaryAction: documentController.performWorkspacePrimaryAction(for:modifierFlags:),
+                                onCreateFile: documentController.createWorkspaceFile(in:),
+                                onCreateFolder: documentController.createWorkspaceFolder(in:),
+                                onRenameItem: documentController.renameWorkspaceItem(at:),
+                                onDeleteItem: documentController.deleteWorkspaceItem(at:),
+                                onRevealItem: documentController.revealWorkspaceItemInFinder,
+                                dragItemURLs: documentController.workspaceDragItemURLs(from:),
+                                onMoveItems: documentController.moveWorkspaceItems(_:to:)
+                            )
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 6)
+                        }
+                        .contextMenu {
+                            workspaceBlankContextMenu(for: workspaceURL)
+                        }
+                        .onDrop(of: [WorkspaceTreeDragPayload.type], isTargeted: nil) { providers in
+                            handleWorkspaceDrop(providers, destinationDirectoryURL: workspaceURL)
+                        }
+                    }
+                } else {
                     SidebarEmptyStateView(
                         icon: nil,
                         title: "未打开文件夹",
                         subtitle: nil,
                         palette: palette
                     )
-                } else {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        WorkspaceTreeView(
-                            nodes: documentController.workspaceTree,
-                            depth: 0,
-                            selectedFileURL: documentController.currentFileURL,
-                            palette: palette,
-                            isFolderExpanded: documentController.isFolderExpanded(_:),
-                            onToggleFolder: documentController.toggleFolderExpansion(_:),
-                            onOpenFile: documentController.openWorkspaceFile(_:)
-                        )
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 6)
-                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -487,6 +520,38 @@ struct ContentView: View {
             .background(palette.panelSurface)
         }
         .sidebarPanelStyle(palette: palette)
+    }
+
+    @ViewBuilder
+    private func workspaceBlankContextMenu(for workspaceURL: URL) -> some View {
+        Button("新建文件") {
+            documentController.createWorkspaceFile(in: workspaceURL)
+        }
+
+        Button("新建文件夹") {
+            documentController.createWorkspaceFolder(in: workspaceURL)
+        }
+
+        Divider()
+
+        Button("在 Finder 中显示") {
+            documentController.revealWorkspaceItemInFinder(workspaceURL)
+        }
+    }
+
+    private func handleWorkspaceDrop(_ providers: [NSItemProvider], destinationDirectoryURL: URL) -> Bool {
+        guard providers.contains(where: { $0.hasItemConformingToTypeIdentifier(WorkspaceTreeDragPayload.type.identifier) }) else {
+            return false
+        }
+
+        WorkspaceTreeDragPayload.loadItemURLs(from: providers) { itemURLs in
+            guard !itemURLs.isEmpty else {
+                return
+            }
+
+            documentController.moveWorkspaceItems(itemURLs, to: destinationDirectoryURL)
+        }
+        return true
     }
 
     private var searchPanel: some View {
@@ -1494,9 +1559,18 @@ private struct WorkspaceTreeView: View {
     let depth: Int
     let selectedFileURL: URL?
     let palette: EditorPalette
-    let isFolderExpanded: (String) -> Bool
+    let selectedWorkspaceItemIDs: Set<String>
+    let expandedFolderIDs: Set<String>
+    let forceExpandFolders: Bool
     let onToggleFolder: (String) -> Void
-    let onOpenFile: (EditorWorkspaceFile) -> Void
+    let onPrimaryAction: (EditorWorkspaceNode, NSEvent.ModifierFlags) -> Void
+    let onCreateFile: (URL) -> Void
+    let onCreateFolder: (URL) -> Void
+    let onRenameItem: (URL) -> Void
+    let onDeleteItem: (URL) -> Void
+    let onRevealItem: (URL) -> Void
+    let dragItemURLs: (URL) -> [URL]
+    let onMoveItems: ([URL], URL) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -1506,9 +1580,18 @@ private struct WorkspaceTreeView: View {
                     depth: depth,
                     selectedFileURL: selectedFileURL,
                     palette: palette,
-                    isFolderExpanded: isFolderExpanded,
+                    selectedWorkspaceItemIDs: selectedWorkspaceItemIDs,
+                    expandedFolderIDs: expandedFolderIDs,
+                    forceExpandFolders: forceExpandFolders,
                     onToggleFolder: onToggleFolder,
-                    onOpenFile: onOpenFile
+                    onPrimaryAction: onPrimaryAction,
+                    onCreateFile: onCreateFile,
+                    onCreateFolder: onCreateFolder,
+                    onRenameItem: onRenameItem,
+                    onDeleteItem: onDeleteItem,
+                    onRevealItem: onRevealItem,
+                    dragItemURLs: dragItemURLs,
+                    onMoveItems: onMoveItems
                 )
             }
         }
@@ -1520,20 +1603,41 @@ private struct WorkspaceTreeRow: View {
     let depth: Int
     let selectedFileURL: URL?
     let palette: EditorPalette
-    let isFolderExpanded: (String) -> Bool
+    let selectedWorkspaceItemIDs: Set<String>
+    let expandedFolderIDs: Set<String>
+    let forceExpandFolders: Bool
     let onToggleFolder: (String) -> Void
-    let onOpenFile: (EditorWorkspaceFile) -> Void
+    let onPrimaryAction: (EditorWorkspaceNode, NSEvent.ModifierFlags) -> Void
+    let onCreateFile: (URL) -> Void
+    let onCreateFolder: (URL) -> Void
+    let onRenameItem: (URL) -> Void
+    let onDeleteItem: (URL) -> Void
+    let onRevealItem: (URL) -> Void
+    let dragItemURLs: (URL) -> [URL]
+    let onMoveItems: ([URL], URL) -> Void
 
     private var indentation: CGFloat {
         CGFloat(depth * 14 + 10)
     }
 
-    private var isSelected: Bool {
-        guard let selectedFileURL, let nodeURL = node.url else {
+    private var isCurrentFile: Bool {
+        guard let selectedFileURL, node.isFile else {
             return false
         }
 
-        return selectedFileURL.standardizedFileURL == nodeURL.standardizedFileURL
+        return selectedFileURL.standardizedFileURL == node.url.standardizedFileURL
+    }
+
+    private var isSelected: Bool {
+        selectedWorkspaceItemIDs.contains(node.id)
+    }
+
+    private var isExpanded: Bool {
+        forceExpandFolders || expandedFolderIDs.contains(node.id)
+    }
+
+    private var currentModifierFlags: NSEvent.ModifierFlags {
+        NSApp.currentEvent?.modifierFlags ?? []
     }
 
     var body: some View {
@@ -1541,29 +1645,38 @@ private struct WorkspaceTreeRow: View {
             if node.isFolder {
                 folderRow
 
-                if isFolderExpanded(node.id) {
+                if isExpanded {
                     WorkspaceTreeView(
                         nodes: node.children,
                         depth: depth + 1,
                         selectedFileURL: selectedFileURL,
                         palette: palette,
-                        isFolderExpanded: isFolderExpanded,
+                        selectedWorkspaceItemIDs: selectedWorkspaceItemIDs,
+                        expandedFolderIDs: expandedFolderIDs,
+                        forceExpandFolders: forceExpandFolders,
                         onToggleFolder: onToggleFolder,
-                        onOpenFile: onOpenFile
+                        onPrimaryAction: onPrimaryAction,
+                        onCreateFile: onCreateFile,
+                        onCreateFolder: onCreateFolder,
+                        onRenameItem: onRenameItem,
+                        onDeleteItem: onDeleteItem,
+                        onRevealItem: onRevealItem,
+                        dragItemURLs: dragItemURLs,
+                        onMoveItems: onMoveItems
                     )
                 }
-            } else if let url = node.url {
-                fileRow(url: url)
+            } else {
+                fileRow(url: node.url)
             }
         }
     }
 
     private var folderRow: some View {
         Button {
-            onToggleFolder(node.id)
+            onPrimaryAction(node, currentModifierFlags)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: isFolderExpanded(node.id) ? "chevron.down" : "chevron.right")
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(palette.mutedText)
                     .frame(width: 10)
@@ -1584,24 +1697,68 @@ private struct WorkspaceTreeRow: View {
             .frame(minHeight: 26)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isFolderExpanded(node.id) ? palette.rowHover : .clear)
+                    .fill(isSelected ? palette.rowHover : .clear)
             )
         }
         .buttonStyle(.plain)
+        .onDrag {
+            WorkspaceTreeDragPayload.provider(for: dragItemURLs(node.url))
+        }
+        .onDrop(of: [WorkspaceTreeDragPayload.type], isTargeted: nil) { providers in
+            WorkspaceTreeDragPayload.loadItemURLs(from: providers) { itemURLs in
+                guard !itemURLs.isEmpty else {
+                    return
+                }
+
+                onMoveItems(itemURLs, node.url)
+            }
+            return providers.contains { $0.hasItemConformingToTypeIdentifier(WorkspaceTreeDragPayload.type.identifier) }
+        }
+        .contextMenu {
+            Button(isExpanded ? "折叠" : "展开") {
+                onToggleFolder(node.id)
+            }
+
+            Divider()
+
+            Button("新建文件") {
+                onCreateFile(node.url)
+            }
+
+            Button("新建文件夹") {
+                onCreateFolder(node.url)
+            }
+
+            Divider()
+
+            Button("重命名") {
+                onRenameItem(node.url)
+            }
+
+            Button("删除", role: .destructive) {
+                onDeleteItem(node.url)
+            }
+
+            Divider()
+
+            Button("在 Finder 中显示") {
+                onRevealItem(node.url)
+            }
+        }
     }
 
     private func fileRow(url: URL) -> some View {
         Button {
-            onOpenFile(EditorWorkspaceFile(url: url, relativePath: node.relativePath))
+            onPrimaryAction(node, currentModifierFlags)
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "doc")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(isSelected ? palette.primaryText : palette.mutedText)
+                    .foregroundStyle(isCurrentFile ? palette.primaryText : palette.mutedText)
 
                 Text(node.name)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(isSelected ? palette.primaryText : palette.secondaryText)
+                    .foregroundStyle(isCurrentFile ? palette.primaryText : palette.secondaryText)
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
@@ -1615,6 +1772,71 @@ private struct WorkspaceTreeRow: View {
             )
         }
         .buttonStyle(.plain)
+        .onDrag {
+            WorkspaceTreeDragPayload.provider(for: dragItemURLs(url))
+        }
+        .contextMenu {
+            Button("新建同级文件") {
+                onCreateFile(url.deletingLastPathComponent())
+            }
+
+            Divider()
+
+            Button("重命名") {
+                onRenameItem(url)
+            }
+
+            Button("删除", role: .destructive) {
+                onDeleteItem(url)
+            }
+
+            Divider()
+
+            Button("在 Finder 中显示") {
+                onRevealItem(url)
+            }
+        }
+    }
+}
+
+private enum WorkspaceTreeDragPayload {
+    static let type = UTType(exportedAs: "com.markdown.workspace-items")
+
+    static func provider(for itemURLs: [URL]) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let paths = itemURLs.map { $0.standardizedFileURL.path }
+        let data = (try? JSONEncoder().encode(paths)) ?? Data()
+
+        provider.registerDataRepresentation(
+            forTypeIdentifier: type.identifier,
+            visibility: .all
+        ) { completion in
+            completion(data, nil)
+            return nil
+        }
+
+        return provider
+    }
+
+    static func loadItemURLs(
+        from providers: [NSItemProvider],
+        completion: @escaping ([URL]) -> Void
+    ) {
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(type.identifier)
+        }) else {
+            completion([])
+            return
+        }
+
+        provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, _ in
+            let paths = (data.flatMap { try? JSONDecoder().decode([String].self, from: $0) }) ?? []
+            let itemURLs = paths.map(URL.init(fileURLWithPath:))
+
+            DispatchQueue.main.async {
+                completion(itemURLs)
+            }
+        }
     }
 }
 
