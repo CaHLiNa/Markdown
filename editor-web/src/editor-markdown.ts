@@ -27,7 +27,13 @@ const orderedListPattern = /^\s{0,3}\d+[.)]\s+/
 const horizontalRulePattern = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/
 const codeFencePattern = /^\s{0,3}(```+|~~~+)(.*)$/
 const mathFencePattern = /^\s{0,3}\$\$\s*$/
-const tableSeparatorPattern = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/
+const singleLineMathFencePattern = /^\s{0,3}\$\$(.+?)\$\$\s*$/
+const tableSeparatorPattern = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/
+
+type CodeFence = {
+  character: '`' | '~'
+  length: number
+}
 
 const splitLines = (markdownText: string): LineInfo[] => {
   if (markdownText.length === 0) {
@@ -54,6 +60,11 @@ const isBlankLine = (line: LineInfo | undefined) => {
   return !line || line.text.trim().length === 0
 }
 
+const countLeadingSpaces = (text: string) => {
+  const match = text.match(/^ */)
+  return match?.[0].length ?? 0
+}
+
 const isListLine = (line: LineInfo | undefined) => {
   if (!line) {
     return false
@@ -75,6 +86,58 @@ const isTableStart = (lines: LineInfo[], index: number) => {
   }
 
   return current.text.includes('|') && tableSeparatorPattern.test(next.text)
+}
+
+const matchOpeningCodeFence = (line: string): CodeFence | null => {
+  const match = line.match(codeFencePattern)
+
+  if (!match) {
+    return null
+  }
+
+  return {
+    character: match[1][0] as CodeFence['character'],
+    length: match[1].length
+  }
+}
+
+const isClosingCodeFence = (line: string, openingFence: CodeFence) => {
+  const match = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/)
+
+  return (
+    !!match &&
+    match[1][0] === openingFence.character &&
+    match[1].length >= openingFence.length
+  )
+}
+
+const isSingleLineMathBlock = (line: string) => {
+  const match = line.match(singleLineMathFencePattern)
+  return !!match && match[1].trim().length > 0
+}
+
+const isMathBlockStart = (line: LineInfo | undefined) => {
+  return !!line && (mathFencePattern.test(line.text) || isSingleLineMathBlock(line.text))
+}
+
+const isListContinuationLine = (line: LineInfo | undefined, baseIndent: number) => {
+  if (!line || isBlankLine(line)) {
+    return false
+  }
+
+  const indent = countLeadingSpaces(line.text)
+
+  if (indent <= baseIndent) {
+    return false
+  }
+
+  return (
+    !headingPattern.test(line.text) &&
+    !blockquotePattern.test(line.text) &&
+    !horizontalRulePattern.test(line.text) &&
+    !codeFencePattern.test(line.text) &&
+    !isMathBlockStart(line)
+  )
 }
 
 const blockFromRange = (
@@ -112,14 +175,15 @@ export const extractMarkdownBlocks = (markdownText: string): MarkdownBlock[] => 
       continue
     }
 
-    if (codeFencePattern.test(line.text)) {
-      const openingFence = line.text.match(codeFencePattern)?.[1] ?? '```'
+    const openingFence = matchOpeningCodeFence(line.text)
+
+    if (openingFence) {
       let endIndex = index + 1
 
       while (endIndex < lines.length) {
-        const candidate = lines[endIndex]?.text.trimStart() ?? ''
+        const candidate = lines[endIndex]?.text ?? ''
 
-        if (candidate.startsWith(openingFence)) {
+        if (isClosingCodeFence(candidate, openingFence)) {
           break
         }
 
@@ -129,6 +193,12 @@ export const extractMarkdownBlocks = (markdownText: string): MarkdownBlock[] => 
       const finalIndex = Math.min(endIndex, lines.length - 1)
       blocks.push(blockFromRange(markdownText, index, finalIndex, 'code', lines))
       index = finalIndex + 1
+      continue
+    }
+
+    if (isSingleLineMathBlock(line.text)) {
+      blocks.push(blockFromRange(markdownText, index, index, 'math', lines))
+      index += 1
       continue
     }
 
@@ -175,9 +245,26 @@ export const extractMarkdownBlocks = (markdownText: string): MarkdownBlock[] => 
 
     if (isListLine(line)) {
       let endIndex = index
+      const baseIndent = countLeadingSpaces(line.text)
 
-      while (isListLine(lines[endIndex + 1])) {
-        endIndex += 1
+      while (true) {
+        const nextLine = lines[endIndex + 1]
+        const nextNextLine = lines[endIndex + 2]
+
+        if (isListLine(nextLine) || isListContinuationLine(nextLine, baseIndent)) {
+          endIndex += 1
+          continue
+        }
+
+        if (
+          isBlankLine(nextLine) &&
+          (isListLine(nextNextLine) || isListContinuationLine(nextNextLine, baseIndent))
+        ) {
+          endIndex += 1
+          continue
+        }
+
+        break
       }
 
       blocks.push(blockFromRange(markdownText, index, endIndex, 'list', lines))
@@ -209,7 +296,7 @@ export const extractMarkdownBlocks = (markdownText: string): MarkdownBlock[] => 
         blockquotePattern.test(nextLine.text) ||
         isListLine(nextLine) ||
         codeFencePattern.test(nextLine.text) ||
-        mathFencePattern.test(nextLine.text) ||
+        isMathBlockStart(nextLine) ||
         horizontalRulePattern.test(nextLine.text) ||
         isTableStart(lines, endIndex + 1)
       ) {

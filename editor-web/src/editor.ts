@@ -355,6 +355,23 @@ const findClosestElement = <T extends Element>(node: Node | null, selector: stri
   return asElement(node)?.closest(selector) as T | null
 }
 
+const NATIVE_TAB_HANDLING_SELECTOR = [
+  '.vditor-ir__marker--pre',
+  ".vditor-ir__node[data-type='code-block']",
+  ".vditor-ir__node[data-type='math-block']",
+  "[data-type='code-block-info']",
+  "[data-type='code-block-open-marker']",
+  "[data-type='code-block-close-marker']",
+  'pre code'
+].join(', ')
+
+const shouldHandleCustomIndentation = (target: EventTarget | null) => {
+  return (
+    !(target instanceof Node) ||
+    findClosestElement(target, NATIVE_TAB_HANDLING_SELECTOR) === null
+  )
+}
+
 const getNodePath = (root: Node, target: Node) => {
   const path: number[] = []
   let current: Node | null = target
@@ -456,6 +473,51 @@ const getSelectedLineRange = (markdown: string, selection: NormalizedSelection) 
   }
 }
 
+const getLineRelativeStarts = (text: string) => {
+  const starts = [0]
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n' && index + 1 < text.length) {
+      starts.push(index + 1)
+    }
+  }
+
+  return starts
+}
+
+const getInsertedPrefixDelta = (
+  offset: number,
+  lineStarts: number[],
+  prefixLength: number,
+  includeBoundaryLine: boolean
+) => {
+  let delta = 0
+
+  for (const lineStart of lineStarts) {
+    if (lineStart < offset || (includeBoundaryLine && lineStart === offset)) {
+      delta += prefixLength
+    }
+  }
+
+  return delta
+}
+
+const getRemovedPrefixDelta = (offset: number, lineStarts: number[], removedByLine: number[]) => {
+  let delta = 0
+
+  for (let index = 0; index < lineStarts.length; index += 1) {
+    const lineStart = lineStarts[index] ?? 0
+
+    if (offset <= lineStart) {
+      break
+    }
+
+    delta += Math.min(removedByLine[index] ?? 0, offset - lineStart)
+  }
+
+  return delta
+}
+
 const stripBlockPrefix = (line: string) => {
   return line
     .replace(/^\s{0,3}>\s?/, '')
@@ -465,17 +527,34 @@ const stripBlockPrefix = (line: string) => {
     .replace(/^\s{0,3}[-+*]\s+/, '')
 }
 
+const unwrapDelimitedText = (text: string, pattern: RegExp) => {
+  let current = text
+
+  while (true) {
+    const next = current.replace(pattern, '$1')
+
+    if (next === current) {
+      return current
+    }
+
+    current = next
+  }
+}
+
 const clearInlineFormatting = (text: string) => {
-  return text
-    .replace(/\*\*/g, '')
-    .replace(/__/g, '')
-    .replace(/~~/g, '')
-    .replace(/==/g, '')
-    .replace(/`/g, '')
-    .replace(/\$/g, '')
+  let nextText = text
     .replace(/<\/?u>/g, '')
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '$1')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+
+  nextText = unwrapDelimitedText(nextText, /\*\*(.+?)\*\*/g)
+  nextText = unwrapDelimitedText(nextText, /__(.+?)__/g)
+  nextText = unwrapDelimitedText(nextText, /~~(.+?)~~/g)
+  nextText = unwrapDelimitedText(nextText, /==(.+?)==/g)
+  nextText = unwrapDelimitedText(nextText, /`([^`\n]+)`/g)
+  nextText = unwrapDelimitedText(nextText, /\$([^$\n]+)\$/g)
+
+  return nextText
 }
 
 const sanitizeAssetPath = (value: string) => {
@@ -771,22 +850,34 @@ const applyUpgradeHeadingTransform = (
   selection: NormalizedSelection,
   direction: 1 | -1
 ): MarkdownTransform | null => {
-  const lineStart = getLineStart(markdown, selection.start)
-  const lineEnd = getLineEnd(markdown, selection.start)
-  const line = markdown.slice(lineStart, lineEnd)
-  const match = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/)
+  const lineRange = getSelectedLineRange(markdown, selection)
+  let changed = false
 
-  if (!match) {
+  const replacement = markdown
+    .slice(lineRange.start, lineRange.end)
+    .split('\n')
+    .map((line) => {
+      const match = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/)
+
+      if (!match) {
+        return line
+      }
+
+      changed = true
+
+      const nextLevel = clamp(match[1].length - direction, 1, 6)
+      return `${'#'.repeat(nextLevel)} ${match[2]}`
+    })
+    .join('\n')
+
+  if (!changed) {
     return null
   }
 
-  const nextLevel = clamp(match[1].length - direction, 1, 6)
-  const replacement = `${'#'.repeat(nextLevel)} ${match[2]}`
-
   return {
-    markdown: replaceRange(markdown, lineStart, lineEnd, replacement),
-    selectionStart: lineStart,
-    selectionEnd: lineStart + replacement.length
+    markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
+    selectionStart: lineRange.start,
+    selectionEnd: lineRange.start + replacement.length
   }
 }
 
@@ -854,8 +945,7 @@ const applyDuplicateBlockTransform = (
     return null
   }
 
-  const separator =
-    markdown.length === 0 || markdown.slice(block.to).startsWith('\n') ? '\n' : '\n\n'
+  const separator = markdown.length === 0 ? '' : '\n\n'
   const insertion = `${separator}${block.text}`
   const insertOffset = block.to
 
@@ -911,16 +1001,30 @@ const applyIndentTransform = (
   }
 
   const lineRange = getSelectedLineRange(markdown, selection)
+  const selectedText = markdown.slice(lineRange.start, lineRange.end)
+  const lineStarts = getLineRelativeStarts(selectedText)
   const nextLines = markdown
     .slice(lineRange.start, lineRange.end)
     .split('\n')
     .map((line) => `${indentUnit}${line}`)
   const replacement = nextLines.join('\n')
+  const selectionStartDelta = getInsertedPrefixDelta(
+    selection.start - lineRange.start,
+    lineStarts,
+    indentUnit.length,
+    true
+  )
+  const selectionEndDelta = getInsertedPrefixDelta(
+    selection.end - lineRange.start,
+    lineStarts,
+    indentUnit.length,
+    false
+  )
 
   return {
     markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
-    selectionStart: selection.start + indentUnit.length,
-    selectionEnd: selection.end + indentUnit.length * nextLines.length
+    selectionStart: selection.start + selectionStartDelta,
+    selectionEnd: selection.end + selectionEndDelta
   }
 }
 
@@ -933,10 +1037,10 @@ const applyOutdentTransform = (
 ): MarkdownTransform => {
   if (selection.start === selection.end) {
     const lineStart = getLineStart(markdown, selection.start)
-    const line = markdown.slice(lineStart, selection.start)
+    const lineText = markdown.slice(lineStart, getLineEnd(markdown, selection.start))
 
     if (useSpacesForIndent) {
-      const removable = Math.min(indentWidth, countLeadingSpaces(line))
+      const removable = Math.min(indentWidth, countLeadingSpaces(lineText))
 
       if (removable === 0) {
         return {
@@ -946,14 +1050,16 @@ const applyOutdentTransform = (
         }
       }
 
+      const removedBeforeCursor = Math.min(removable, Math.max(0, selection.start - lineStart))
+
       return {
         markdown: replaceRange(markdown, lineStart, lineStart + removable, ''),
-        selectionStart: selection.start - removable,
-        selectionEnd: selection.end - removable
+        selectionStart: selection.start - removedBeforeCursor,
+        selectionEnd: selection.end - removedBeforeCursor
       }
     }
 
-    if (!line.endsWith(indentUnit)) {
+    if (!lineText.startsWith(indentUnit)) {
       return {
         markdown,
         selectionStart: selection.start,
@@ -961,45 +1067,50 @@ const applyOutdentTransform = (
       }
     }
 
+    const removedBeforeCursor = Math.min(indentUnit.length, Math.max(0, selection.start - lineStart))
+
     return {
-      markdown: replaceRange(markdown, selection.start - indentUnit.length, selection.start, ''),
-      selectionStart: selection.start - indentUnit.length,
-      selectionEnd: selection.end - indentUnit.length
+      markdown: replaceRange(markdown, lineStart, lineStart + indentUnit.length, ''),
+      selectionStart: selection.start - removedBeforeCursor,
+      selectionEnd: selection.end - removedBeforeCursor
     }
   }
 
   const lineRange = getSelectedLineRange(markdown, selection)
-  const sourceLines = markdown.slice(lineRange.start, lineRange.end).split('\n')
-  let removedBeforeSelectionStart = 0
-  let totalRemoved = 0
+  const selectedText = markdown.slice(lineRange.start, lineRange.end)
+  const sourceLines = selectedText.split('\n')
+  const lineStarts = getLineRelativeStarts(selectedText)
+  const removedByLine: number[] = []
 
   const nextLines = sourceLines.map((line, index) => {
     if (useSpacesForIndent) {
       const removable = Math.min(indentWidth, countLeadingSpaces(line))
-      totalRemoved += removable
-
-      if (index === 0) {
-        removedBeforeSelectionStart = removable
-      }
+      removedByLine[index] = removable
 
       return line.slice(removable)
     }
 
     const removable = line.startsWith(indentUnit) ? indentUnit.length : 0
-    totalRemoved += removable
-
-    if (index === 0) {
-      removedBeforeSelectionStart = removable
-    }
+    removedByLine[index] = removable
 
     return removable > 0 ? line.slice(removable) : line
   })
   const replacement = nextLines.join('\n')
+  const removedBeforeSelectionStart = getRemovedPrefixDelta(
+    selection.start - lineRange.start,
+    lineStarts,
+    removedByLine
+  )
+  const removedBeforeSelectionEnd = getRemovedPrefixDelta(
+    selection.end - lineRange.start,
+    lineStarts,
+    removedByLine
+  )
 
   return {
     markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
     selectionStart: Math.max(lineRange.start, selection.start - removedBeforeSelectionStart),
-    selectionEnd: Math.max(lineRange.start, selection.end - totalRemoved)
+    selectionEnd: Math.max(lineRange.start, selection.end - removedBeforeSelectionEnd)
   }
 }
 
@@ -1135,6 +1246,47 @@ const exportMarkdownJSON = (instance: Vditor, markdown: string): JSONNode => {
 }
 
 export { type EditorCommand }
+
+const createTestingSelection = (start: number, end: number): NormalizedSelection => ({
+  anchor: start,
+  head: end,
+  start,
+  end
+})
+
+export const __editorTestUtils = {
+  applyClearFormatTransform(markdown: string, start: number, end: number) {
+    return applyClearFormatTransform(markdown, createTestingSelection(start, end))
+  },
+  applyDuplicateBlockTransform(markdown: string, start: number, end: number) {
+    return applyDuplicateBlockTransform(markdown, createTestingSelection(start, end))
+  },
+  applyIndentTransform(markdown: string, start: number, end: number, indentUnit: string) {
+    return applyIndentTransform(markdown, createTestingSelection(start, end), indentUnit)
+  },
+  applyOutdentTransform(
+    markdown: string,
+    start: number,
+    end: number,
+    indentUnit: string,
+    indentWidth: number,
+    useSpacesForIndent: boolean
+  ) {
+    return applyOutdentTransform(
+      markdown,
+      createTestingSelection(start, end),
+      indentUnit,
+      indentWidth,
+      useSpacesForIndent
+    )
+  },
+  applyUpgradeHeadingTransform(markdown: string, start: number, end: number, direction: 1 | -1) {
+    return applyUpgradeHeadingTransform(markdown, createTestingSelection(start, end), direction)
+  },
+  shouldHandleCustomIndentation(target: EventTarget | null) {
+    return shouldHandleCustomIndentation(target)
+  }
+}
 
 export const createMarkdownEditor = async ({
   root,
@@ -2989,6 +3141,10 @@ export const createMarkdownEditor = async ({
 
   const handleIndentKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Tab' || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+      return
+    }
+
+    if (!shouldHandleCustomIndentation(event.target)) {
       return
     }
 
