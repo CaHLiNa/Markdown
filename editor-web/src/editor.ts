@@ -177,7 +177,6 @@ export type MarkdownEditor = {
 }
 
 const VDITOR_CDN = './vditor'
-const DEFAULT_LINK_PLACEHOLDER = 'https://'
 const DEFAULT_INLINE_PLACEHOLDER = 'text'
 const DEFAULT_IMAGE_ALT = 'image'
 const DEFAULT_TABLE_SNIPPET = '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1 | Value 2 |'
@@ -1440,6 +1439,32 @@ export const createMarkdownEditor = async ({
     return true
   }
 
+  const triggerVditorInput = (preferredTarget?: Element | null) => {
+    if (!instance) {
+      return false
+    }
+
+    if (currentMode === 'ir' && preferredTarget) {
+      const range = createCollapsedRangeAtStart(preferredTarget)
+      const selection = window.getSelection()
+
+      if (range && selection) {
+        selection.removeAllRanges()
+        selection.addRange(range)
+      }
+    }
+
+    const root = currentMode === 'sv' ? getSVRoot() : getIRRoot()
+    root.dispatchEvent(
+      new Event('input', {
+        bubbles: true,
+        cancelable: true
+      })
+    )
+    syncStateAfterNativeCommand()
+    return true
+  }
+
   const ensureTableSections = (tableElement: HTMLTableElement) => {
     const head = tableElement.tHead ?? tableElement.createTHead()
     const headRow = head.rows[0] ?? head.insertRow()
@@ -1518,66 +1543,60 @@ export const createMarkdownEditor = async ({
   }
 
   const insertTableRow = (context: TableContext, position: 'above' | 'below') => {
-    const targetColumns = Math.max(1, context.tableElement.rows[0]?.cells.length ?? 1)
-    const { body } = ensureTableSections(context.tableElement)
-    const domRowIndex = (context.cellElement.parentElement as HTMLTableRowElement).rowIndex
-    const insertIndex =
-      domRowIndex <= 0 ? 0 : position === 'above' ? Math.max(0, domRowIndex - 1) : Math.max(0, domRowIndex)
-    const row = body.insertRow(insertIndex)
+    const row = context.cellElement.parentElement as HTMLTableRowElement
+    const insertIndex = position === 'above' ? Math.max(0, row.rowIndex) : row.rowIndex + 1
+    const newRow = context.tableElement.insertRow(insertIndex)
+    const columnCount = Math.max(1, context.tableElement.rows[0]?.cells.length ?? 1)
 
-    for (let index = 0; index < targetColumns; index += 1) {
-      row.append(document.createElement('td'))
+    for (let index = 0; index < columnCount; index += 1) {
+      const cell = newRow.insertCell()
+      cell.innerHTML = currentMode === 'ir' ? '<br>' : ''
     }
 
-    return syncTableMutation(
-      context,
-      row.cells.item(clamp(context.cellElement.cellIndex, 0, targetColumns - 1)) as HTMLTableCellElement | null
-    )
+    const nextCell = newRow.cells.item(clamp(context.cellElement.cellIndex, 0, columnCount - 1))
+    return triggerVditorInput(nextCell)
   }
 
   const deleteTableRow = (context: TableContext) => {
     const row = context.cellElement.parentElement as HTMLTableRowElement
-
-    if (row.rowIndex === 0) {
-      return false
-    }
-
     const nextRow = context.tableElement.rows.item(row.rowIndex + 1) ?? context.tableElement.rows.item(row.rowIndex - 1)
     row.remove()
 
-    return syncTableMutation(
-      context,
-      (nextRow?.cells.item(clamp(context.cellElement.cellIndex, 0, Math.max(0, nextRow.cells.length - 1))) as
+    const nextCell =
+      (nextRow?.cells.item(clamp(context.cellElement.cellIndex, 0, Math.max(0, (nextRow?.cells.length ?? 1) - 1))) as
         | HTMLTableCellElement
         | null) ?? null
-    )
+    return triggerVditorInput(nextCell ?? context.tableElement)
   }
 
   const insertTableColumn = (context: TableContext, position: 'left' | 'right') => {
-    const insertIndex = position === 'left' ? context.cellElement.cellIndex : context.cellElement.cellIndex + 1
+    const cellIndex = context.cellElement.cellIndex
+    const insertIndex = position === 'left' ? cellIndex : cellIndex + 1
 
     Array.from(context.tableElement.rows).forEach((row, rowIndex) => {
-      insertTableCellAt(row, insertIndex, rowIndex === 0 ? 'th' : 'td')
+      const cell = row.insertCell(insertIndex)
+
+      if (row.parentElement?.tagName === 'THEAD' || (rowIndex === 0 && row.cells[0]?.tagName === 'TH')) {
+        const headerCell = document.createElement('th')
+        headerCell.innerHTML = '<br>'
+        cell.replaceWith(headerCell)
+      } else {
+        cell.innerHTML = currentMode === 'ir' ? '<br>' : ''
+      }
     })
 
     const targetRow = context.cellElement.parentElement as HTMLTableRowElement
-    return syncTableMutation(
-      context,
-      targetRow.cells.item(clamp(insertIndex, 0, Math.max(0, targetRow.cells.length - 1))) as
-        | HTMLTableCellElement
-        | null
-    )
+    const nextCell = targetRow.cells.item(clamp(insertIndex, 0, Math.max(0, targetRow.cells.length - 1)))
+    return triggerVditorInput(nextCell)
   }
 
   const deleteTableColumn = (context: TableContext) => {
-    if ((context.tableElement.rows[0]?.cells.length ?? 0) <= 1) {
-      return false
-    }
-
     const targetColumnIndex = context.cellElement.cellIndex
 
     Array.from(context.tableElement.rows).forEach((row) => {
-      row.deleteCell(clamp(targetColumnIndex, 0, row.cells.length - 1))
+      if (row.cells[targetColumnIndex]) {
+        row.deleteCell(targetColumnIndex)
+      }
     })
 
     const targetRow = context.tableElement.rows.item(
@@ -1585,10 +1604,7 @@ export const createMarkdownEditor = async ({
     )
     const nextColumn = clamp(targetColumnIndex, 0, Math.max(0, (targetRow?.cells.length ?? 1) - 1))
 
-    return syncTableMutation(
-      context,
-      (targetRow?.cells.item(nextColumn) as HTMLTableCellElement | null) ?? null
-    )
+    return triggerVditorInput((targetRow?.cells.item(nextColumn) as HTMLTableCellElement | null) ?? context.tableElement)
   }
 
   const copyTextToClipboard = async (text: string) => {
@@ -2479,13 +2495,13 @@ export const createMarkdownEditor = async ({
       case 'degrade-heading':
         return runRelativeHeadingCommand(-1)
       case 'blockquote':
-        return runNativeToolbarCommand('quote') || replaceSelectionWithMarkdown('> ')
+        return runNativeToolbarCommand('quote')
       case 'bullet-list':
-        return runNativeToolbarCommand('list') || replaceSelectionWithMarkdown('- ')
+        return runNativeToolbarCommand('list')
       case 'ordered-list':
-        return runNativeToolbarCommand('ordered-list') || replaceSelectionWithMarkdown('1. ')
+        return runNativeToolbarCommand('ordered-list')
       case 'task-list':
-        return runNativeToolbarCommand('check') || replaceSelectionWithMarkdown('- [ ] ')
+        return runNativeToolbarCommand('check')
       case 'table':
         return runNativeToolbarCommand('table') || replaceSelectionWithMarkdown(DEFAULT_TABLE_SNIPPET)
       case 'horizontal-rule':
@@ -2497,21 +2513,21 @@ export const createMarkdownEditor = async ({
       case 'math-block':
         return wrapSelectionWithMarkdown('$$\n', '\n$$', 'E = mc^2')
       case 'bold':
-        return runNativeToolbarCommand('bold') || wrapSelectionWithMarkdown('**')
+        return runNativeToolbarCommand('bold')
       case 'italic':
-        return runNativeToolbarCommand('italic') || wrapSelectionWithMarkdown('*')
+        return runNativeToolbarCommand('italic')
       case 'underline':
         return wrapSelectionWithMarkdown('<u>', '</u>')
       case 'highlight':
         return wrapSelectionWithMarkdown('==')
       case 'inline-code':
-        return runNativeToolbarCommand('inline-code') || wrapSelectionWithMarkdown('`')
+        return runNativeToolbarCommand('inline-code')
       case 'inline-math':
         return wrapSelectionWithMarkdown('$')
       case 'strikethrough':
-        return runNativeToolbarCommand('strike') || wrapSelectionWithMarkdown('~~')
+        return runNativeToolbarCommand('strike')
       case 'link':
-        return runNativeToolbarCommand('link') || wrapSelectionWithMarkdown('[', `](${DEFAULT_LINK_PLACEHOLDER})`)
+        return runNativeToolbarCommand('link')
       case 'image':
         return runAsyncImageCommand()
       case 'clear-format':
@@ -2619,6 +2635,9 @@ export const createMarkdownEditor = async ({
       }
 
       syncMarkdownFromEditor(true)
+      scheduleTableToolbarRefresh()
+    },
+    keydown() {
       scheduleTableToolbarRefresh()
     },
     blur() {
