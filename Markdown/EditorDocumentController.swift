@@ -1952,9 +1952,7 @@ final class EditorDocumentController: ObservableObject {
     private func configureWorkspaceMonitor(rootFolderURL: URL) {
         let directoryURLs = [rootFolderURL] + EditorWorkspaceTreeBuilder.folderURLs(in: workspaceTree)
         workspaceMonitor.startMonitoring(directoryURLs: directoryURLs) { [weak self] in
-            Task { @MainActor in
-                self?.refreshWorkspace()
-            }
+            self?.refreshWorkspace()
         }
     }
 
@@ -2500,14 +2498,14 @@ final class EditorDocumentController: ObservableObject {
     }
 }
 
-private final class WorkspaceFileSystemMonitor {
+nonisolated private final class WorkspaceFileSystemMonitor {
     private let queue = DispatchQueue(label: "Markdown.WorkspaceFileSystemMonitor")
     private var sources: [String: DispatchSourceFileSystemObject] = [:]
     private var pendingRefreshWorkItem: DispatchWorkItem?
 
     func startMonitoring(
         directoryURLs: [URL],
-        onChange: @escaping @Sendable () -> Void
+        onChange: @escaping @MainActor @Sendable () -> Void
     ) {
         var seenPaths: Set<String> = []
         let uniqueDirectoryURLs = directoryURLs.compactMap { directoryURL -> URL? in
@@ -2566,10 +2564,14 @@ private final class WorkspaceFileSystemMonitor {
         }
     }
 
-    private func scheduleRefresh(onChange: @escaping @Sendable () -> Void) {
+    private func scheduleRefresh(onChange: @escaping @MainActor @Sendable () -> Void) {
         pendingRefreshWorkItem?.cancel()
 
-        let workItem = DispatchWorkItem(block: onChange)
+        let workItem = DispatchWorkItem {
+            MainActor.assumeIsolated {
+                onChange()
+            }
+        }
         pendingRefreshWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
     }

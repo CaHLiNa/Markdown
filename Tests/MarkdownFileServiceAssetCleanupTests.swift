@@ -71,4 +71,72 @@ final class MarkdownFileServiceAssetCleanupTests: XCTestCase {
 
         XCTAssertTrue(fileManager.fileExists(atPath: nestedAssetURL.path), "Expected referenced nested asset to be preserved.")
     }
+
+    func testIgnoresImageSyntaxInsideFencedCodeBlocksDuringCleanup() throws {
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
+
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let markdownFileURL = tempDirectory.appendingPathComponent("note.md")
+        let assetDirectoryURL = tempDirectory.appendingPathComponent("note.assets", isDirectory: true)
+        let fencedOnlyAssetURL = assetDirectoryURL.appendingPathComponent("fenced.png")
+
+        try fileManager.createDirectory(at: assetDirectoryURL, withIntermediateDirectories: true)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: fencedOnlyAssetURL)
+
+        let markdown = """
+        ```markdown
+        ![示例](note.assets/fenced.png)
+        ```
+        """
+
+        try MarkdownFileService.removeUnusedSiblingImageAssets(
+            for: markdown,
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
+        )
+
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: fencedOnlyAssetURL.path),
+            "Expected fenced code block image syntax not to keep sibling assets alive during cleanup."
+        )
+    }
+
+    func testPreservesReferencedSiblingAssetsWithParenthesesInFilename() throws {
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
+
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let markdownFileURL = tempDirectory.appendingPathComponent("note.md")
+        let assetDirectoryURL = tempDirectory.appendingPathComponent("note.assets", isDirectory: true)
+        let assetURL = assetDirectoryURL.appendingPathComponent("diagram(1).png")
+
+        try fileManager.createDirectory(at: assetDirectoryURL, withIntermediateDirectories: true)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: assetURL)
+
+        let markdown = """
+        ![保留](note.assets/diagram(1).png)
+        """
+
+        try MarkdownFileService.removeUnusedSiblingImageAssets(
+            for: markdown,
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
+        )
+
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: assetURL.path),
+            "Expected sibling assets whose filenames contain parentheses to be preserved."
+        )
+    }
 }

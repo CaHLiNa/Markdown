@@ -30,6 +30,16 @@ type QueuedBridgeAction =
       length: number
     }
 
+type DeferredBridgeStateAction =
+  | {
+      kind: 'markdown'
+      markdown: string
+    }
+  | {
+      kind: 'appearance'
+      appearance: EditorPresentation
+    }
+
 type WindowBridge = {
   setEditorAppearance?: (appearance: unknown) => void
   revealHeading?: (title: unknown) => boolean
@@ -115,6 +125,16 @@ export const createEditorBridge = ({
     }
   }
 
+  const enqueueDeferredStateAction = (action: DeferredBridgeStateAction) => {
+    const existingIndex = queue.findIndex((candidate) => candidate.kind === action.kind)
+
+    if (existingIndex !== -1) {
+      queue.splice(existingIndex, 1)
+    }
+
+    queue.push(action)
+  }
+
   const enqueue = (action: QueuedBridgeAction) => {
     if (editor) {
       applyAction(action)
@@ -123,20 +143,14 @@ export const createEditorBridge = ({
 
     if (action.kind === 'markdown') {
       markdown = action.markdown
-
-      if (queue[queue.length - 1]?.kind === 'markdown') {
-        queue[queue.length - 1] = action
-        return
-      }
+      enqueueDeferredStateAction(action)
+      return
     }
 
     if (action.kind === 'appearance') {
       appearance = action.appearance
-
-      if (queue[queue.length - 1]?.kind === 'appearance') {
-        queue[queue.length - 1] = action
-        return
-      }
+      enqueueDeferredStateAction(action)
+      return
     }
 
     queue.push(action)

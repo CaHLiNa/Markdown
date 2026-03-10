@@ -19,9 +19,28 @@ enum MarkdownFileService {
     static let htmlContentType = UTType.html
     static let pdfContentType = UTType.pdf
     static let supportedPathExtensions = ["md", "markdown", "mdown", "mkd"]
-    private static let markdownImageReferenceRegex = try! NSRegularExpression(
-        pattern: #"!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)"#
-    )
+
+    private struct MarkdownImageReference {
+        let path: String
+        let range: NSRange
+    }
+
+    private struct ParsedMarkdownImageReference {
+        let reference: MarkdownImageReference
+        let nextIndex: String.Index
+    }
+
+    private struct ParsedMarkdownLinkDestination {
+        let path: String
+        let range: NSRange
+        let nextIndex: String.Index
+    }
+
+    private struct MarkdownFence {
+        let marker: Character
+        let length: Int
+        let start: String.Index
+    }
 
     static func readMarkdown(from fileURL: URL) throws -> String {
         try String(contentsOf: fileURL, encoding: .utf8)
@@ -110,22 +129,16 @@ enum MarkdownFileService {
         let sourceRootURL = originalMarkdownFileURL.deletingLastPathComponent()
         let destinationRootURL = destinationMarkdownFileURL.deletingLastPathComponent()
         let fileManager = FileManager.default
-        let markdownNSString = markdown as NSString
-        let matches = markdownImageReferenceRegex.matches(
-            in: markdown,
-            range: NSRange(location: 0, length: markdownNSString.length)
-        )
+        let references = markdownImageReferences(in: markdown)
         var relocatedMarkdown = markdown
         var copiedRelativePaths = Set<String>()
 
-        for match in matches.reversed() {
-            guard match.numberOfRanges > 1,
-                  let referencedPathRange = Range(match.range(at: 1), in: relocatedMarkdown)
-            else {
+        for reference in references.reversed() {
+            guard let referencedPathRange = Range(reference.range, in: relocatedMarkdown) else {
                 continue
             }
 
-            let referencedPath = String(relocatedMarkdown[referencedPathRange])
+            let referencedPath = reference.path
 
             guard referencedPath.hasPrefix("\(originalAssetDirectoryName)/") else {
                 continue
@@ -342,12 +355,13 @@ enum MarkdownFileService {
         let trimmedName = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
         let pathExtension = fileURL.pathExtension.isEmpty ? "md" : fileURL.pathExtension
         let candidateURL = fileURL.deletingLastPathComponent().appendingPathComponent(trimmedName)
+        let candidatePathExtension = candidateURL.pathExtension.lowercased()
 
-        if candidateURL.pathExtension.isEmpty {
-            return candidateURL.appendingPathExtension(pathExtension)
+        if supportedPathExtensions.contains(candidatePathExtension) {
+            return candidateURL
         }
 
-        return candidateURL
+        return candidateURL.appendingPathExtension(pathExtension)
     }
 
     static func writeHTMLDocument(_ html: String, to fileURL: URL) throws {
@@ -635,20 +649,8 @@ enum MarkdownFileService {
         in markdown: String,
         siblingAssetDirectoryName: String
     ) -> Set<String> {
-        let markdownNSString = markdown as NSString
-        let matches = markdownImageReferenceRegex.matches(
-            in: markdown,
-            range: NSRange(location: 0, length: markdownNSString.length)
-        )
-
-        return matches.reduce(into: Set<String>()) { result, match in
-            guard match.numberOfRanges > 1,
-                  let referencedPathRange = Range(match.range(at: 1), in: markdown)
-            else {
-                return
-            }
-
-            let referencedPath = String(markdown[referencedPathRange])
+        markdownImageReferences(in: markdown).reduce(into: Set<String>()) { result, reference in
+            let referencedPath = reference.path
             guard referencedPath.hasPrefix("\(siblingAssetDirectoryName)/") else {
                 return
             }
@@ -662,7 +664,7 @@ enum MarkdownFileService {
         }
     }
 
-    private static func relativePath(
+    static func relativePath(
         of fileURL: URL,
         relativeToDirectory directoryURL: URL
     ) -> String? {
@@ -674,13 +676,478 @@ enum MarkdownFileService {
             .resolvingSymlinksInPath()
             .standardizedFileURL
             .path
-        let directoryPrefix = resolvedDirectoryPath + "/"
+        let directoryPrefix = resolvedDirectoryPath.hasSuffix("/") ? resolvedDirectoryPath : resolvedDirectoryPath + "/"
 
         guard resolvedFilePath.hasPrefix(directoryPrefix) else {
             return nil
         }
 
         return String(resolvedFilePath.dropFirst(directoryPrefix.count))
+    }
+
+    // Keep the asset cleanup/save pipeline lightweight while handling the Markdown edge cases
+    // that regularly appear in notes: fenced code blocks and paths containing parentheses.
+    private static func markdownImageReferences(in markdown: String) -> [MarkdownImageReference] {
+        let fencedCodeBlockRanges = fencedCodeBlockRanges(in: markdown)
+        var fencedRangeIndex = 0
+        var references: [MarkdownImageReference] = []
+        var index = markdown.startIndex
+
+        while index < markdown.endIndex {
+            while fencedRangeIndex < fencedCodeBlockRanges.count,
+                  index >= fencedCodeBlockRanges[fencedRangeIndex].upperBound
+            {
+                fencedRangeIndex += 1
+            }
+
+            if fencedRangeIndex < fencedCodeBlockRanges.count,
+               index >= fencedCodeBlockRanges[fencedRangeIndex].lowerBound,
+               index < fencedCodeBlockRanges[fencedRangeIndex].upperBound
+            {
+                index = fencedCodeBlockRanges[fencedRangeIndex].upperBound
+                continue
+            }
+
+            guard markdown[index] == "!" else {
+                index = markdown.index(after: index)
+                continue
+            }
+
+            let nextIndex = markdown.index(after: index)
+            guard nextIndex < markdown.endIndex, markdown[nextIndex] == "[" else {
+                index = nextIndex
+                continue
+            }
+
+            if let parsedReference = parseMarkdownImageReference(in: markdown, startingAt: index) {
+                references.append(parsedReference.reference)
+                index = parsedReference.nextIndex
+                continue
+            }
+
+            index = nextIndex
+        }
+
+        return references
+    }
+
+    private static func fencedCodeBlockRanges(in markdown: String) -> [Range<String.Index>] {
+        guard !markdown.isEmpty else {
+            return []
+        }
+
+        var ranges: [Range<String.Index>] = []
+        var lineStart = markdown.startIndex
+        var activeFence: MarkdownFence?
+
+        while lineStart < markdown.endIndex {
+            let lineRange = markdown.lineRange(for: lineStart..<lineStart)
+            let line = markdown[lineRange]
+
+            if let currentFence = activeFence {
+                if isClosingFenceLine(line, marker: currentFence.marker, minimumLength: currentFence.length) {
+                    ranges.append(currentFence.start..<lineRange.upperBound)
+                    activeFence = nil
+                }
+            } else if let openingFence = openingFence(in: line) {
+                activeFence = MarkdownFence(
+                    marker: openingFence.marker,
+                    length: openingFence.length,
+                    start: lineRange.lowerBound
+                )
+            }
+
+            lineStart = lineRange.upperBound
+        }
+
+        if let activeFence {
+            ranges.append(activeFence.start..<markdown.endIndex)
+        }
+
+        return ranges
+    }
+
+    private static func openingFence(in line: Substring) -> (marker: Character, length: Int)? {
+        guard let prefix = fencePrefix(in: line) else {
+            return nil
+        }
+
+        return (prefix.marker, prefix.length)
+    }
+
+    private static func isClosingFenceLine(
+        _ line: Substring,
+        marker: Character,
+        minimumLength: Int
+    ) -> Bool {
+        guard let prefix = fencePrefix(in: line),
+              prefix.marker == marker,
+              prefix.length >= minimumLength
+        else {
+            return false
+        }
+
+        let content = lineWithoutTrailingNewlines(line)
+        return content[prefix.remainderStart...].allSatisfy { $0 == " " || $0 == "\t" }
+    }
+
+    private static func fencePrefix(
+        in line: Substring
+    ) -> (marker: Character, length: Int, remainderStart: Substring.Index)? {
+        let content = lineWithoutTrailingNewlines(line)
+        var index = content.startIndex
+        var leadingSpaceCount = 0
+
+        while index < content.endIndex, content[index] == " " {
+            leadingSpaceCount += 1
+            if leadingSpaceCount > 3 {
+                return nil
+            }
+
+            index = content.index(after: index)
+        }
+
+        guard index < content.endIndex else {
+            return nil
+        }
+
+        let marker = content[index]
+        guard marker == "`" || marker == "~" else {
+            return nil
+        }
+
+        var length = 0
+        while index < content.endIndex, content[index] == marker {
+            length += 1
+            index = content.index(after: index)
+        }
+
+        guard length >= 3 else {
+            return nil
+        }
+
+        return (marker, length, index)
+    }
+
+    private static func lineWithoutTrailingNewlines(_ line: Substring) -> Substring {
+        var end = line.endIndex
+
+        while end > line.startIndex {
+            let previous = line.index(before: end)
+            guard line[previous].isNewline else {
+                break
+            }
+
+            end = previous
+        }
+
+        return line[line.startIndex..<end]
+    }
+
+    private static func parseMarkdownImageReference(
+        in markdown: String,
+        startingAt startIndex: String.Index
+    ) -> ParsedMarkdownImageReference? {
+        let openingBracketIndex = markdown.index(after: startIndex)
+        guard openingBracketIndex < markdown.endIndex, markdown[openingBracketIndex] == "[" else {
+            return nil
+        }
+
+        guard let closingBracketIndex = closingAltTextBracket(
+            in: markdown,
+            startingAt: openingBracketIndex
+        ) else {
+            return nil
+        }
+
+        let openingParenthesisIndex = markdown.index(after: closingBracketIndex)
+        guard openingParenthesisIndex < markdown.endIndex, markdown[openingParenthesisIndex] == "(" else {
+            return nil
+        }
+
+        guard let destination = parseMarkdownLinkDestination(
+            in: markdown,
+            startingAt: markdown.index(after: openingParenthesisIndex)
+        ) else {
+            return nil
+        }
+
+        return ParsedMarkdownImageReference(
+            reference: MarkdownImageReference(path: destination.path, range: destination.range),
+            nextIndex: destination.nextIndex
+        )
+    }
+
+    private static func closingAltTextBracket(
+        in markdown: String,
+        startingAt openingBracketIndex: String.Index
+    ) -> String.Index? {
+        var index = markdown.index(after: openingBracketIndex)
+        var bracketDepth = 1
+        var isEscaping = false
+
+        while index < markdown.endIndex {
+            let character = markdown[index]
+
+            if isEscaping {
+                isEscaping = false
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if character == "\\" {
+                isEscaping = true
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if character == "[" {
+                bracketDepth += 1
+            } else if character == "]" {
+                bracketDepth -= 1
+                if bracketDepth == 0 {
+                    return index
+                }
+            }
+
+            index = markdown.index(after: index)
+        }
+
+        return nil
+    }
+
+    private static func parseMarkdownLinkDestination(
+        in markdown: String,
+        startingAt startIndex: String.Index
+    ) -> ParsedMarkdownLinkDestination? {
+        let destinationStart = skipMarkdownWhitespace(in: markdown, from: startIndex)
+        guard destinationStart < markdown.endIndex else {
+            return nil
+        }
+
+        if markdown[destinationStart] == "<" {
+            return parseAngleBracketLinkDestination(in: markdown, startingAt: destinationStart)
+        }
+
+        return parseParenthesizedLinkDestination(in: markdown, startingAt: destinationStart)
+    }
+
+    private static func parseAngleBracketLinkDestination(
+        in markdown: String,
+        startingAt startIndex: String.Index
+    ) -> ParsedMarkdownLinkDestination? {
+        let pathStart = markdown.index(after: startIndex)
+        var index = pathStart
+        var isEscaping = false
+
+        while index < markdown.endIndex {
+            let character = markdown[index]
+
+            if isEscaping {
+                isEscaping = false
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if character == "\\" {
+                isEscaping = true
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if character == ">" {
+                let pathRange = pathStart..<index
+                guard !pathRange.isEmpty else {
+                    return nil
+                }
+
+                guard let nextIndex = consumeOptionalMarkdownLinkTitleAndClosingParen(
+                    in: markdown,
+                    startingAt: markdown.index(after: index)
+                ) else {
+                    return nil
+                }
+
+                return ParsedMarkdownLinkDestination(
+                    path: String(markdown[pathRange]),
+                    range: NSRange(pathRange, in: markdown),
+                    nextIndex: nextIndex
+                )
+            }
+
+            index = markdown.index(after: index)
+        }
+
+        return nil
+    }
+
+    private static func parseParenthesizedLinkDestination(
+        in markdown: String,
+        startingAt startIndex: String.Index
+    ) -> ParsedMarkdownLinkDestination? {
+        let pathStart = startIndex
+        var index = startIndex
+        var nestedParentheses = 0
+        var isEscaping = false
+
+        while index < markdown.endIndex {
+            let character = markdown[index]
+
+            if isEscaping {
+                isEscaping = false
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if character == "\\" {
+                isEscaping = true
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if character == "(" {
+                nestedParentheses += 1
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if character == ")" {
+                if nestedParentheses == 0 {
+                    let pathEnd = trimTrailingMarkdownWhitespace(
+                        in: markdown,
+                        from: pathStart,
+                        to: index
+                    )
+                    guard pathEnd > pathStart else {
+                        return nil
+                    }
+
+                    let pathRange = pathStart..<pathEnd
+                    return ParsedMarkdownLinkDestination(
+                        path: String(markdown[pathRange]),
+                        range: NSRange(pathRange, in: markdown),
+                        nextIndex: markdown.index(after: index)
+                    )
+                }
+
+                nestedParentheses -= 1
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if nestedParentheses == 0, character.isWhitespace {
+                let pathEnd = trimTrailingMarkdownWhitespace(
+                    in: markdown,
+                    from: pathStart,
+                    to: index
+                )
+                guard pathEnd > pathStart else {
+                    return nil
+                }
+
+                guard let nextIndex = consumeOptionalMarkdownLinkTitleAndClosingParen(
+                    in: markdown,
+                    startingAt: index
+                ) else {
+                    return nil
+                }
+
+                let pathRange = pathStart..<pathEnd
+                return ParsedMarkdownLinkDestination(
+                    path: String(markdown[pathRange]),
+                    range: NSRange(pathRange, in: markdown),
+                    nextIndex: nextIndex
+                )
+            }
+
+            index = markdown.index(after: index)
+        }
+
+        return nil
+    }
+
+    private static func consumeOptionalMarkdownLinkTitleAndClosingParen(
+        in markdown: String,
+        startingAt startIndex: String.Index
+    ) -> String.Index? {
+        var index = skipMarkdownWhitespace(in: markdown, from: startIndex)
+        guard index < markdown.endIndex else {
+            return nil
+        }
+
+        if markdown[index] == ")" {
+            return markdown.index(after: index)
+        }
+
+        let delimiter = markdown[index]
+        guard delimiter == "\"" || delimiter == "'" else {
+            return nil
+        }
+
+        index = markdown.index(after: index)
+        var isEscaping = false
+
+        while index < markdown.endIndex {
+            let character = markdown[index]
+
+            if isEscaping {
+                isEscaping = false
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if character == "\\" {
+                isEscaping = true
+                index = markdown.index(after: index)
+                continue
+            }
+
+            if character == delimiter {
+                index = markdown.index(after: index)
+                index = skipMarkdownWhitespace(in: markdown, from: index)
+                guard index < markdown.endIndex, markdown[index] == ")" else {
+                    return nil
+                }
+
+                return markdown.index(after: index)
+            }
+
+            index = markdown.index(after: index)
+        }
+
+        return nil
+    }
+
+    private static func skipMarkdownWhitespace(
+        in markdown: String,
+        from startIndex: String.Index
+    ) -> String.Index {
+        var index = startIndex
+
+        while index < markdown.endIndex, markdown[index].isWhitespace {
+            index = markdown.index(after: index)
+        }
+
+        return index
+    }
+
+    private static func trimTrailingMarkdownWhitespace(
+        in markdown: String,
+        from startIndex: String.Index,
+        to endIndex: String.Index
+    ) -> String.Index {
+        var trimmedEnd = endIndex
+
+        while trimmedEnd > startIndex {
+            let previous = markdown.index(before: trimmedEnd)
+            guard markdown[previous].isWhitespace else {
+                break
+            }
+
+            trimmedEnd = previous
+        }
+
+        return trimmedEnd
     }
 
     private static func imagePathExtension(originalFilename: String, mimeType: String) -> String {

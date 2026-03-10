@@ -1234,9 +1234,9 @@ private struct WindowAccessor: NSViewRepresentable {
 
 /*
  Info.plist 说明：
- 1. 当前工程启用了 Xcode 自动生成 Info.plist（project.pbxproj 中为 GENERATE_INFOPLIST_FILE = YES），
-    这个 SwiftUI App 不需要为 hidden title bar 额外增加 plist 键。
- 2. 若你想改成手写 Info.plist，也不需要添加旧式 AppKit 生命周期键；继续使用 @main + App protocol 即可。
+ 1. 当前工程使用手写 Info.plist，主要是为了声明自定义的 workspace drag UTI
+    `com.markdown.workspace-items`。
+ 2. 这个 SwiftUI App 仍然使用 `@main + App protocol`，不需要补旧式 AppKit 生命周期键。
  3. 是否可用“最新 macOS 特性”主要由 Target 的 Deployment Target 决定，而不是 Info.plist。
     需要时在 Xcode 的 Target > General > Minimum Deployments 中设置即可。
  */

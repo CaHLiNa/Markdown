@@ -26,4 +26,41 @@ final class MarkdownFileServiceTests: XCTestCase {
 
         XCTAssertEqual(loadedMarkdown, markdown, "Round-trip markdown content mismatch")
     }
+
+    func testRenamedMarkdownURLAppendsMarkdownExtensionWhenNameContainsDots() {
+        let originalURL = URL(fileURLWithPath: "/tmp/note.md")
+
+        let renamedURL = MarkdownFileService.renamedMarkdownURL(from: originalURL, to: "v1.0.0")
+
+        XCTAssertEqual(
+            renamedURL.lastPathComponent,
+            "v1.0.0.md",
+            "Expected markdown renames without a supported Markdown extension to keep the .md suffix."
+        )
+    }
+
+    func testRenamedMarkdownURLKeepsSupportedMarkdownExtension() {
+        let originalURL = URL(fileURLWithPath: "/tmp/note.md")
+
+        let renamedURL = MarkdownFileService.renamedMarkdownURL(from: originalURL, to: "archive.markdown")
+
+        XCTAssertEqual(
+            renamedURL.lastPathComponent,
+            "archive.markdown",
+            "Expected supported Markdown extensions to be preserved during rename."
+        )
+    }
+
+    func testRelativePathHandlesRootDirectory() {
+        let rootDirectoryURL = URL(fileURLWithPath: "/", isDirectory: true)
+        let fileURL = URL(fileURLWithPath: "/tmp/example.png")
+
+        let relativePath = MarkdownFileService.relativePath(of: fileURL, relativeToDirectory: rootDirectoryURL)
+
+        XCTAssertEqual(
+            relativePath,
+            "tmp/example.png",
+            "Expected relative paths from the file-system root to avoid a double-slash prefix."
+        )
+    }
 }

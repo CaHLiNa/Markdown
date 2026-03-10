@@ -250,7 +250,7 @@ enum EditorWorkspaceTreeBuilder {
         return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
     }
 
-    private static func itemIDs(for node: EditorWorkspaceNode) -> [String] {
+    nonisolated private static func itemIDs(for node: EditorWorkspaceNode) -> [String] {
         [node.id] + node.children.flatMap(itemIDs(for:))
     }
 }

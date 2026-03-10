@@ -118,4 +118,52 @@ describe('editor-bridge', () => {
     expect(editor.loadMarkdown).toHaveBeenCalledTimes(1)
     expect(editor.loadMarkdown).toHaveBeenCalledWith('third')
   })
+
+  it('coalesces interleaved state updates before the editor is attached', () => {
+    const handlers: {
+      receiveMarkdown?: (text: string) => void
+      runCommand?: (command: string) => boolean
+    } = {}
+    const applyAppearance = vi.fn()
+
+    const bridge = createEditorBridge({
+      postMarkdownToNative: vi.fn(),
+      applyAppearance,
+      installNativeBridge(nextReceiveMarkdown, nextRunCommand) {
+        handlers.receiveMarkdown = nextReceiveMarkdown
+        handlers.runCommand = nextRunCommand
+      }
+    })
+
+    bridge.install()
+    if (!handlers.receiveMarkdown) {
+      throw new Error('native bridge handlers were not installed')
+    }
+    applyAppearance.mockClear()
+
+    handlers.receiveMarkdown('first')
+    window.setEditorAppearance?.({ theme: 'sepia' })
+    handlers.receiveMarkdown('second')
+    window.setEditorAppearance?.({ theme: 'dark' })
+
+    const editor = createEditorDouble()
+    bridge.attachEditor(editor)
+
+    expect(bridge.currentMarkdown).toBe('second')
+    expect(bridge.currentAppearance.theme).toBe('dark')
+    expect(editor.loadMarkdown).toHaveBeenCalledTimes(1)
+    expect(editor.loadMarkdown).toHaveBeenCalledWith('second')
+    expect(editor.setPresentation).toHaveBeenCalledTimes(1)
+    expect(editor.setPresentation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        theme: 'dark'
+      })
+    )
+    expect(applyAppearance).toHaveBeenCalledTimes(1)
+    expect(applyAppearance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        theme: 'dark'
+      })
+    )
+  })
 })
