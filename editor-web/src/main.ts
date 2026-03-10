@@ -96,6 +96,7 @@ window.addEventListener('beforeunload', () => {
 
 const bootEditor = async () => {
   setEditorDebugPhase('boot-start')
+  const editorSessionID = bridge.beginEditorSession()
 
   editor = await createMarkdownEditor({
     root: app,
@@ -110,13 +111,13 @@ const bootEditor = async () => {
     },
     persistImageAsset: persistImageAssetInNative,
     onMarkdownChange(markdown) {
-      bridge.handleEditorMarkdownChange(markdown)
+      bridge.handleEditorMarkdownChange(markdown, editorSessionID)
     }
   })
 
   setEditorDebugPhase('editor-created')
   editor.setDocumentBaseURL(currentDocumentBaseURL)
-  bridge.attachEditor(editor)
+  bridge.attachEditor(editor, editorSessionID)
   setEditorDebugPhase('bridge-attached')
   postEditorReadyToNative()
   setEditorDebugPhase('ready-posted')

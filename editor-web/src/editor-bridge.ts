@@ -90,10 +90,11 @@ const renderFallbackHTML = (markdown: string) => {
 export type EditorBridgeController = {
   readonly currentMarkdown: string
   readonly currentAppearance: EditorPresentation
+  beginEditorSession: () => number
   install: () => void
-  attachEditor: (editor: MarkdownEditor) => void
-  detachEditor: () => void
-  handleEditorMarkdownChange: (markdown: string) => void
+  attachEditor: (editor: MarkdownEditor, sessionID: number) => void
+  detachEditor: (sessionID?: number) => void
+  handleEditorMarkdownChange: (markdown: string, sessionID?: number) => void
   flush: () => void
   destroy: () => void
   getRenderedHTML: () => string
@@ -109,6 +110,8 @@ export const createEditorBridge = ({
   let markdown = ''
   let appearance: EditorPresentation = { ...defaultEditorPresentation }
   let queue: QueuedBridgeAction[] = []
+  let nextEditorSessionID = 1
+  let activeEditorSessionID: number | null = null
   const nativeMarkdownSync: NativeMarkdownSync = createNativeMarkdownSync((nextMarkdown) => {
     postMarkdownToNative(nextMarkdown)
   })
@@ -217,6 +220,13 @@ export const createEditorBridge = ({
     get currentAppearance() {
       return appearance
     },
+    beginEditorSession() {
+      const sessionID = nextEditorSessionID
+      nextEditorSessionID += 1
+      activeEditorSessionID = sessionID
+      nativeMarkdownSync.reset()
+      return sessionID
+    },
     install() {
       installNativeBridge(
         (text) => {
@@ -282,14 +292,29 @@ export const createEditorBridge = ({
 
       applyAppearance(appearance)
     },
-    attachEditor(nextEditor) {
+    attachEditor(nextEditor, sessionID) {
+      activeEditorSessionID = sessionID
       editor = nextEditor
       flushQueue()
     },
-    detachEditor() {
+    detachEditor(sessionID) {
+      if (sessionID != null && activeEditorSessionID != null && sessionID != activeEditorSessionID) {
+        return
+      }
+
+      nativeMarkdownSync.reset()
+      activeEditorSessionID = null
       editor = null
     },
-    handleEditorMarkdownChange(nextMarkdown) {
+    handleEditorMarkdownChange(nextMarkdown, sessionID) {
+      if (sessionID != null && activeEditorSessionID != null && sessionID != activeEditorSessionID) {
+        return
+      }
+
+      if (activeEditorSessionID == null && sessionID != null) {
+        return
+      }
+
       markdown = nextMarkdown
       nativeMarkdownSync.schedule(nextMarkdown)
     },
@@ -299,6 +324,7 @@ export const createEditorBridge = ({
     destroy() {
       queue = []
       nativeMarkdownSync.destroy()
+      activeEditorSessionID = null
       editor = null
     },
     getRenderedHTML,

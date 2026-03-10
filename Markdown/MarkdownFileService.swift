@@ -402,10 +402,14 @@ enum MarkdownFileService {
     static func renderedHTMLDocument(
         title: String,
         bodyHTML: String,
-        theme: MarkdownRenderedTheme = .light
+        theme: MarkdownRenderedTheme = .light,
+        baseURL: URL? = nil
     ) -> String {
         let escapedTitle = htmlEscaped(title)
         let palette = exportPalette(for: theme)
+        let optionalBaseElement = baseURL.map {
+            "  <base href=\"\(htmlEscaped($0.absoluteString))\">\n"
+        } ?? ""
 
         return """
         <!doctype html>
@@ -413,7 +417,7 @@ enum MarkdownFileService {
         <head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>\(escapedTitle)</title>
+        \(optionalBaseElement)  <title>\(escapedTitle)</title>
           <style>
             :root {
               color-scheme: \(palette.colorScheme);
@@ -494,6 +498,14 @@ enum MarkdownFileService {
         </body>
         </html>
         """
+    }
+
+    static func fallbackRenderedHTMLBody(for markdown: String) -> String {
+        guard !markdown.isEmpty else {
+            return ""
+        }
+
+        return "<pre>\(htmlEscaped(markdown))</pre>"
     }
 
     static func markdownFileURLs(in folderURL: URL) throws -> [URL] {

@@ -25,6 +25,42 @@ enum EditorWebViewControllerError: LocalizedError {
     }
 }
 
+struct EditorReadyMessagePayload: Equatable {
+    let generation: Int
+
+    init?(body: Any) {
+        guard
+            let payload = body as? [String: Any],
+            payload["ready"] as? Bool == true,
+            let generation = payload["generation"] as? Int,
+            generation >= 0
+        else {
+            return nil
+        }
+
+        self.generation = generation
+    }
+}
+
+struct EditorContentChangedMessagePayload: Equatable {
+    let generation: Int
+    let markdown: String
+
+    init?(body: Any) {
+        guard
+            let payload = body as? [String: Any],
+            let generation = payload["generation"] as? Int,
+            generation >= 0,
+            let markdown = payload["markdown"] as? String
+        else {
+            return nil
+        }
+
+        self.generation = generation
+        self.markdown = markdown
+    }
+}
+
 struct EditorWebView: NSViewRepresentable {
     static let contentChangedMessageName = "editorContentChanged"
     static let readyMessageName = "editorReady"
@@ -78,20 +114,6 @@ struct EditorWebView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: Self.openLinkMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.consoleMessageName)
         configuration.userContentController.add(context.coordinator, name: Self.contextMenuRequestMessageName)
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: Self.consoleForwardingScript,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            )
-        )
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: Self.contextMenuInterceptionScript,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            )
-        )
 
         let webView = ContextMenuWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -288,6 +310,40 @@ struct EditorWebView: NSViewRepresentable {
       }, true);
     })();
     """
+
+    static func generationBootstrapScript(for generation: Int) -> String {
+        """
+        window.__editorGeneration = \(max(0, generation));
+        """
+    }
+
+    static func configureUserScripts(
+        in userContentController: WKUserContentController,
+        generation: Int
+    ) {
+        userContentController.removeAllUserScripts()
+        userContentController.addUserScript(
+            WKUserScript(
+                source: consoleForwardingScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+        userContentController.addUserScript(
+            WKUserScript(
+                source: contextMenuInterceptionScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+        userContentController.addUserScript(
+            WKUserScript(
+                source: generationBootstrapScript(for: generation),
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+    }
 
     struct ContextMenuSystemItemDefinition {
         let title: String
@@ -577,14 +633,36 @@ struct EditorWebView: NSViewRepresentable {
     }
 
     struct PageLoadState {
-        private(set) var isReady = false
+        private(set) var currentGeneration = 0
+        private(set) var readyGeneration: Int?
 
-        mutating func prepareForPageLoad() {
-            isReady = false
+        var isReady: Bool {
+            readyGeneration == currentGeneration && currentGeneration > 0
         }
 
-        mutating func markReady() {
-            isReady = true
+        @discardableResult
+        mutating func prepareForPageLoad() -> Int {
+            currentGeneration += 1
+            readyGeneration = nil
+            return currentGeneration
+        }
+
+        mutating func resetReadyState() {
+            readyGeneration = nil
+        }
+
+        @discardableResult
+        mutating func markReady(for generation: Int) -> Bool {
+            guard generation == currentGeneration else {
+                return false
+            }
+
+            readyGeneration = generation
+            return true
+        }
+
+        func acceptsMessage(for generation: Int) -> Bool {
+            generation == currentGeneration && readyGeneration == generation
         }
     }
 
@@ -596,17 +674,19 @@ struct EditorWebView: NSViewRepresentable {
 
     @MainActor
     final class Controller {
+        private struct ReadyWaiter {
+            let id: UUID
+            let timeoutWorkItem: DispatchWorkItem
+            let completion: (Result<WKWebView, Error>) -> Void
+        }
+
         private weak var webView: WKWebView?
         private var pageLoadState = PageLoadState()
         private var pendingScripts: [PendingScript] = []
+        private var readyWaiters: [UUID: ReadyWaiter] = [:]
 
         func attach(webView: WKWebView) {
-            let isNewWebView = self.webView !== webView
             self.webView = webView
-
-            if isNewWebView {
-                pageLoadState.prepareForPageLoad()
-            }
 
             flushPendingScriptsIfPossible()
         }
@@ -617,21 +697,42 @@ struct EditorWebView: NSViewRepresentable {
             }
 
             self.webView = nil
-            pageLoadState.prepareForPageLoad()
+            pageLoadState.resetReadyState()
             pendingScripts.removeAll()
+            resolveReadyWaiters(with: .failure(EditorWebViewControllerError.pageNotReady))
         }
 
-        func prepareForPageLoad() {
-            pageLoadState.prepareForPageLoad()
+        @discardableResult
+        func prepareForPageLoad() -> Int {
+            resolveReadyWaiters(with: .failure(EditorWebViewControllerError.pageNotReady))
+            return pageLoadState.prepareForPageLoad()
         }
 
-        func markPageReady() {
-            pageLoadState.markReady()
+        @discardableResult
+        func markPageReady(for generation: Int) -> Bool {
+            guard pageLoadState.markReady(for: generation) else {
+                return false
+            }
+
             flushPendingScriptsIfPossible()
+            resolveReadyWaitersWithCurrentWebView()
+            return true
+        }
+
+        func acceptsMessage(for generation: Int) -> Bool {
+            pageLoadState.acceptsMessage(for: generation)
+        }
+
+        var currentGeneration: Int {
+            pageLoadState.currentGeneration
         }
 
         var debugIsPageReady: Bool {
             pageLoadState.isReady
+        }
+
+        var debugCurrentGeneration: Int {
+            pageLoadState.currentGeneration
         }
 
         func evaluateJavaScript(
@@ -763,7 +864,7 @@ struct EditorWebView: NSViewRepresentable {
             evaluateJavaScript(script) { result in
                 switch result {
                 case .success(let value):
-                    guard let html = value as? String, !html.isEmpty else {
+                    guard let html = value as? String else {
                         completion(.failure(EditorWebViewControllerError.renderedContentUnavailable))
                         return
                     }
@@ -776,18 +877,20 @@ struct EditorWebView: NSViewRepresentable {
         }
 
         func exportPDF(completion: @escaping (Result<Data, Error>) -> Void) {
-            guard let webView, pageLoadState.isReady else {
-                completion(.failure(EditorWebViewControllerError.pageNotReady))
-                return
-            }
-
-            let configuration = WKPDFConfiguration()
-            configuration.rect = webView.bounds
-
-            webView.createPDF(configuration: configuration) { result in
+            withReadyWebView { result in
                 switch result {
-                case .success(let data):
-                    completion(.success(data))
+                case .success(let webView):
+                    let configuration = WKPDFConfiguration()
+                    configuration.rect = webView.bounds
+
+                    webView.createPDF(configuration: configuration) { pdfResult in
+                        switch pdfResult {
+                        case .success(let data):
+                            completion(.success(data))
+                        case .failure(let error):
+                            completion(.failure(error))
+                        }
+                    }
                 case .failure(let error):
                     completion(.failure(error))
                 }
@@ -822,6 +925,60 @@ struct EditorWebView: NSViewRepresentable {
 
                     pendingScript.completion?(.success(result))
                 }
+            }
+        }
+
+        private func withReadyWebView(
+            timeout: TimeInterval = 1.5,
+            completion: @escaping (Result<WKWebView, Error>) -> Void
+        ) {
+            guard let webView else {
+                completion(.failure(EditorWebViewControllerError.pageNotReady))
+                return
+            }
+
+            guard !pageLoadState.isReady else {
+                completion(.success(webView))
+                return
+            }
+
+            let waiterID = UUID()
+            let timeoutWorkItem = DispatchWorkItem { [weak self] in
+                guard let waiter = self?.readyWaiters.removeValue(forKey: waiterID) else {
+                    return
+                }
+
+                waiter.completion(.failure(EditorWebViewControllerError.pageNotReady))
+            }
+
+            readyWaiters[waiterID] = ReadyWaiter(
+                id: waiterID,
+                timeoutWorkItem: timeoutWorkItem,
+                completion: completion
+            )
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
+        }
+
+        private func resolveReadyWaitersWithCurrentWebView() {
+            guard let webView else {
+                resolveReadyWaiters(with: .failure(EditorWebViewControllerError.pageNotReady))
+                return
+            }
+
+            resolveReadyWaiters(with: .success(webView))
+        }
+
+        private func resolveReadyWaiters(with result: Result<WKWebView, Error>) {
+            guard !readyWaiters.isEmpty else {
+                return
+            }
+
+            let waiters = readyWaiters.values
+            readyWaiters.removeAll()
+
+            for waiter in waiters {
+                waiter.timeoutWorkItem.cancel()
+                waiter.completion(result)
             }
         }
     }
@@ -965,10 +1122,6 @@ struct EditorWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             NSLog("[EditorWebView] didStartProvisionalNavigation url=%@", webView.url?.absoluteString ?? "<nil>")
-            prepareForPageLoad(
-                in: webView,
-                resetInlineFallbackAttempt: pageLoadSource != .inlineFallback
-            )
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -980,24 +1133,29 @@ struct EditorWebView: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            if
-                message.name == EditorWebView.contentChangedMessageName,
-                let content = message.body as? String
+            if message.name == EditorWebView.contentChangedMessageName,
+               let payload = EditorContentChangedMessagePayload(body: message.body),
+               parent.controller.acceptsMessage(for: payload.generation)
             {
-                synchronizedPageState.markdown = content
+                synchronizedPageState.markdown = payload.markdown
 
-                if parent.markdown != content {
-                    parent.markdown = content
+                if parent.markdown != payload.markdown {
+                    parent.markdown = payload.markdown
                 }
 
-                parent.onContentChanged?(content)
+                parent.onContentChanged?(payload.markdown)
                 return
             }
 
-            if message.name == EditorWebView.readyMessageName {
+            if
+                message.name == EditorWebView.readyMessageName,
+                let payload = EditorReadyMessagePayload(body: message.body)
+            {
                 didReceiveEditorReady = true
                 cancelReadyFallback()
-                parent.controller.markPageReady()
+                guard parent.controller.markPageReady(for: payload.generation) else {
+                    return
+                }
                 syncMarkdownToJavaScript()
                 syncDocumentBaseURLToJavaScript()
                 syncPresentationToJavaScript()
@@ -1188,7 +1346,11 @@ struct EditorWebView: NSViewRepresentable {
 
             didReceiveEditorReady = false
             synchronizedPageState.resetForPageLoad()
-            parent.controller.prepareForPageLoad()
+            let generation = parent.controller.prepareForPageLoad()
+            EditorWebView.configureUserScripts(
+                in: webView.configuration.userContentController,
+                generation: generation
+            )
             cancelReadyFallback()
             scheduleReadyFallback(for: webView)
         }

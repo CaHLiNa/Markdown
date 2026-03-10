@@ -113,10 +113,54 @@ enum EditorUnsavedChangesDecision {
     case cancel
 }
 
+struct EditorSynchronizedSnapshot: Equatable {
+    let markdown: String
+    let renderedHTML: String?
+    let documentBaseURL: URL?
+}
+
+@MainActor
+private final class DeferredActionScheduler {
+    private let delay: TimeInterval
+    private let action: @MainActor () -> Void
+    private var pendingWorkItem: DispatchWorkItem?
+
+    init(delay: TimeInterval, action: @escaping @MainActor () -> Void) {
+        self.delay = delay
+        self.action = action
+    }
+
+    func schedule() {
+        pendingWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [action] in
+            Task { @MainActor in
+                action()
+            }
+        }
+
+        pendingWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    func flush() {
+        if let pendingWorkItem {
+            self.pendingWorkItem = nil
+            pendingWorkItem.cancel()
+        }
+        action()
+    }
+
+    func cancel() {
+        pendingWorkItem?.cancel()
+        pendingWorkItem = nil
+    }
+}
+
 @MainActor
 final class EditorDocumentController: ObservableObject {
     @Published private(set) var tabs: [EditorTab] {
-        didSet { persistEditorSession() }
+        didSet { scheduleSessionPersistence() }
     }
     @Published var activeTabID: UUID? {
         didSet {
@@ -124,22 +168,22 @@ final class EditorDocumentController: ObservableObject {
                 selectActiveMatch: isDocumentSearchPresented,
                 resetToFirst: true
             )
-            persistEditorSession()
+            scheduleSessionPersistence()
         }
     }
     @Published private(set) var folderURL: URL? {
-        didSet { persistEditorSession() }
+        didSet { scheduleSessionPersistence() }
     }
     @Published private(set) var folderFiles: [EditorWorkspaceFile] = []
     @Published private(set) var workspaceTree: [EditorWorkspaceNode] = []
     @Published var workspaceSearchQuery = "" {
-        didSet { refreshWorkspaceSearchResults() }
+        didSet { scheduleWorkspaceSearchRefresh() }
     }
     @Published var workspaceSearchCaseSensitive = false {
-        didSet { refreshWorkspaceSearchResults() }
+        didSet { scheduleWorkspaceSearchRefresh() }
     }
     @Published var workspaceSearchUseRegularExpression = false {
-        didSet { refreshWorkspaceSearchResults() }
+        didSet { scheduleWorkspaceSearchRefresh() }
     }
     @Published private(set) var workspaceSearchResults: [EditorWorkspaceSearchResult] = []
     @Published private(set) var workspaceSearchErrorDescription: String?
@@ -148,167 +192,167 @@ final class EditorDocumentController: ObservableObject {
     @Published private(set) var recentFiles: [URL]
     @Published var sidebarPane: EditorSidebarPane = .files
     @Published var appearanceMode: EditorAppearanceMode {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var htmlExportTheme: MarkdownExportTheme {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var isSidebarVisible: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var isFocusModeEnabled: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var isTypewriterModeEnabled: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var isTabStripVisible: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var editorFontFamily: String {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var editorFontSize: Double {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var editorLineHeight: Double {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var editorPageWidth: String {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var codeFontFamily: String {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var codeFontSize: Double {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var editorIndentWidth: Int {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var useSpacesForIndent: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var isSpellCheckEnabled: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var alwaysShowWordCount: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var readingSpeedWPM: Int {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var outlineVisibilityMode: EditorOutlineVisibilityMode {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var interfaceDensity: EditorInterfaceDensity {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var imageCopyToAssetFolder: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var imageFolderMode: EditorImageFolderMode {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var imageCustomFolder: String {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var imageUseRelativePath: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var imagePreferDotSlash: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var imageAutoEncodeURL: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var imageRootURL: String {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var confirmDeleteImageFile: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var hideQuickInsertHint: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var autoPairBracket: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var autoPairMarkdownSyntax: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var autoPairQuote: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var enableTables: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var enableTaskList: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var enableStrikethrough: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var enableFootnotes: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var enableTOC: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var enableMath: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var enableMermaid: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var enableYAMLFrontMatter: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var defaultExportFormat: EditorExportFormat {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var exportDestinationMode: EditorExportDestinationMode {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var openExportedFile: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var revealExportedFileInFinder: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var pdfPaperSize: EditorPDFPaperSize {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var pdfMargin: Double {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var pdfPrintBackground: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var allowYAMLExportOverrides: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var startupBehavior: EditorStartupBehavior {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var recentFileLimit: Int {
         didSet {
             recentFiles = Array(recentFiles.prefix(recentFileLimit))
-            persistPreferences()
+            schedulePreferencesPersistence()
             Self.persistRecentFiles(recentFiles)
         }
     }
     @Published var alwaysConfirmUnsavedChanges: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var defaultDocumentExtension: EditorDocumentExtension {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var inheritWorkspaceOnNewWindow: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var linkOpenRequiresCommand: Bool {
-        didSet { persistPreferences() }
+        didSet { schedulePreferencesPersistence() }
     }
     @Published var isCommandPalettePresented = false
     @Published var commandPaletteQuery = ""
@@ -351,12 +395,28 @@ final class EditorDocumentController: ObservableObject {
     private var lastExportDirectoryURL: URL?
     private var lastSelectedWorkspaceItemID: String?
     private let workspaceMonitor = WorkspaceFileSystemMonitor()
+    private let persistPreferencesHandler: @MainActor (EditorPreferences) -> Void
+    private let persistEditorSessionHandler: @MainActor (PersistedEditorSession) -> Void
+    private var preferencesPersistenceScheduler: DeferredActionScheduler?
+    private var sessionPersistenceScheduler: DeferredActionScheduler?
+    private var workspaceSearchRefreshScheduler: DeferredActionScheduler?
+    private var persistenceSuspensionDepth = 1
+    private var pendingPreferencesPersistence = false
+    private var pendingSessionPersistence = false
+    private var pendingWorkspaceSearchRefresh = false
     var unsavedChangesDecisionHandler: ((EditorTab) -> EditorUnsavedChangesDecision)?
     var saveTabOverride: ((UUID, @escaping (Bool) -> Void) -> Void)?
     var currentEditorMarkdownOverride: ((@escaping (String) -> Void) -> Void)?
+    var renderedEditorHTMLOverride: ((@escaping (Result<String, Error>) -> Void) -> Void)?
 
-    init(markdown: String? = nil) {
+    init(
+        markdown: String? = nil,
+        persistPreferences: (@MainActor (EditorPreferences) -> Void)? = nil,
+        persistEditorSession: (@MainActor (PersistedEditorSession) -> Void)? = nil
+    ) {
         let preferences = Self.loadPreferences()
+        self.persistPreferencesHandler = persistPreferences ?? EditorDocumentController.persistPreferences
+        self.persistEditorSessionHandler = persistEditorSession ?? EditorDocumentController.persistEditorSession
         if let markdown {
             let initialTab = Self.makeUntitledTab(markdown: markdown, index: 1)
             self.tabs = [initialTab]
@@ -420,7 +480,9 @@ final class EditorDocumentController: ObservableObject {
         self.inheritWorkspaceOnNewWindow = preferences.inheritWorkspaceOnNewWindow
         self.linkOpenRequiresCommand = preferences.linkOpenRequiresCommand
         self.lastExportDirectoryURL = Self.loadLastExportDirectory()
+        configureDeferredSideEffects()
         restoreInitialSessionIfNeeded()
+        resumePersistence(flush: true)
     }
 
     deinit {
@@ -1370,18 +1432,19 @@ final class EditorDocumentController: ObservableObject {
             contentType: MarkdownFileService.htmlContentType
         )
 
-        editorController.renderedHTML { [weak self] result in
+        prepareSynchronizedEditorSnapshot { [weak self] result in
             Task { @MainActor in
                 guard let self else {
                     return
                 }
 
                 switch result {
-                case .success(let bodyHTML):
+                case .success(let snapshot):
                     let document = MarkdownFileService.renderedHTMLDocument(
                         title: self.currentTitle,
-                        bodyHTML: bodyHTML,
-                        theme: self.currentExportTheme
+                        bodyHTML: snapshot.renderedHTML ?? "",
+                        theme: self.currentExportTheme,
+                        baseURL: snapshot.documentBaseURL
                     )
 
                     do {
@@ -1423,19 +1486,32 @@ final class EditorDocumentController: ObservableObject {
             contentType: MarkdownFileService.pdfContentType
         )
 
-        editorController.exportPDF { [weak self] result in
+        prepareSynchronizedEditorSnapshot(includeRenderedHTML: false) { [weak self] snapshotResult in
             Task { @MainActor in
                 guard let self else {
                     return
                 }
 
-                switch result {
-                case .success(let data):
-                    do {
-                        try MarkdownFileService.writePDF(data, to: destinationURL)
-                        self.finalizeExport(at: destinationURL)
-                    } catch {
-                        self.presentError(error, title: "无法导出 PDF")
+                switch snapshotResult {
+                case .success:
+                    self.editorController.exportPDF { [weak self] result in
+                        Task { @MainActor in
+                            guard let self else {
+                                return
+                            }
+
+                            switch result {
+                            case .success(let data):
+                                do {
+                                    try MarkdownFileService.writePDF(data, to: destinationURL)
+                                    self.finalizeExport(at: destinationURL)
+                                } catch {
+                                    self.presentError(error, title: "无法导出 PDF")
+                                }
+                            case .failure(let error):
+                                self.presentError(error, title: "无法导出 PDF")
+                            }
+                        }
                     }
                 case .failure(let error):
                     self.presentError(error, title: "无法导出 PDF")
@@ -1566,7 +1642,17 @@ final class EditorDocumentController: ObservableObject {
 
     private func currentEditorMarkdown(completion: @escaping (String) -> Void) {
         if let currentEditorMarkdownOverride {
-            currentEditorMarkdownOverride(completion)
+            currentEditorMarkdownOverride { [weak self] markdown in
+                guard let self else {
+                    return
+                }
+
+                if self.currentMarkdown != markdown {
+                    self.currentMarkdown = markdown
+                }
+
+                completion(markdown)
+            }
             return
         }
 
@@ -1584,6 +1670,70 @@ final class EditorDocumentController: ObservableObject {
                     completion(markdown)
                 case .failure:
                     completion(self.currentMarkdown)
+                }
+            }
+        }
+    }
+
+    private func currentRenderedHTML(
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        if let renderedEditorHTMLOverride {
+            renderedEditorHTMLOverride(completion)
+            return
+        }
+
+        editorController.renderedHTML(completion: completion)
+    }
+
+    func prepareSynchronizedEditorSnapshot(
+        includeRenderedHTML: Bool = true,
+        completion: @escaping (Result<EditorSynchronizedSnapshot, Error>) -> Void
+    ) {
+        currentEditorMarkdown { [weak self] markdown in
+            guard let self else {
+                return
+            }
+
+            let documentBaseURL = self.currentFileURL
+
+            guard includeRenderedHTML else {
+                completion(
+                    .success(
+                        EditorSynchronizedSnapshot(
+                            markdown: markdown,
+                            renderedHTML: nil,
+                            documentBaseURL: documentBaseURL
+                        )
+                    )
+                )
+                return
+            }
+
+            self.currentRenderedHTML { result in
+                Task { @MainActor in
+                    switch result {
+                    case .success(let renderedHTML):
+                        completion(
+                            .success(
+                                EditorSynchronizedSnapshot(
+                                    markdown: markdown,
+                                    renderedHTML: renderedHTML,
+                                    documentBaseURL: documentBaseURL
+                                )
+                            )
+                        )
+                    case .failure:
+                        completion(
+                            .success(
+                                EditorSynchronizedSnapshot(
+                                    markdown: markdown,
+                                    renderedHTML: MarkdownFileService.fallbackRenderedHTMLBody(for: markdown),
+                                    documentBaseURL: documentBaseURL
+                                )
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -2104,6 +2254,7 @@ final class EditorDocumentController: ObservableObject {
     }
 
     private func refreshWorkspaceSearchResults() {
+        pendingWorkspaceSearchRefresh = false
         let query = workspaceSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             workspaceSearchResults = []
@@ -2248,8 +2399,82 @@ final class EditorDocumentController: ObservableObject {
         }
     }
 
-    private func persistPreferences() {
-        Self.persistPreferences(currentPreferences)
+    private func configureDeferredSideEffects() {
+        preferencesPersistenceScheduler = DeferredActionScheduler(delay: 0.15) { [weak self] in
+            guard let self, self.pendingPreferencesPersistence else {
+                return
+            }
+
+            self.pendingPreferencesPersistence = false
+            self.persistPreferencesHandler(self.currentPreferences)
+        }
+
+        sessionPersistenceScheduler = DeferredActionScheduler(delay: 0.15) { [weak self] in
+            guard let self, self.pendingSessionPersistence else {
+                return
+            }
+
+            self.pendingSessionPersistence = false
+            self.persistEditorSessionNow()
+        }
+
+        workspaceSearchRefreshScheduler = DeferredActionScheduler(delay: 0.1) { [weak self] in
+            guard let self, self.pendingWorkspaceSearchRefresh else {
+                return
+            }
+
+            self.pendingWorkspaceSearchRefresh = false
+            self.refreshWorkspaceSearchResults()
+        }
+    }
+
+    private func schedulePreferencesPersistence() {
+        pendingPreferencesPersistence = true
+
+        guard persistenceSuspensionDepth == 0 else {
+            return
+        }
+
+        preferencesPersistenceScheduler?.schedule()
+    }
+
+    private func scheduleSessionPersistence() {
+        pendingSessionPersistence = true
+
+        guard persistenceSuspensionDepth == 0 else {
+            return
+        }
+
+        sessionPersistenceScheduler?.schedule()
+    }
+
+    private func scheduleWorkspaceSearchRefresh() {
+        pendingWorkspaceSearchRefresh = true
+        workspaceSearchRefreshScheduler?.schedule()
+    }
+
+    private func suspendPersistence() {
+        persistenceSuspensionDepth += 1
+    }
+
+    private func resumePersistence(flush: Bool) {
+        persistenceSuspensionDepth = max(0, persistenceSuspensionDepth - 1)
+
+        guard persistenceSuspensionDepth == 0, flush else {
+            return
+        }
+
+        flushDeferredSideEffects()
+    }
+
+    private func flushDeferredSideEffects() {
+        preferencesPersistenceScheduler?.flush()
+        sessionPersistenceScheduler?.flush()
+        workspaceSearchRefreshScheduler?.flush()
+    }
+
+    func debugFlushDeferredSideEffects() {
+        flushDeferredSideEffects()
     }
 
     private func restoreInitialSessionIfNeeded() {
@@ -2260,6 +2485,9 @@ final class EditorDocumentController: ObservableObject {
         guard let session = Self.loadPersistedEditorSession() else {
             return
         }
+
+        suspendPersistence()
+        defer { resumePersistence(flush: true) }
 
         if let folderPath = session.folderPath {
             let restoredFolderURL = URL(fileURLWithPath: folderPath)
@@ -2290,13 +2518,13 @@ final class EditorDocumentController: ObservableObject {
         activeTabID = restoredActiveTabID
     }
 
-    private func persistEditorSession() {
+    private func persistEditorSessionNow() {
         let session = PersistedEditorSession(
             folderPath: folderURL?.standardizedFileURL.path,
             openFilePaths: tabs.compactMap { $0.fileURL?.standardizedFileURL.path },
             activeFilePath: activeTab?.fileURL?.standardizedFileURL.path
         )
-        Self.persistEditorSession(session)
+        persistEditorSessionHandler(session)
     }
 
     private func decideUnsavedChanges(for tab: EditorTab) -> EditorUnsavedChangesDecision {
@@ -2478,7 +2706,7 @@ final class EditorDocumentController: ObservableObject {
     }
     private static let defaultMarkdown = ""
 
-    private struct PersistedEditorSession: Codable {
+    struct PersistedEditorSession: Codable, Equatable {
         let folderPath: String?
         let openFilePaths: [String]
         let activeFilePath: String?

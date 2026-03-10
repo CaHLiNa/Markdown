@@ -44,4 +44,18 @@ final class MarkdownFileServiceExportTests: XCTestCase {
         XCTAssertTrue(document.contains("color-scheme: dark;"), "Expected dark export theme to set dark color-scheme.")
         XCTAssertTrue(document.contains("background: #111318;"), "Expected dark export theme to use the dark background palette.")
     }
+
+    func testRenderedHTMLDocumentIncludesBaseURLWhenProvided() {
+        let document = MarkdownFileService.renderedHTMLDocument(
+            title: "带资源基准",
+            bodyHTML: "<img src=\"assets/test.png\">",
+            theme: .light,
+            baseURL: URL(fileURLWithPath: "/tmp/notes.md")
+        )
+
+        XCTAssertTrue(
+            document.contains("<base href=\"file:///tmp/notes.md\">"),
+            "Expected exported HTML to include a base URL so relative assets resolve consistently after export."
+        )
+    }
 }

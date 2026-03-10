@@ -63,7 +63,8 @@ describe('editor-bridge', () => {
     expect(handlers.runCommand('bold')).toBe(true)
 
     const editor = createEditorDouble()
-    bridge.attachEditor(editor)
+    const sessionID = bridge.beginEditorSession()
+    bridge.attachEditor(editor, sessionID)
 
     expect(editor.loadMarkdown).toHaveBeenCalledWith('before-ready')
     expect(editor.setPresentation).toHaveBeenCalledTimes(1)
@@ -112,7 +113,8 @@ describe('editor-bridge', () => {
     handlers.receiveMarkdown('third')
 
     const editor = createEditorDouble()
-    bridge.attachEditor(editor)
+    const sessionID = bridge.beginEditorSession()
+    bridge.attachEditor(editor, sessionID)
 
     expect(bridge.currentMarkdown).toBe('third')
     expect(editor.loadMarkdown).toHaveBeenCalledTimes(1)
@@ -147,7 +149,8 @@ describe('editor-bridge', () => {
     window.setEditorAppearance?.({ theme: 'dark' })
 
     const editor = createEditorDouble()
-    bridge.attachEditor(editor)
+    const sessionID = bridge.beginEditorSession()
+    bridge.attachEditor(editor, sessionID)
 
     expect(bridge.currentMarkdown).toBe('second')
     expect(bridge.currentAppearance.theme).toBe('dark')
@@ -165,5 +168,27 @@ describe('editor-bridge', () => {
         theme: 'dark'
       })
     )
+  })
+
+  it('ignores markdown changes from stale detached editor sessions', () => {
+    const postMarkdownToNative = vi.fn()
+    const bridge = createEditorBridge({
+      postMarkdownToNative,
+      applyAppearance: vi.fn(),
+      installNativeBridge() {}
+    })
+
+    const staleSessionID = bridge.beginEditorSession()
+    bridge.handleEditorMarkdownChange('stale markdown', staleSessionID)
+    bridge.detachEditor(staleSessionID)
+
+    const activeSessionID = bridge.beginEditorSession()
+    bridge.handleEditorMarkdownChange('fresh markdown', staleSessionID)
+    bridge.handleEditorMarkdownChange('current markdown', activeSessionID)
+    bridge.flush()
+
+    expect(postMarkdownToNative).toHaveBeenCalledTimes(1)
+    expect(postMarkdownToNative).toHaveBeenCalledWith('current markdown')
+    expect(bridge.currentMarkdown).toBe('current markdown')
   })
 })

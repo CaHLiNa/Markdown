@@ -1,9 +1,19 @@
+type EditorContentChangedPayload = {
+  generation: number
+  markdown: string
+}
+
+type EditorReadyPayload = {
+  ready: true
+  generation: number
+}
+
 type EditorContentChangedHandler = {
-  postMessage: (markdown: string) => void | Promise<void>
+  postMessage: (payload: EditorContentChangedPayload) => void | Promise<void>
 }
 
 type EditorReadyHandler = {
-  postMessage: (payload: { ready: true }) => void | Promise<void>
+  postMessage: (payload: EditorReadyPayload) => void | Promise<void>
 }
 
 type EditorImageAssetRequest = {
@@ -46,6 +56,7 @@ declare global {
     getRenderedHTML?: () => string
     setEditorAppearance?: (appearance: EditorAppearance) => void
     setEditorDocumentBaseURL?: (url: unknown) => void
+    __editorGeneration?: number
     webkit?: {
       messageHandlers?: {
         editorContentChanged?: EditorContentChangedHandler
@@ -69,6 +80,13 @@ let nextImageAssetRequestID = 1
 
 const normalizeMarkdown = (text: unknown): string => {
   return typeof text === 'string' ? text : ''
+}
+
+const readEditorGeneration = (): number => {
+  const generation = window.__editorGeneration
+  return typeof generation === 'number' && Number.isFinite(generation) && generation >= 0
+    ? Math.floor(generation)
+    : 0
 }
 
 const normalizeCommand = (command: unknown): string => {
@@ -104,7 +122,10 @@ export const postMarkdownToNative = (markdown: string) => {
   }
 
   try {
-    const result = handler.postMessage(markdown)
+    const result = handler.postMessage({
+      generation: readEditorGeneration(),
+      markdown
+    })
 
     if (result && typeof result === 'object' && 'catch' in result) {
       void (result as Promise<void>).catch((error: unknown) => {
@@ -124,7 +145,10 @@ export const postEditorReadyToNative = () => {
   }
 
   try {
-    const result = handler.postMessage({ ready: true })
+    const result = handler.postMessage({
+      ready: true,
+      generation: readEditorGeneration()
+    })
 
     if (result && typeof result === 'object' && 'catch' in result) {
       void (result as Promise<void>).catch((error: unknown) => {

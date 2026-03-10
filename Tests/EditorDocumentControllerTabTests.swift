@@ -164,6 +164,141 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         XCTAssertNil(String(data: savedData, encoding: .utf8), "Expected save to preserve the original non-UTF-8 encoding.")
     }
 
+    func testPrepareSynchronizedEditorSnapshotUsesLatestEditorMarkdownAndBaseURL() {
+        resetPersistentState()
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        XCTAssertNoThrow(try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true))
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let fileURL = temporaryDirectory.appendingPathComponent("export.md")
+        XCTAssertNoThrow(try "# Initial".write(to: fileURL, atomically: true, encoding: .utf8))
+
+        let controller = makeControllerRestoringOpenFile(at: fileURL, workspaceURL: temporaryDirectory)
+        controller.currentEditorMarkdownOverride = { completion in
+            completion("# Updated")
+        }
+        controller.renderedEditorHTMLOverride = { completion in
+            completion(.success("<h1>Updated</h1>"))
+        }
+
+        let expectation = expectation(description: "snapshot")
+        var capturedSnapshot: EditorSynchronizedSnapshot?
+
+        controller.prepareSynchronizedEditorSnapshot { result in
+            if case .success(let snapshot) = result {
+                capturedSnapshot = snapshot
+            }
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: 1.0)
+
+        XCTAssertEqual(capturedSnapshot?.markdown, "# Updated")
+        XCTAssertEqual(capturedSnapshot?.renderedHTML, "<h1>Updated</h1>")
+        XCTAssertEqual(capturedSnapshot?.documentBaseURL, fileURL)
+        XCTAssertEqual(controller.currentMarkdown, "# Updated")
+    }
+
+    func testPrepareSynchronizedEditorSnapshotFallsBackToEscapedMarkdown() {
+        resetPersistentState()
+
+        let controller = EditorDocumentController()
+        controller.createUntitledDocument()
+        controller.currentEditorMarkdownOverride = { completion in
+            completion("line <one>")
+        }
+        controller.renderedEditorHTMLOverride = { completion in
+            completion(.failure(EditorWebViewControllerError.renderedContentUnavailable))
+        }
+
+        let expectation = expectation(description: "fallback snapshot")
+        var capturedSnapshot: EditorSynchronizedSnapshot?
+
+        controller.prepareSynchronizedEditorSnapshot { result in
+            if case .success(let snapshot) = result {
+                capturedSnapshot = snapshot
+            }
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: 1.0)
+
+        XCTAssertEqual(capturedSnapshot?.renderedHTML, "<pre>line &lt;one&gt;</pre>")
+        XCTAssertEqual(capturedSnapshot?.markdown, "line <one>")
+    }
+
+    func testPreferencePersistenceIsCoalescedAcrossMultipleChanges() {
+        resetPersistentState()
+
+        var persistedPreferences: [EditorPreferences] = []
+        let controller = EditorDocumentController(
+            persistPreferences: { persistedPreferences.append($0) },
+            persistEditorSession: { _ in }
+        )
+
+        controller.appearanceMode = .light
+        controller.isSidebarVisible = false
+        controller.isTypewriterModeEnabled = true
+        controller.debugFlushDeferredSideEffects()
+
+        XCTAssertEqual(
+            persistedPreferences.count,
+            1,
+            "Expected multiple preference mutations in the same burst to coalesce into a single persistence write."
+        )
+        XCTAssertEqual(persistedPreferences.last?.appearanceMode, .light)
+        XCTAssertEqual(persistedPreferences.last?.sidebarVisibility, false)
+        XCTAssertEqual(persistedPreferences.last?.typewriterMode, true)
+    }
+
+    func testRestoreLastSessionCoalescesSessionPersistence() {
+        resetPersistentState()
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        XCTAssertNoThrow(try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true))
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let fileURL = temporaryDirectory.appendingPathComponent("restored.md")
+        XCTAssertNoThrow(try "# Restored".write(to: fileURL, atomically: true, encoding: .utf8))
+
+        do {
+            let preferences = EditorPreferences(appearanceMode: .followSystem, startupBehavior: .restoreLastSession)
+            let preferencesData = try JSONEncoder().encode(preferences)
+            UserDefaults.standard.set(preferencesData, forKey: "editorPreferences")
+
+            let sessionObject: [String: Any] = [
+                "folderPath": temporaryDirectory.path,
+                "openFilePaths": [fileURL.path],
+                "activeFilePath": fileURL.path
+            ]
+            let sessionData = try JSONSerialization.data(withJSONObject: sessionObject)
+            UserDefaults.standard.set(sessionData, forKey: "editorSession")
+        } catch {
+            XCTFail("Failed to seed persisted session: \(error)")
+            return
+        }
+
+        var persistedSessions: [EditorDocumentController.PersistedEditorSession] = []
+        let controller = EditorDocumentController(
+            persistPreferences: { _ in },
+            persistEditorSession: { persistedSessions.append($0) }
+        )
+
+        controller.debugFlushDeferredSideEffects()
+
+        XCTAssertEqual(
+            persistedSessions.count,
+            1,
+            "Expected restoreLastSession to flush a single consolidated session write after replaying workspace and tab state."
+        )
+        XCTAssertEqual(persistedSessions.last?.folderPath, temporaryDirectory.path)
+        XCTAssertEqual(persistedSessions.last?.openFilePaths, [fileURL.path])
+        XCTAssertEqual(persistedSessions.last?.activeFilePath, fileURL.path)
+    }
+
     func testWorkspaceTreeShowsEmptyFoldersAndRefreshIncludesNewFolder() {
         resetPersistentState()
 

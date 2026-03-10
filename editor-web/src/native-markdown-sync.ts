@@ -1,6 +1,7 @@
 export type NativeMarkdownSync = {
   schedule: (markdown: string) => void
   flush: () => void
+  reset: () => void
   destroy: () => void
 }
 
@@ -51,6 +52,10 @@ export const createNativeMarkdownSync = (
       }, delayMs)
     },
     flush,
+    reset() {
+      pendingMarkdown = null
+      clearTimer()
+    },
     destroy() {
       pendingMarkdown = null
       clearTimer()
