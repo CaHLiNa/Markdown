@@ -583,6 +583,13 @@ struct ContentView: View {
                         subtitle: nil,
                         palette: palette
                     )
+                } else if let errorDescription = documentController.workspaceSearchErrorDescription {
+                    SidebarEmptyStateView(
+                        icon: "exclamationmark.circle",
+                        title: "搜索表达式有误",
+                        subtitle: errorDescription,
+                        palette: palette
+                    )
                 } else if documentController.workspaceSearchResults.isEmpty {
                     SidebarEmptyStateView(
                         icon: "magnifyingglass",

@@ -14,11 +14,38 @@ enum MarkdownRenderedTheme: String {
     case sepia
 }
 
+struct MarkdownFileReadResult: Equatable {
+    let markdown: String
+    let encoding: String.Encoding
+}
+
 enum MarkdownFileService {
     static let markdownContentType = UTType(filenameExtension: "md") ?? .plainText
     static let htmlContentType = UTType.html
     static let pdfContentType = UTType.pdf
     static let supportedPathExtensions = ["md", "markdown", "mdown", "mkd"]
+    static let markdownSelectionContentTypes: [UTType] = {
+        var identifiers = Set<String>()
+        var results: [UTType] = []
+
+        for pathExtension in supportedPathExtensions {
+            guard let contentType = UTType(filenameExtension: pathExtension) else {
+                continue
+            }
+
+            if identifiers.insert(contentType.identifier).inserted {
+                results.append(contentType)
+            }
+        }
+
+        return results.isEmpty ? [markdownContentType] : results
+    }()
+
+    struct WorkspaceMove: Equatable {
+        let sourceURL: URL
+        let destinationURL: URL
+        let isDirectory: Bool
+    }
 
     private struct MarkdownImageReference {
         let path: String
@@ -42,13 +69,32 @@ enum MarkdownFileService {
         let start: String.Index
     }
 
-    static func readMarkdown(from fileURL: URL) throws -> String {
-        try String(contentsOf: fileURL, encoding: .utf8)
+    private struct ResolvedMarkdownAssetReference {
+        let reference: MarkdownImageReference
+        let assetURL: URL
+        let canonicalRelativePath: String
     }
 
-    static func write(_ markdown: String, to fileURL: URL) throws {
+    private static let fallbackReadEncodings: [String.Encoding] = [
+        .utf8,
+        .utf16,
+        .utf32,
+        .windowsCP1252,
+        .isoLatin1
+    ]
+
+    static func readMarkdown(from fileURL: URL) throws -> MarkdownFileReadResult {
+        let data = try Data(contentsOf: fileURL)
+        return try decodeMarkdown(data)
+    }
+
+    static func write(
+        _ markdown: String,
+        to fileURL: URL,
+        encoding: String.Encoding = .utf8
+    ) throws {
         let destinationURL = normalizedMarkdownURL(from: fileURL)
-        try markdown.write(to: destinationURL, atomically: true, encoding: .utf8)
+        try markdown.write(to: destinationURL, atomically: true, encoding: encoding)
     }
 
     static func persistImageAsset(
@@ -81,29 +127,11 @@ enum MarkdownFileService {
 
         try data.write(to: destinationURL, options: .atomic)
 
-        let relativePath = relativeImagePath(
-            from: markdownFileURL.deletingLastPathComponent(),
-            to: destinationURL
+        return formattedMarkdownImagePath(
+            for: destinationURL,
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
         )
-
-        let rawPath = preferences.imageUseRelativePath
-            ? relativePath
-            : destinationURL.standardizedFileURL.path
-
-        let normalizedPath: String
-        if preferences.imageUseRelativePath &&
-            preferences.imagePreferDotSlash &&
-            !rawPath.hasPrefix("./") &&
-            !rawPath.hasPrefix("../")
-        {
-            normalizedPath = "./\(rawPath)"
-        } else {
-            normalizedPath = rawPath
-        }
-
-        return preferences.imageAutoEncodeURL
-            ? encodeMarkdownPath(normalizedPath)
-            : normalizedPath
     }
 
     static func relocateSiblingImageAssetsForSaveAs(
@@ -116,18 +144,10 @@ enum MarkdownFileService {
             return markdown
         }
 
-        let originalAssetDirectoryURL = imageAssetDirectoryURL(
-            for: originalMarkdownFileURL,
-            preferences: preferences
-        )
         let destinationAssetDirectoryURL = imageAssetDirectoryURL(
             for: destinationMarkdownFileURL,
             preferences: preferences
         )
-        let originalAssetDirectoryName = originalAssetDirectoryURL.lastPathComponent
-        let destinationAssetDirectoryName = destinationAssetDirectoryURL.lastPathComponent
-        let sourceRootURL = originalMarkdownFileURL.deletingLastPathComponent()
-        let destinationRootURL = destinationMarkdownFileURL.deletingLastPathComponent()
         let fileManager = FileManager.default
         let references = markdownImageReferences(in: markdown)
         var relocatedMarkdown = markdown
@@ -138,22 +158,20 @@ enum MarkdownFileService {
                 continue
             }
 
-            let referencedPath = reference.path
-
-            guard referencedPath.hasPrefix("\(originalAssetDirectoryName)/") else {
+            guard let resolvedReference = resolvedSiblingAssetReference(
+                reference,
+                alongsideMarkdownFile: originalMarkdownFileURL,
+                preferences: preferences
+            ) else {
                 continue
             }
 
-            let relativeAssetPath = String(referencedPath.dropFirst(originalAssetDirectoryName.count + 1))
-            guard !relativeAssetPath.isEmpty else {
-                continue
-            }
+            let destinationAssetURL = destinationAssetDirectoryURL
+                .appendingPathComponent(resolvedReference.canonicalRelativePath)
 
-            let sourceAssetURL = sourceRootURL.appendingPathComponent(referencedPath)
-            let destinationRelativePath = "\(destinationAssetDirectoryName)/\(relativeAssetPath)"
-            let destinationAssetURL = destinationRootURL.appendingPathComponent(destinationRelativePath)
-
-            if !copiedRelativePaths.contains(referencedPath) {
+            if !copiedRelativePaths.contains(resolvedReference.canonicalRelativePath) &&
+                destinationAssetURL.standardizedFileURL != resolvedReference.assetURL.standardizedFileURL
+            {
                 try fileManager.createDirectory(
                     at: destinationAssetURL.deletingLastPathComponent(),
                     withIntermediateDirectories: true
@@ -163,11 +181,17 @@ enum MarkdownFileService {
                     try fileManager.removeItem(at: destinationAssetURL)
                 }
 
-                try fileManager.copyItem(at: sourceAssetURL, to: destinationAssetURL)
-                copiedRelativePaths.insert(referencedPath)
+                try fileManager.copyItem(at: resolvedReference.assetURL, to: destinationAssetURL)
             }
 
-            relocatedMarkdown.replaceSubrange(referencedPathRange, with: destinationRelativePath)
+            copiedRelativePaths.insert(resolvedReference.canonicalRelativePath)
+
+            let destinationReference = formattedMarkdownImagePath(
+                for: destinationAssetURL,
+                alongsideMarkdownFile: destinationMarkdownFileURL,
+                preferences: preferences
+            )
+            relocatedMarkdown.replaceSubrange(referencedPathRange, with: destinationReference)
         }
 
         return relocatedMarkdown
@@ -190,7 +214,8 @@ enum MarkdownFileService {
 
         let referencedRelativePaths = referencedSiblingAssetRelativePaths(
             in: markdown,
-            siblingAssetDirectoryName: assetDirectoryURL.lastPathComponent
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
         )
 
         guard let enumerator = fileManager.enumerator(
@@ -281,7 +306,7 @@ enum MarkdownFileService {
             from: directoryURL.appendingPathComponent(trimmedName, isDirectory: false)
         )
         try ensureWorkspaceItemDoesNotExist(at: destinationURL)
-        try contents.write(to: destinationURL, atomically: true, encoding: .utf8)
+        try write(contents, to: destinationURL, encoding: .utf8)
         return destinationURL
     }
 
@@ -504,6 +529,64 @@ enum MarkdownFileService {
         }
     }
 
+    static func executeWorkspaceMoves(_ plannedMoves: [WorkspaceMove]) throws {
+        try executeWorkspaceMoves(
+            plannedMoves,
+            moveItem: { sourceURL, destinationURL in
+                try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+            }
+        )
+    }
+
+    static func executeWorkspaceMoves(
+        _ plannedMoves: [WorkspaceMove],
+        moveItem: (URL, URL) throws -> Void
+    ) throws {
+        guard !plannedMoves.isEmpty else {
+            return
+        }
+
+        var completedMoves: [WorkspaceMove] = []
+
+        do {
+            for move in plannedMoves {
+                try moveItem(move.sourceURL, move.destinationURL)
+                completedMoves.append(move)
+            }
+        } catch {
+            var rollbackErrors: [Error] = []
+
+            for completedMove in completedMoves.reversed() {
+                do {
+                    if FileManager.default.fileExists(atPath: completedMove.destinationURL.path) {
+                        try FileManager.default.moveItem(
+                            at: completedMove.destinationURL,
+                            to: completedMove.sourceURL
+                        )
+                    }
+                } catch {
+                    rollbackErrors.append(error)
+                }
+            }
+
+            if rollbackErrors.isEmpty {
+                throw error
+            }
+
+            let rollbackDescription = rollbackErrors
+                .map(\.localizedDescription)
+                .joined(separator: "；")
+            throw NSError(
+                domain: "Markdown",
+                code: 74,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "移动项目时发生错误，且回滚未完全成功：\(rollbackDescription)",
+                    NSUnderlyingErrorKey: error
+                ]
+            )
+        }
+    }
+
     private struct ExportPalette {
         let colorScheme: String
         let backgroundColor: String
@@ -639,29 +722,169 @@ enum MarkdownFileService {
         return (parentComponents + childComponents).joined(separator: "/")
     }
 
+    private static func formattedMarkdownImagePath(
+        for assetURL: URL,
+        alongsideMarkdownFile markdownFileURL: URL,
+        preferences: EditorPreferences
+    ) -> String {
+        let relativePath = relativeImagePath(
+            from: markdownFileURL.deletingLastPathComponent(),
+            to: assetURL
+        )
+
+        let rawPath = preferences.imageUseRelativePath
+            ? relativePath
+            : assetURL.standardizedFileURL.path
+
+        let normalizedPath: String
+        if preferences.imageUseRelativePath &&
+            preferences.imagePreferDotSlash &&
+            !rawPath.hasPrefix("./") &&
+            !rawPath.hasPrefix("../")
+        {
+            normalizedPath = "./\(rawPath)"
+        } else {
+            normalizedPath = rawPath
+        }
+
+        return preferences.imageAutoEncodeURL
+            ? encodeMarkdownPath(normalizedPath)
+            : normalizedPath
+    }
+
     private static func encodeMarkdownPath(_ value: String) -> String {
         value
             .replacingOccurrences(of: " ", with: "%20")
             .replacingOccurrences(of: "#", with: "%23")
     }
 
+    private static func decodeMarkdownPath(_ value: String) -> String {
+        value.removingPercentEncoding ?? value
+    }
+
+    private static func normalizedMarkdownReferencePath(_ value: String) -> String {
+        var normalized = decodeMarkdownPath(value)
+
+        while normalized.hasPrefix("./") {
+            normalized.removeFirst(2)
+        }
+
+        return normalized
+    }
+
+    private static func resolvedLocalMarkdownReferenceURL(
+        from path: String,
+        relativeTo baseDirectoryURL: URL
+    ) -> URL? {
+        let normalizedPath = normalizedMarkdownReferencePath(path)
+        guard !normalizedPath.isEmpty else {
+            return nil
+        }
+
+        if let url = URL(string: normalizedPath), url.scheme != nil {
+            return nil
+        }
+
+        return URL(fileURLWithPath: normalizedPath, relativeTo: baseDirectoryURL).standardizedFileURL
+    }
+
+    private static func resolvedSiblingAssetReference(
+        _ reference: MarkdownImageReference,
+        alongsideMarkdownFile markdownFileURL: URL,
+        preferences: EditorPreferences
+    ) -> ResolvedMarkdownAssetReference? {
+        let baseDirectoryURL = markdownFileURL.deletingLastPathComponent()
+        let assetDirectoryURL = imageAssetDirectoryURL(
+            for: markdownFileURL,
+            preferences: preferences
+        )
+
+        guard let assetURL = resolvedLocalMarkdownReferenceURL(
+            from: reference.path,
+            relativeTo: baseDirectoryURL
+        ) else {
+            return nil
+        }
+
+        guard
+            let canonicalRelativePath = relativePath(
+                of: assetURL,
+                relativeToDirectory: assetDirectoryURL
+            ),
+            !canonicalRelativePath.isEmpty
+        else {
+            return nil
+        }
+
+        return ResolvedMarkdownAssetReference(
+            reference: reference,
+            assetURL: assetURL,
+            canonicalRelativePath: canonicalRelativePath
+        )
+    }
+
     private static func referencedSiblingAssetRelativePaths(
         in markdown: String,
-        siblingAssetDirectoryName: String
+        alongsideMarkdownFile markdownFileURL: URL,
+        preferences: EditorPreferences
     ) -> Set<String> {
         markdownImageReferences(in: markdown).reduce(into: Set<String>()) { result, reference in
-            let referencedPath = reference.path
-            guard referencedPath.hasPrefix("\(siblingAssetDirectoryName)/") else {
+            guard let resolvedReference = resolvedSiblingAssetReference(
+                reference,
+                alongsideMarkdownFile: markdownFileURL,
+                preferences: preferences
+            ) else {
                 return
             }
 
-            let relativePath = String(referencedPath.dropFirst(siblingAssetDirectoryName.count + 1))
-            guard !relativePath.isEmpty else {
-                return
-            }
-
-            result.insert(relativePath)
+            result.insert(resolvedReference.canonicalRelativePath)
         }
+    }
+
+    private static func decodeMarkdown(_ data: Data) throws -> MarkdownFileReadResult {
+        if data.isEmpty {
+            return MarkdownFileReadResult(markdown: "", encoding: .utf8)
+        }
+
+        var convertedString: NSString?
+        var usedLossyConversion = ObjCBool(false)
+        let detectedEncoding = NSString.stringEncoding(
+            for: data,
+            encodingOptions: nil,
+            convertedString: &convertedString,
+            usedLossyConversion: &usedLossyConversion
+        )
+
+        if
+            let convertedString,
+            !usedLossyConversion.boolValue,
+            detectedEncoding != 0
+        {
+            if
+                detectedEncoding == String.Encoding.ascii.rawValue,
+                let utf8Markdown = String(data: data, encoding: .utf8),
+                utf8Markdown == convertedString as String
+            {
+                return MarkdownFileReadResult(markdown: utf8Markdown, encoding: .utf8)
+            }
+
+            return MarkdownFileReadResult(
+                markdown: convertedString as String,
+                encoding: String.Encoding(rawValue: detectedEncoding)
+            )
+        }
+
+        for fallbackEncoding in fallbackReadEncodings {
+            if let markdown = String(data: data, encoding: fallbackEncoding) {
+                return MarkdownFileReadResult(markdown: markdown, encoding: fallbackEncoding)
+            }
+        }
+
+        throw NSError(
+            domain: "Markdown",
+            code: 11,
+            userInfo: [NSLocalizedDescriptionKey: "无法识别文件编码。"]
+        )
     }
 
     static func relativePath(

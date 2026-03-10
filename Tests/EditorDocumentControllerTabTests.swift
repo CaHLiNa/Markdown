@@ -126,6 +126,44 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         XCTAssertEqual(controller.currentMarkdown, "# Restored")
     }
 
+    func testSavingFileBackedTabPreservesDetectedEncoding() {
+        resetPersistentState()
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        XCTAssertNoThrow(try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true))
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let fileURL = temporaryDirectory.appendingPathComponent("legacy.md")
+        guard let originalData = "café".data(using: .windowsCP1252) else {
+            XCTFail("Failed to create Windows CP1252 test fixture.")
+            return
+        }
+
+        XCTAssertNoThrow(try originalData.write(to: fileURL, options: .atomic))
+
+        let controller = makeControllerRestoringOpenFile(at: fileURL, workspaceURL: temporaryDirectory)
+        XCTAssertEqual(controller.tabs.first?.fileEncoding, .windowsCP1252)
+
+        controller.currentMarkdown = "déjà vu"
+        controller.currentEditorMarkdownOverride = { completion in
+            completion("déjà vu")
+        }
+
+        controller.saveDocument()
+
+        let savedData: Data
+        do {
+            savedData = try Data(contentsOf: fileURL)
+        } catch {
+            XCTFail("Failed to read saved file: \(error)")
+            return
+        }
+
+        XCTAssertEqual(String(data: savedData, encoding: .windowsCP1252), "déjà vu")
+        XCTAssertNil(String(data: savedData, encoding: .utf8), "Expected save to preserve the original non-UTF-8 encoding.")
+    }
+
     func testWorkspaceTreeShowsEmptyFoldersAndRefreshIncludesNewFolder() {
         resetPersistentState()
 
@@ -248,6 +286,7 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
             title: "this-is-a-very-long-markdown-document-title.md",
             markdown: "",
             fileURL: nil,
+            fileEncoding: nil,
             lastSavedMarkdown: ""
         )
 
@@ -280,6 +319,26 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
             UserDefaults.standard.set(sessionData, forKey: "editorSession")
         } catch {
             XCTFail("Failed to seed restored workspace session: \(error)")
+        }
+
+        return EditorDocumentController()
+    }
+
+    private func makeControllerRestoringOpenFile(at fileURL: URL, workspaceURL: URL) -> EditorDocumentController {
+        do {
+            let preferences = EditorPreferences(appearanceMode: .followSystem, startupBehavior: .restoreLastSession)
+            let preferencesData = try JSONEncoder().encode(preferences)
+            UserDefaults.standard.set(preferencesData, forKey: "editorPreferences")
+
+            let sessionObject: [String: Any] = [
+                "folderPath": workspaceURL.path,
+                "openFilePaths": [fileURL.path],
+                "activeFilePath": fileURL.path
+            ]
+            let sessionData = try JSONSerialization.data(withJSONObject: sessionObject)
+            UserDefaults.standard.set(sessionData, forKey: "editorSession")
+        } catch {
+            XCTFail("Failed to seed restored file session: \(error)")
         }
 
         return EditorDocumentController()

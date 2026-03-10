@@ -139,4 +139,43 @@ final class MarkdownFileServiceAssetCleanupTests: XCTestCase {
             "Expected sibling assets whose filenames contain parentheses to be preserved."
         )
     }
+
+    func testPreservesEncodedDotSlashSiblingAssetsDuringCleanup() throws {
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
+
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let markdownFileURL = tempDirectory.appendingPathComponent("note.md")
+        let assetDirectoryURL = tempDirectory.appendingPathComponent("note.assets", isDirectory: true)
+        let keptAssetURL = assetDirectoryURL.appendingPathComponent("diagram #1.png")
+        let removedAssetURL = assetDirectoryURL.appendingPathComponent("remove.png")
+
+        try fileManager.createDirectory(at: assetDirectoryURL, withIntermediateDirectories: true)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: keptAssetURL)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: removedAssetURL)
+
+        let markdown = """
+        ![保留](./note.assets/diagram%20%231.png)
+        """
+
+        try MarkdownFileService.removeUnusedSiblingImageAssets(
+            for: markdown,
+            alongsideMarkdownFile: markdownFileURL,
+            preferences: preferences
+        )
+
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: keptAssetURL.path),
+            "Expected cleanup to preserve encoded dot-slash sibling asset references."
+        )
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: removedAssetURL.path),
+            "Expected cleanup to continue removing truly unreferenced sibling assets."
+        )
+    }
 }

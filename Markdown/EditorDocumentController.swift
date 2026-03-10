@@ -71,6 +71,7 @@ struct EditorTab: Identifiable, Equatable {
     var title: String
     var markdown: String
     var fileURL: URL?
+    var fileEncoding: String.Encoding?
     var lastSavedMarkdown: String
 
     var isDirty: Bool {
@@ -141,6 +142,7 @@ final class EditorDocumentController: ObservableObject {
         didSet { refreshWorkspaceSearchResults() }
     }
     @Published private(set) var workspaceSearchResults: [EditorWorkspaceSearchResult] = []
+    @Published private(set) var workspaceSearchErrorDescription: String?
     @Published private(set) var expandedFolderIDs: Set<String> = []
     @Published private(set) var selectedWorkspaceItemIDs: Set<String> = []
     @Published private(set) var recentFiles: [URL]
@@ -647,7 +649,7 @@ final class EditorDocumentController: ObservableObject {
 
     func openDocument() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [MarkdownFileService.markdownContentType]
+        configureMarkdownDocumentPanel(panel)
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
@@ -906,8 +908,17 @@ final class EditorDocumentController: ObservableObject {
                 return
             }
 
+            try MarkdownFileService.executeWorkspaceMoves(
+                plannedMoves.map {
+                    MarkdownFileService.WorkspaceMove(
+                        sourceURL: $0.sourceURL,
+                        destinationURL: $0.destinationURL,
+                        isDirectory: $0.isDirectory
+                    )
+                }
+            )
+
             for move in plannedMoves {
-                try FileManager.default.moveItem(at: move.sourceURL, to: move.destinationURL)
                 replaceWorkspaceReferencesAfterRename(
                     from: move.sourceURL,
                     to: move.destinationURL,
@@ -925,6 +936,7 @@ final class EditorDocumentController: ObservableObject {
             lastSelectedWorkspaceItemID = plannedMoves.last.flatMap { workspaceRelativePath(for: $0.destinationURL) }
             refreshWorkspace(expanding: [targetDirectoryURL])
         } catch {
+            refreshWorkspace()
             presentError(error, title: "无法移动项目")
         }
     }
@@ -1240,7 +1252,8 @@ final class EditorDocumentController: ObservableObject {
 
             if let fileURL = tab.fileURL {
                 do {
-                    try MarkdownFileService.write(markdown, to: fileURL)
+                    let fileEncoding = tab.fileEncoding ?? .utf8
+                    try MarkdownFileService.write(markdown, to: fileURL, encoding: fileEncoding)
                     try MarkdownFileService.removeUnusedSiblingImageAssets(
                         for: markdown,
                         alongsideMarkdownFile: fileURL,
@@ -1248,6 +1261,7 @@ final class EditorDocumentController: ObservableObject {
                     )
                     self.updateTab(id: id) {
                         $0.markdown = markdown
+                        $0.fileEncoding = fileEncoding
                         $0.lastSavedMarkdown = markdown
                     }
                     self.addRecentFile(fileURL)
@@ -1288,7 +1302,7 @@ final class EditorDocumentController: ObservableObject {
         }
 
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [MarkdownFileService.markdownContentType]
+        configureMarkdownDocumentPanel(panel)
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = tab.fileURL?.lastPathComponent ?? "\(tab.title)\(defaultDocumentExtension.rawValue)"
         panel.directoryURL = tab.fileURL?.deletingLastPathComponent() ?? folderURL
@@ -1304,6 +1318,7 @@ final class EditorDocumentController: ObservableObject {
 
         do {
             let markdownToSave: String
+            let fileEncoding = tab.fileEncoding ?? .utf8
 
             if let sourceURL = tab.fileURL {
                 markdownToSave = try MarkdownFileService.relocateSiblingImageAssetsForSaveAs(
@@ -1316,7 +1331,7 @@ final class EditorDocumentController: ObservableObject {
                 markdownToSave = saveMarkdown
             }
 
-            try MarkdownFileService.write(markdownToSave, to: destinationURL)
+            try MarkdownFileService.write(markdownToSave, to: destinationURL, encoding: fileEncoding)
             try MarkdownFileService.removeUnusedSiblingImageAssets(
                 for: markdownToSave,
                 alongsideMarkdownFile: destinationURL,
@@ -1324,6 +1339,7 @@ final class EditorDocumentController: ObservableObject {
             )
             updateTab(id: id) {
                 $0.fileURL = destinationURL
+                $0.fileEncoding = fileEncoding
                 $0.title = destinationURL.lastPathComponent
                 $0.markdown = markdownToSave
                 $0.lastSavedMarkdown = markdownToSave
@@ -1588,9 +1604,10 @@ final class EditorDocumentController: ObservableObject {
             let tab = EditorTab(
                 id: UUID(),
                 title: normalizedURL.lastPathComponent,
-                markdown: content,
+                markdown: content.markdown,
                 fileURL: normalizedURL,
-                lastSavedMarkdown: content
+                fileEncoding: content.encoding,
+                lastSavedMarkdown: content.markdown
             )
             tabs.append(tab)
             activeTabID = tab.id
@@ -2090,6 +2107,7 @@ final class EditorDocumentController: ObservableObject {
         let query = workspaceSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             workspaceSearchResults = []
+            workspaceSearchErrorDescription = nil
             return
         }
 
@@ -2101,16 +2119,18 @@ final class EditorDocumentController: ObservableObject {
             return EditorWorkspaceSearchFile(
                 url: item.url,
                 relativePath: item.relativePath,
-                content: content
+                content: content.markdown
             )
         }
 
-        workspaceSearchResults = EditorWorkspaceSearch.search(
+        let response = EditorWorkspaceSearch.search(
             query: query,
             in: searchFiles,
             isCaseSensitive: workspaceSearchCaseSensitive,
             useRegularExpression: workspaceSearchUseRegularExpression
         )
+        workspaceSearchResults = response.results
+        workspaceSearchErrorDescription = response.errorDescription
     }
 
     private var currentDocumentSearchMatch: EditorDocumentSearchMatch? {
@@ -2344,6 +2364,10 @@ final class EditorDocumentController: ObservableObject {
         alert.runModal()
     }
 
+    private func configureMarkdownDocumentPanel(_ panel: NSSavePanel) {
+        panel.allowedContentTypes = MarkdownFileService.markdownSelectionContentTypes
+    }
+
     private static func closestSearchMatchIndex(
         for offset: Int,
         in matches: [EditorDocumentSearchMatch]
@@ -2414,6 +2438,7 @@ final class EditorDocumentController: ObservableObject {
             title: "Untitled-\(index)",
             markdown: markdown,
             fileURL: nil,
+            fileEncoding: nil,
             lastSavedMarkdown: markdown
         )
     }
