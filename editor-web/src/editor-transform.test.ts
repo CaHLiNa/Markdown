@@ -1,5 +1,11 @@
 import { __editorTestUtils } from './editor'
 
+const createLute = async () => {
+  // @ts-expect-error Vditor does not publish typings for the standalone Lute bundle.
+  await import('vditor/dist/js/lute/lute.min.js')
+  return (globalThis as typeof globalThis & { Lute: { New: () => any } }).Lute.New()
+}
+
 describe('editor transforms', () => {
   it('outdents a spaced line even when the caret is at the line start', () => {
     const result = __editorTestUtils.applyOutdentTransform('    item', 0, 0, '    ', 4, true)
@@ -66,5 +72,61 @@ describe('editor transforms', () => {
 
     expect(__editorTestUtils.shouldHandleCustomIndentation(code)).toBe(false)
     expect(__editorTestUtils.shouldHandleCustomIndentation(paragraph)).toBe(true)
+  })
+
+  it('suppresses collapsed Tab indentation at the start of plain blocks', () => {
+    expect(
+      __editorTestUtils.shouldSuppressLeadingBlockIndent('Paragraph', 0, 0, {
+        from: 0,
+        to: 9,
+        text: 'Paragraph',
+        type: 'paragraph'
+      })
+    ).toBe(true)
+
+    expect(
+      __editorTestUtils.shouldSuppressLeadingBlockIndent('Paragraph', 4, 4, {
+        from: 0,
+        to: 9,
+        text: 'Paragraph',
+        type: 'paragraph'
+      })
+    ).toBe(false)
+  })
+
+  it('counts previous table rows when restoring the caret after a table transform', () => {
+    const offset = __editorTestUtils.getMarkdownTableCellOffset(
+      {
+        header: ['A', 'B'],
+        aligns: [null, null],
+        rows: [
+          ['1', '2'],
+          ['3', '4']
+        ]
+      },
+      {
+        rowIndex: 2,
+        columnIndex: 1
+      }
+    )
+
+    expect(offset).toBe(30)
+  })
+
+  it('locates blocks from Vditor IRDOM instead of the legacy string parser', async () => {
+    const lute = await createLute()
+    const markdown = lute.VditorIRDOM2Md(
+      lute.Md2VditorIRDOM(
+        ['# Title', '', 'Paragraph', '', '- first', '  wrapped', '- second', '', '```ts', 'const a = 1', '```'].join(
+          '\n'
+        )
+      )
+    )
+
+    const blocks = __editorTestUtils.extractMarkdownBlocksFromVditorIRDOM(markdown, lute)
+
+    expect(blocks?.map((block) => block.type)).toEqual(['heading', 'paragraph', 'list', 'code'])
+    expect(blocks?.[2]?.from).toBe(markdown.indexOf('- first'))
+    expect(blocks?.[2]?.text).toBe(['- first', '  wrapped', '- second'].join('\n'))
   })
 })

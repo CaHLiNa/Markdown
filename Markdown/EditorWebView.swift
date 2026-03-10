@@ -454,6 +454,14 @@ struct EditorWebView: NSViewRepresentable {
             editorCommandHandler?(command)
         }
 
+        @objc func undo(_ sender: Any?) {
+            editorCommandHandler?(.undo)
+        }
+
+        @objc func redo(_ sender: Any?) {
+            editorCommandHandler?(.redo)
+        }
+
         private func contextMenuEvent(atViewportPoint viewportPoint: CGPoint?) -> NSEvent? {
             guard let window else {
                 return nil

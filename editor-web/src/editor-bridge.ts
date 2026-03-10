@@ -120,6 +120,24 @@ export const createEditorBridge = ({
       return
     }
 
+    if (action.kind === 'markdown') {
+      markdown = action.markdown
+
+      if (queue[queue.length - 1]?.kind === 'markdown') {
+        queue[queue.length - 1] = action
+        return
+      }
+    }
+
+    if (action.kind === 'appearance') {
+      appearance = action.appearance
+
+      if (queue[queue.length - 1]?.kind === 'appearance') {
+        queue[queue.length - 1] = action
+        return
+      }
+    }
+
     queue.push(action)
   }
 

@@ -17,6 +17,10 @@ struct EditorCommandPaletteItem: Identifiable, Equatable {
 extension EditorCommand {
     var paletteTitle: String {
         switch self {
+        case .undo:
+            return "撤销"
+        case .redo:
+            return "重做"
         case .toggleGlobalSourceMode:
             return "切换全局源码模式"
         case .paragraph:
@@ -86,6 +90,8 @@ extension EditorCommand {
 
     var paletteCategory: String {
         switch self {
+        case .undo, .redo:
+            return "编辑"
         case .toggleGlobalSourceMode:
             return "视图"
         case .paragraph, .heading1, .heading2, .heading3, .heading4, .heading5, .heading6:
@@ -103,6 +109,10 @@ extension EditorCommand {
 
     var paletteKeywords: [String] {
         switch self {
+        case .undo:
+            return ["undo", "history", "revert"]
+        case .redo:
+            return ["redo", "history", "restore"]
         case .toggleGlobalSourceMode:
             return ["source", "markdown", "raw"]
         case .paragraph:

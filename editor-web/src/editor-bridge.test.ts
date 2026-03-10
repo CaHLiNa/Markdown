@@ -86,4 +86,36 @@ describe('editor-bridge', () => {
     expect(bridge.currentMarkdown).toBe('next markdown')
     expect(postMarkdownToNative).toHaveBeenCalledWith('next markdown')
   })
+
+  it('coalesces consecutive markdown updates before the editor is attached', () => {
+    const handlers: {
+      receiveMarkdown?: (text: string) => void
+      runCommand?: (command: string) => boolean
+    } = {}
+
+    const bridge = createEditorBridge({
+      postMarkdownToNative: vi.fn(),
+      applyAppearance: vi.fn(),
+      installNativeBridge(nextReceiveMarkdown, nextRunCommand) {
+        handlers.receiveMarkdown = nextReceiveMarkdown
+        handlers.runCommand = nextRunCommand
+      }
+    })
+
+    bridge.install()
+    if (!handlers.receiveMarkdown) {
+      throw new Error('native bridge handlers were not installed')
+    }
+
+    handlers.receiveMarkdown('first')
+    handlers.receiveMarkdown('second')
+    handlers.receiveMarkdown('third')
+
+    const editor = createEditorDouble()
+    bridge.attachEditor(editor)
+
+    expect(bridge.currentMarkdown).toBe('third')
+    expect(editor.loadMarkdown).toHaveBeenCalledTimes(1)
+    expect(editor.loadMarkdown).toHaveBeenCalledWith('third')
+  })
 })

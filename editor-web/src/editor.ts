@@ -101,11 +101,15 @@ type VditorRuntime = Vditor['vditor'] & {
   preview?: {
     element: HTMLElement
   }
+  toolbar?: {
+    elements: Record<string, HTMLDivElement | undefined>
+  }
   lute?: Vditor['vditor']['lute'] & {
     SetChineseParagraphBeginningSpace?: (enabled: boolean) => void
     SetIndentCodeBlock?: (enabled: boolean) => void
     SetLinkBase?: (value: string) => void
     SetParagraphBeginningSpace?: (enabled: boolean) => void
+    SetUnorderedListMarker?: (value: string) => void
     SetVditorIR?: (enabled: boolean) => void
     SetVditorSV?: (enabled: boolean) => void
     SetVditorWYSIWYG?: (enabled: boolean) => void
@@ -159,6 +163,11 @@ type TableContextMenuAction =
   | 'autofill-from-first-column'
   | 'delete-table'
 
+type LuteBlockLocator = Pick<
+  NonNullable<VditorRuntime['lute']>,
+  'Md2VditorIRDOM' | 'VditorIRDOM2Md'
+>
+
 export type MarkdownEditor = {
   loadMarkdown: (markdown: string) => void
   setDocumentBaseURL: (baseURL: string | null) => void
@@ -189,6 +198,23 @@ const DEFAULT_LINK_PLACEHOLDER = 'https://'
 const DEFAULT_INLINE_PLACEHOLDER = 'text'
 const DEFAULT_IMAGE_ALT = 'image'
 const DEFAULT_TABLE_SNIPPET = '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1 | Value 2 |'
+const HIDDEN_NATIVE_TOOLBAR_ITEMS = [
+  'headings',
+  'bold',
+  'italic',
+  'strike',
+  'link',
+  'list',
+  'ordered-list',
+  'check',
+  'quote',
+  'line',
+  'code',
+  'inline-code',
+  'table',
+  'undo',
+  'redo'
+] satisfies Array<string | { name: string }>
 const TABLE_TOOLBAR_MIN_WIDTH = 176
 const TABLE_GRID_MIN_SIZE = 8
 const TABLE_GRID_BUFFER = 4
@@ -688,7 +714,7 @@ const focusPointIntoView = (node: Node | null) => {
     node instanceof Element ? node : node?.parentElement instanceof Element ? node.parentElement : null
 
   element?.scrollIntoView({
-    block: 'center',
+    block: 'nearest',
     inline: 'nearest'
   })
 }
@@ -764,6 +790,128 @@ const getActiveBlock = (markdown: string, offset: number) => {
       (block) => normalizedOffset >= block.from && normalizedOffset <= block.to
     ) ?? null
   )
+}
+
+const shouldSuppressLeadingBlockIndent = (
+  markdown: string,
+  selection: NormalizedSelection,
+  activeBlock: MarkdownBlock | null
+) => {
+  if (selection.start !== selection.end || !activeBlock) {
+    return false
+  }
+
+  if (
+    activeBlock.type !== 'paragraph' &&
+    activeBlock.type !== 'heading' &&
+    activeBlock.type !== 'blockquote'
+  ) {
+    return false
+  }
+
+  return getLineStart(markdown, selection.start) === selection.start
+}
+
+const stripTrailingBlockNewlines = (markdown: string) => {
+  return markdown.replace(/\n+$/, '')
+}
+
+const isTrailingNewlineCompatible = (source: string, canonical: string) => {
+  return stripTrailingBlockNewlines(source) === stripTrailingBlockNewlines(canonical)
+}
+
+const getMarkdownBlockTypeFromIRNode = (element: Element): MarkdownBlock['type'] | null => {
+  const dataType = element.getAttribute('data-type')
+  const tagName = element.tagName
+
+  if (tagName === 'HR') {
+    return 'hr'
+  }
+
+  if (tagName.match(/^H[1-6]$/)) {
+    return 'heading'
+  }
+
+  if (tagName === 'P') {
+    return 'paragraph'
+  }
+
+  if (tagName === 'BLOCKQUOTE') {
+    return 'blockquote'
+  }
+
+  if (tagName === 'UL' || tagName === 'OL') {
+    return 'list'
+  }
+
+  if (tagName === 'TABLE' || dataType === 'table') {
+    return 'table'
+  }
+
+  if (dataType === 'code-block') {
+    return 'code'
+  }
+
+  if (dataType === 'math-block') {
+    return 'math'
+  }
+
+  return null
+}
+
+const extractMarkdownBlocksFromVditorIRDOM = (
+  markdown: string,
+  lute: LuteBlockLocator | null | undefined
+): MarkdownBlock[] | null => {
+  if (!lute) {
+    return null
+  }
+
+  if (markdown.length === 0) {
+    return []
+  }
+
+  const irdom = lute.Md2VditorIRDOM(markdown)
+  const canonicalMarkdown = lute.VditorIRDOM2Md(irdom)
+
+  if (!isTrailingNewlineCompatible(markdown, canonicalMarkdown)) {
+    return null
+  }
+
+  const container = document.createElement('div')
+  container.innerHTML = irdom
+
+  const blocks: MarkdownBlock[] = []
+  let searchOffset = 0
+
+  for (const element of Array.from(container.children)) {
+    const type = getMarkdownBlockTypeFromIRNode(element)
+
+    if (!type) {
+      continue
+    }
+
+    const rawBlockMarkdown = lute.VditorIRDOM2Md(element.outerHTML)
+    const blockMarkdown = stripTrailingBlockNewlines(rawBlockMarkdown)
+    const from = canonicalMarkdown.indexOf(rawBlockMarkdown, searchOffset)
+
+    if (from === -1) {
+      return null
+    }
+
+    const to = from + blockMarkdown.length
+
+    blocks.push({
+      from,
+      to,
+      text: canonicalMarkdown.slice(from, to),
+      type
+    })
+
+    searchOffset = from + rawBlockMarkdown.length
+  }
+
+  return blocks
 }
 
 const applyInlineWrap = (
@@ -1225,7 +1373,13 @@ const getMarkdownTableCellOffset = (table: MarkdownTableModel, target: MarkdownT
   const rowLineIndex = clamp(target.rowIndex, 0, lines.length - 1)
   const cells = splitMarkdownTableRow(lines[rowLineIndex] ?? '')
   const targetColumn = clamp(target.columnIndex, 0, Math.max(0, cells.length - 1))
-  let offset = 2
+  let offset = 0
+
+  for (let index = 0; index < rowLineIndex; index += 1) {
+    offset += (lines[index]?.length ?? 0) + 1
+  }
+
+  offset += 2
 
   for (let index = 0; index < targetColumn; index += 1) {
     offset += (cells[index]?.length ?? 0) + 3
@@ -1282,6 +1436,15 @@ export const __editorTestUtils = {
   },
   applyUpgradeHeadingTransform(markdown: string, start: number, end: number, direction: 1 | -1) {
     return applyUpgradeHeadingTransform(markdown, createTestingSelection(start, end), direction)
+  },
+  getMarkdownTableCellOffset(table: MarkdownTableModel, target: MarkdownTableTarget) {
+    return getMarkdownTableCellOffset(table, target)
+  },
+  extractMarkdownBlocksFromVditorIRDOM(markdown: string, lute: LuteBlockLocator | null | undefined) {
+    return extractMarkdownBlocksFromVditorIRDOM(markdown, lute)
+  },
+  shouldSuppressLeadingBlockIndent(markdown: string, start: number, end: number, activeBlock: MarkdownBlock | null) {
+    return shouldSuppressLeadingBlockIndent(markdown, createTestingSelection(start, end), activeBlock)
   },
   shouldHandleCustomIndentation(target: EventTarget | null) {
     return shouldHandleCustomIndentation(target)
@@ -1350,6 +1513,45 @@ export const createMarkdownEditor = async ({
   const getResolvedLinkBase = () => {
     const imageRootURL = currentPresentation.imageRootURL.trim()
     return imageRootURL.length > 0 ? imageRootURL : currentDocumentBaseURL ?? ''
+  }
+
+  const getMarkdownBlocks = (markdown: string) => {
+    return (
+      extractMarkdownBlocksFromVditorIRDOM(markdown, instance?.vditor?.lute as LuteBlockLocator | undefined) ??
+      extractMarkdownBlocks(markdown)
+    )
+  }
+
+  const getResolvedActiveBlock = (markdown: string, offset: number) => {
+    const normalizedOffset = clampMarkdownOffset(markdown, offset)
+
+    return (
+      getMarkdownBlocks(markdown).find(
+        (block) => normalizedOffset >= block.from && normalizedOffset <= block.to
+      ) ?? null
+    )
+  }
+
+  const findResolvedHeadingOffset = (markdown: string, title: string) => {
+    const target = title.trim()
+
+    if (target.length === 0) {
+      return null
+    }
+
+    for (const block of getMarkdownBlocks(markdown)) {
+      if (block.type !== 'heading') {
+        continue
+      }
+
+      const match = block.text.match(/^\s{0,3}#{1,6}\s+(.*)$/)
+
+      if (match?.[1].trim() === target) {
+        return block.from
+      }
+    }
+
+    return findHeadingOffset(markdown, title)
   }
 
   const isCommandEnabled = (command: RuntimeEditorCommand) => {
@@ -1669,6 +1871,127 @@ export const createMarkdownEditor = async ({
     return true
   }
 
+  const syncStateAfterNativeCommand = () => {
+    window.requestAnimationFrame(() => {
+      syncMarkdownFromEditor(true)
+      currentSelection = getSelectionOffsets()
+      scheduleTableToolbarRefresh()
+    })
+  }
+
+  const dispatchNativeToolbarButton = (button: HTMLElement | null | undefined) => {
+    if (!button) {
+      return false
+    }
+
+    button.dispatchEvent(
+      new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true
+      })
+    )
+
+    syncStateAfterNativeCommand()
+    return true
+  }
+
+  const runNativeToolbarCommand = (commandName: string) => {
+    const editor = instance
+
+    if (!editor) {
+      return false
+    }
+
+    const button = editor.vditor.toolbar?.elements?.[commandName]?.children.item(0) as HTMLElement | null
+
+    if (!button) {
+      return false
+    }
+
+    editor.focus()
+    return dispatchNativeToolbarButton(button)
+  }
+
+  const runNativeHeadingCommand = (level: number) => {
+    const editor = instance
+
+    if (!editor) {
+      return false
+    }
+
+    const button = editor.vditor.toolbar?.elements?.headings?.querySelector(
+      `button[data-tag="h${clamp(level, 1, 6)}"]`
+    ) as HTMLElement | null
+
+    if (!button) {
+      return false
+    }
+
+    editor.focus()
+    return dispatchNativeToolbarButton(button)
+  }
+
+  const replaceSelectionWithMarkdown = (snippet: string) => {
+    const editor = instance
+
+    if (!editor) {
+      return false
+    }
+
+    editor.focus()
+    editor.deleteValue()
+    editor.insertMD(snippet)
+    syncStateAfterNativeCommand()
+    return true
+  }
+
+  const applyResolvedDuplicateBlockTransform = (
+    markdown: string,
+    selection: NormalizedSelection
+  ): MarkdownTransform | null => {
+    const block = getResolvedActiveBlock(markdown, selection.start)
+
+    if (!block) {
+      return null
+    }
+
+    const separator = markdown.length === 0 ? '' : '\n\n'
+    const insertion = `${separator}${block.text}`
+    const insertOffset = block.to
+
+    return {
+      markdown: insertAt(markdown, insertOffset, insertion),
+      selectionStart: insertOffset + insertion.length - block.text.length,
+      selectionEnd: insertOffset + insertion.length
+    }
+  }
+
+  const applyResolvedDeleteBlockTransform = (
+    markdown: string,
+    selection: NormalizedSelection
+  ): MarkdownTransform | null => {
+    const block = getResolvedActiveBlock(markdown, selection.start)
+
+    if (!block) {
+      return null
+    }
+
+    let start = block.from
+    let end = block.to
+
+    if (markdown[end] === '\n') {
+      end += 1
+    } else if (start > 0 && markdown[start - 1] === '\n') {
+      start -= 1
+    }
+
+    return {
+      markdown: replaceRange(markdown, start, end, ''),
+      selectionStart: start,
+      selectionEnd: start
+    }
+  }
+
   const getSelectionRangeWithinIR = () => {
     if (currentMode !== 'ir') {
       return null
@@ -1784,8 +2107,9 @@ export const createMarkdownEditor = async ({
 
     const range = selection.getRangeAt(0)
     const cells = getAllTableCells(context.tableElement)
-    const selectedText = normalizeVisualText(selection.toString())
-    const tableText = normalizeVisualText(context.tableElement.innerText)
+    const commonAncestorWithinTable =
+      range.commonAncestorContainer === context.tableElement ||
+      context.tableElement.contains(range.commonAncestorContainer)
     const intersectsEveryCell =
       cells.length > 0 &&
       cells.every((cellElement) => {
@@ -1796,7 +2120,7 @@ export const createMarkdownEditor = async ({
         }
       })
 
-    return intersectsEveryCell && selectedText.length > 0 && selectedText === tableText
+    return intersectsEveryCell && commonAncestorWithinTable
   }
 
   const readWholeTableAlignment = (context: TableContext) => {
@@ -1865,7 +2189,7 @@ export const createMarkdownEditor = async ({
 
   const resolveMarkdownTableBlock = (markdown: string, context: TableContext) => {
     const selection = normalizeSelection(getSelectionOffsets())
-    const activeBlock = getActiveBlock(markdown, selection.start)
+    const activeBlock = getResolvedActiveBlock(markdown, selection.start)
     const scoreBlock = (block: MarkdownBlock) => {
       const table = parseMarkdownTable(block.text)
 
@@ -1883,7 +2207,7 @@ export const createMarkdownEditor = async ({
     let bestBlock: MarkdownBlock | null = null
     let bestScore = -1
 
-    for (const block of extractMarkdownBlocks(markdown)) {
+    for (const block of getMarkdownBlocks(markdown)) {
       if (block.type !== 'table') {
         continue
       }
@@ -1899,12 +2223,12 @@ export const createMarkdownEditor = async ({
     return bestScore >= 0 ? bestBlock : null
   }
 
-  const updateMarkdownTableForContext = (
-    markdown: string,
-    context: TableContext,
-    updater: (table: MarkdownTableModel) => MarkdownTableTarget
-  ) => {
-    const block = resolveMarkdownTableBlock(markdown, context)
+const updateMarkdownTableForContext = (
+  markdown: string,
+  context: TableContext,
+  updater: (table: MarkdownTableModel) => MarkdownTableTarget | null
+) => {
+  const block = resolveMarkdownTableBlock(markdown, context)
 
     if (!block) {
       return null
@@ -1916,10 +2240,15 @@ export const createMarkdownEditor = async ({
       return null
     }
 
-    const target = updater(table)
-    const replacement = stringifyMarkdownTable(table)
-    const cellOffset = getMarkdownTableCellOffset(table, target)
-    const selectionOffset = block.from + cellOffset
+  const target = updater(table)
+
+  if (!target) {
+    return null
+  }
+
+  const replacement = stringifyMarkdownTable(table)
+  const cellOffset = getMarkdownTableCellOffset(table, target)
+  const selectionOffset = block.from + cellOffset
 
     return {
       markdown: replaceRange(markdown, block.from, block.to, replacement),
@@ -1930,7 +2259,7 @@ export const createMarkdownEditor = async ({
 
   const applyCurrentTableTransform = (
     context: TableContext,
-    updater: (table: MarkdownTableModel) => MarkdownTableTarget
+    updater: (table: MarkdownTableModel) => MarkdownTableTarget | null
   ) => {
     const markdown = readMarkdown()
     return applyTransform(updateMarkdownTableForContext(markdown, context, updater))
@@ -1986,6 +2315,11 @@ export const createMarkdownEditor = async ({
       }
 
       const domRowIndex = (context.cellElement.parentElement as HTMLTableRowElement).rowIndex
+
+      if (domRowIndex === 0) {
+        return null
+      }
+
       const targetRowIndex = clamp(domRowIndex - 1, 0, table.rows.length - 1)
 
       table.rows.splice(targetRowIndex, 1)
@@ -2182,7 +2516,9 @@ export const createMarkdownEditor = async ({
   const deleteCurrentTable = (context?: TableContext) => {
     const markdown = readMarkdown()
     const selection = normalizeSelection(getSelectionOffsets())
-    const block = context ? resolveMarkdownTableBlock(markdown, context) : getActiveBlock(markdown, selection.start)
+    const block = context
+      ? resolveMarkdownTableBlock(markdown, context)
+      : getResolvedActiveBlock(markdown, selection.start)
 
     if (!block || block.type !== 'table') {
       return false
@@ -2911,51 +3247,63 @@ export const createMarkdownEditor = async ({
       case 'paragraph':
         return applyTransform(applyParagraphTransform(markdown, selection))
       case 'heading-1':
-        return applyTransform(applyHeadingTransform(markdown, selection, 1))
+        return runNativeHeadingCommand(1) || applyTransform(applyHeadingTransform(markdown, selection, 1))
       case 'heading-2':
-        return applyTransform(applyHeadingTransform(markdown, selection, 2))
+        return runNativeHeadingCommand(2) || applyTransform(applyHeadingTransform(markdown, selection, 2))
       case 'heading-3':
-        return applyTransform(applyHeadingTransform(markdown, selection, 3))
+        return runNativeHeadingCommand(3) || applyTransform(applyHeadingTransform(markdown, selection, 3))
       case 'heading-4':
-        return applyTransform(applyHeadingTransform(markdown, selection, 4))
+        return runNativeHeadingCommand(4) || applyTransform(applyHeadingTransform(markdown, selection, 4))
       case 'heading-5':
-        return applyTransform(applyHeadingTransform(markdown, selection, 5))
+        return runNativeHeadingCommand(5) || applyTransform(applyHeadingTransform(markdown, selection, 5))
       case 'heading-6':
-        return applyTransform(applyHeadingTransform(markdown, selection, 6))
+        return runNativeHeadingCommand(6) || applyTransform(applyHeadingTransform(markdown, selection, 6))
       case 'upgrade-heading':
         return applyTransform(applyUpgradeHeadingTransform(markdown, selection, 1))
       case 'degrade-heading':
         return applyTransform(applyUpgradeHeadingTransform(markdown, selection, -1))
       case 'blockquote':
-        return applyTransform(
-          applyLinePrefixTransform(markdown, selection, (line) => {
-            return line.trim().length === 0 ? line : `> ${stripBlockPrefix(line).trimStart()}`
-          })
+        return (
+          runNativeToolbarCommand('quote') ||
+          applyTransform(
+            applyLinePrefixTransform(markdown, selection, (line) => {
+              return line.trim().length === 0 ? line : `> ${stripBlockPrefix(line).trimStart()}`
+            })
+          )
         )
       case 'bullet-list':
-        return applyTransform(
-          applyLinePrefixTransform(markdown, selection, (line) => {
-            return line.trim().length === 0 ? line : `- ${stripBlockPrefix(line).trimStart()}`
-          })
+        return (
+          runNativeToolbarCommand('list') ||
+          applyTransform(
+            applyLinePrefixTransform(markdown, selection, (line) => {
+              return line.trim().length === 0 ? line : `- ${stripBlockPrefix(line).trimStart()}`
+            })
+          )
         )
       case 'ordered-list':
-        return applyTransform(
-          applyLinePrefixTransform(markdown, selection, (line, index) => {
-            return line.trim().length === 0
-              ? line
-              : `${index + 1}. ${stripBlockPrefix(line).trimStart()}`
-          })
+        return (
+          runNativeToolbarCommand('ordered-list') ||
+          applyTransform(
+            applyLinePrefixTransform(markdown, selection, (line, index) => {
+              return line.trim().length === 0
+                ? line
+                : `${index + 1}. ${stripBlockPrefix(line).trimStart()}`
+            })
+          )
         )
       case 'task-list':
-        return applyTransform(
-          applyLinePrefixTransform(markdown, selection, (line) => {
-            return line.trim().length === 0 ? line : `- [ ] ${stripBlockPrefix(line).trimStart()}`
-          })
+        return (
+          runNativeToolbarCommand('check') ||
+          applyTransform(
+            applyLinePrefixTransform(markdown, selection, (line) => {
+              return line.trim().length === 0 ? line : `- [ ] ${stripBlockPrefix(line).trimStart()}`
+            })
+          )
         )
       case 'table':
-        return applyTransform(applySnippetTransform(markdown, selection, DEFAULT_TABLE_SNIPPET))
+        return runNativeToolbarCommand('table') || replaceSelectionWithMarkdown(DEFAULT_TABLE_SNIPPET)
       case 'horizontal-rule':
-        return applyTransform(applySnippetTransform(markdown, selection, '\n\n---\n\n'))
+        return runNativeToolbarCommand('line') || replaceSelectionWithMarkdown('\n\n---\n\n')
       case 'front-matter':
         return applyTransform(
           markdown.startsWith('---\n')
@@ -2967,41 +3315,49 @@ export const createMarkdownEditor = async ({
               }
         )
       case 'code-block':
-        return applyTransform(
-          applyBlockWrapTransform(markdown, selection, '```text\n', '\n```', 'code')
+        return (
+          runNativeToolbarCommand('code') ||
+          applyTransform(applyBlockWrapTransform(markdown, selection, '```text\n', '\n```', 'code'))
         )
       case 'math-block':
         return applyTransform(
           applyBlockWrapTransform(markdown, selection, '$$\n', '\n$$', 'E = mc^2')
         )
       case 'bold':
-        return applyTransform(applyInlineWrap(markdown, selection, '**'))
+        return runNativeToolbarCommand('bold') || applyTransform(applyInlineWrap(markdown, selection, '**'))
       case 'italic':
-        return applyTransform(applyInlineWrap(markdown, selection, '*'))
+        return runNativeToolbarCommand('italic') || applyTransform(applyInlineWrap(markdown, selection, '*'))
       case 'underline':
         return applyTransform(applyInlineWrap(markdown, selection, '<u>', '</u>'))
       case 'highlight':
         return applyTransform(applyInlineWrap(markdown, selection, '=='))
       case 'inline-code':
-        return applyTransform(applyInlineWrap(markdown, selection, '`'))
+        return (
+          runNativeToolbarCommand('inline-code') ||
+          applyTransform(applyInlineWrap(markdown, selection, '`'))
+        )
       case 'inline-math':
         return applyTransform(applyInlineWrap(markdown, selection, '$'))
       case 'strikethrough':
-        return applyTransform(applyInlineWrap(markdown, selection, '~~'))
+        return (
+          runNativeToolbarCommand('strike') ||
+          applyTransform(applyInlineWrap(markdown, selection, '~~'))
+        )
       case 'link':
-        return applyTransform(
-          applyInlineWrap(markdown, selection, '[', `](${DEFAULT_LINK_PLACEHOLDER})`)
+        return (
+          runNativeToolbarCommand('link') ||
+          applyTransform(applyInlineWrap(markdown, selection, '[', `](${DEFAULT_LINK_PLACEHOLDER})`))
         )
       case 'image':
         return runAsyncImageCommand()
       case 'clear-format':
         return applyTransform(applyClearFormatTransform(markdown, selection))
       case 'duplicate-block':
-        return applyTransform(applyDuplicateBlockTransform(markdown, selection))
+        return applyTransform(applyResolvedDuplicateBlockTransform(markdown, selection))
       case 'new-paragraph':
-        return applyTransform(applySnippetTransform(markdown, selection, '\n\n'))
+        return replaceSelectionWithMarkdown('\n\n') || applyTransform(applySnippetTransform(markdown, selection, '\n\n'))
       case 'delete-block':
-        return applyTransform(applyDeleteBlockTransform(markdown, selection))
+        return applyTransform(applyResolvedDeleteBlockTransform(markdown, selection))
     }
   }
 
@@ -3046,7 +3402,7 @@ export const createMarkdownEditor = async ({
       }
     },
     theme: 'classic',
-    toolbar: [],
+    toolbar: HIDDEN_NATIVE_TOOLBAR_ITEMS,
     toolbarConfig: {
       hide: true,
       pin: false
@@ -3153,6 +3509,11 @@ export const createMarkdownEditor = async ({
     const indentUnit = getIndentUnit()
     const markdown = readMarkdown()
     const selection = normalizeSelection(getSelectionOffsets())
+
+    if (shouldSuppressLeadingBlockIndent(markdown, selection, getResolvedActiveBlock(markdown, selection.start))) {
+      return
+    }
+
     const transform = event.shiftKey
       ? applyOutdentTransform(
           markdown,
@@ -3244,7 +3605,7 @@ export const createMarkdownEditor = async ({
     getEditorState() {
       const markdown = readMarkdown()
       const selection = getSelectionOffsets()
-      const activeBlock = getActiveBlock(markdown, Math.min(selection.anchor, selection.head))
+      const activeBlock = getResolvedActiveBlock(markdown, Math.min(selection.anchor, selection.head))
 
       return {
         markdown,
@@ -3274,7 +3635,7 @@ export const createMarkdownEditor = async ({
       return runCommand(command as RuntimeEditorCommand)
     },
     revealHeading(title: string) {
-      const offset = findHeadingOffset(readMarkdown(), title)
+      const offset = findResolvedHeadingOffset(readMarkdown(), title)
 
       if (offset == null) {
         return false
@@ -3286,7 +3647,7 @@ export const createMarkdownEditor = async ({
       return setSelectionFromOffsets(offset, offset + Math.max(0, length))
     },
     setSelectionInBlock(type: MarkdownBlock['type'], index: number, startOffset: number, endOffset) {
-      const blocks = extractMarkdownBlocks(readMarkdown()).filter((block) => block.type === type)
+      const blocks = getMarkdownBlocks(readMarkdown()).filter((block) => block.type === type)
       const block = blocks[index]
 
       if (!block) {
@@ -3299,7 +3660,7 @@ export const createMarkdownEditor = async ({
       void setSelectionFromOffsets(anchor, head)
     },
     setSelectionInParagraph(index: number, startOffset: number, endOffset = startOffset) {
-      const paragraphs = extractMarkdownBlocks(readMarkdown()).filter((block) => block.type === 'paragraph')
+      const paragraphs = getMarkdownBlocks(readMarkdown()).filter((block) => block.type === 'paragraph')
       const paragraph = paragraphs[index]
 
       if (!paragraph) {

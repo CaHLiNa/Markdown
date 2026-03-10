@@ -20,6 +20,8 @@ enum EditorSidebarPane: String, CaseIterable, Identifiable {
 }
 
 enum EditorCommand: String, CaseIterable {
+    case undo = "undo"
+    case redo = "redo"
     case toggleGlobalSourceMode = "toggle-global-source-mode"
     case paragraph = "paragraph"
     case heading1 = "heading-1"
