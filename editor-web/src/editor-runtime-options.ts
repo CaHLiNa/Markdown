@@ -6,6 +6,10 @@ export type EditorRuntimeLute = {
   SetParagraphBeginningSpace?: (enabled: boolean) => void
 }
 
+export const getEditorTabString = (presentation: EditorPresentation) => {
+  return presentation.useSpacesForIndent ? ' '.repeat(presentation.indentWidth) : '\t'
+}
+
 export const applyEditableRootRuntimeOptions = (
   root: HTMLElement,
   presentation: EditorPresentation

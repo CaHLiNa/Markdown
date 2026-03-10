@@ -5,7 +5,7 @@ import XCTest
 final class EditorDocumentControllerModeTests: HostedXCTestCase {
     func testDefaultsToSingleWebEditorSurface() {
         resetPersistentState()
-        let controller = EditorDocumentController()
+        let controller = EditorDocumentController(markdown: "# Title")
 
         XCTAssertTrue(controller.canExportRenderedDocument, "Expected the single WebView editor surface to support rendered export.")
     }

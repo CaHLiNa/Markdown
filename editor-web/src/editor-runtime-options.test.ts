@@ -1,5 +1,9 @@
 import { defaultEditorPresentation } from './editor-presentation'
-import { applyEditableRootRuntimeOptions, applyLuteRuntimeOptions } from './editor-runtime-options'
+import {
+  applyEditableRootRuntimeOptions,
+  applyLuteRuntimeOptions,
+  getEditorTabString
+} from './editor-runtime-options'
 
 describe('editor-runtime-options', () => {
   it('applies spellcheck and tab-size to editable roots', () => {
@@ -35,5 +39,16 @@ describe('editor-runtime-options', () => {
       'paragraph:true',
       'indent-code-block:false'
     ])
+  })
+
+  it('returns spaces or a tab according to the presentation settings', () => {
+    expect(getEditorTabString(defaultEditorPresentation)).toBe('    ')
+    expect(
+      getEditorTabString({
+        ...defaultEditorPresentation,
+        indentWidth: 2,
+        useSpacesForIndent: false
+      })
+    ).toBe('\t')
   })
 })

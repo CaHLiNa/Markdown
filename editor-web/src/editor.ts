@@ -23,13 +23,17 @@ import {
 } from './editor-presentation'
 import {
   applyEditableRootRuntimeOptions,
-  applyLuteRuntimeOptions
+  applyLuteRuntimeOptions,
+  getEditorTabString
 } from './editor-runtime-options'
 import type { EditorRuntimeState } from './editor-state'
 import {
-  applySelectionPoints,
+  duplicateMarkdownBlock,
+  replaceMarkdownRange as applyMarkdownRangeToText,
+  type MarkdownSelection
+} from './editor-transactions'
+import {
   createSelectionManager,
-  resolveTextPointInElement,
   type SelectionManager,
   type SelectionOffsets
 } from './selection-manager'
@@ -101,6 +105,7 @@ type VditorRuntime = Vditor['vditor'] & {
     SetVditorWYSIWYG?: (enabled: boolean) => void
   }
   options?: {
+    tab?: string
     preview?: {
       mode?: 'both' | 'editor'
       markdown?: {
@@ -136,7 +141,7 @@ export type MarkdownEditor = {
   destroy: () => Promise<void>
 }
 
-const VDITOR_CDN = './vditor'
+const VDITOR_CDN = new URL('./vditor', window.location.href).toString()
 const DEFAULT_INLINE_PLACEHOLDER = 'text'
 const DEFAULT_IMAGE_ALT = 'image'
 const DEFAULT_TABLE_SNIPPET = '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1 | Value 2 |'
@@ -155,7 +160,8 @@ const HIDDEN_NATIVE_TOOLBAR_ITEMS = [
   'inline-code',
   'table',
   'undo',
-  'redo'
+  'redo',
+  'edit-mode'
 ] satisfies Array<string | { name: string }>
 
 const installVditorVersionGlobal = () => {
@@ -210,6 +216,10 @@ const findClosestElement = <T extends Element>(node: Node | null, selector: stri
 
 const sanitizeAssetPath = (value: string) => {
   return value.replace(/ /g, '%20').replace(/#/g, '%23')
+}
+
+const normalizeVisualText = (value: string) => {
+  return value.replace(/\s+/g, ' ').trim()
 }
 
 const normalizeRuntimeCommand = (command: RuntimeEditorCommand) => {
@@ -405,10 +415,41 @@ export const createMarkdownEditor = async ({
       return null
     }
 
+    const liveBlock = getLiveIRBlocks().find((candidate) => candidate.element === blockElement) ?? null
+
     return {
       element: blockElement,
+      from: liveBlock?.from ?? 0,
+      to: liveBlock?.to ?? 0,
+      text: liveBlock?.text ?? '',
       type
     }
+  }
+
+  const renderMarkdownToPlainText = (markdownText: string) => {
+    const content = markdownText.trim()
+
+    if (content.length === 0) {
+      return ''
+    }
+
+    const lute = instance?.vditor?.lute as VditorRuntime['lute'] & {
+      Md2HTML?: (markdown: string) => string
+    }
+    const html = lute?.Md2HTML?.(content)
+
+    if (typeof html === 'string' && html.length > 0) {
+      const container = document.createElement('div')
+      container.innerHTML = html
+      return normalizeVisualText(container.textContent ?? '')
+    }
+
+    return normalizeVisualText(
+      content
+        .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/[*_`~]/g, '')
+    )
   }
 
   const findResolvedHeadingOffset = (markdown: string, title: string) => {
@@ -425,7 +466,7 @@ export const createMarkdownEditor = async ({
 
       const match = block.text.match(/^\s{0,3}#{1,6}\s+(.*)$/)
 
-      if (match?.[1].trim() === target) {
+      if (match && renderMarkdownToPlainText(match[1] ?? '') === target) {
         return block.from
       }
     }
@@ -458,9 +499,13 @@ export const createMarkdownEditor = async ({
 
     const runtime = getRuntime()
     const nextLinkBase = getResolvedLinkBase()
+    const nextTab = getEditorTabString(currentPresentation)
 
     runtime.lute?.SetLinkBase?.(nextLinkBase)
     applyLuteRuntimeOptions(runtime.lute)
+    if (runtime.options) {
+      runtime.options.tab = nextTab
+    }
 
     for (const root of [getRuntime().ir?.element, getRuntime().sv?.element]) {
       if (!root) {
@@ -558,8 +603,6 @@ export const createMarkdownEditor = async ({
   }
 
   const syncMarkdownFromEditor = (emit: boolean, knownMarkdown?: string) => {
-    normalizeTableLinkSpacingInIR()
-
     const nextMarkdown = knownMarkdown ?? readMarkdown()
 
     if (nextMarkdown === currentMarkdown) {
@@ -584,8 +627,6 @@ export const createMarkdownEditor = async ({
     withSuppressedInput(() => {
       editor.setValue(markdown, clearStack)
     })
-
-    normalizeTableLinkSpacingInIR()
 
     currentMarkdown = markdown
 
@@ -624,15 +665,17 @@ export const createMarkdownEditor = async ({
     }
 
     if (refresh) {
-      tableManager?.scheduleRefresh()
+      tableManager?.handleEditorMutation()
     }
   }
 
   const syncStateAfterNativeCommand = () => {
     window.requestAnimationFrame(() => {
+      currentMode = getRuntime().currentMode === 'sv' ? 'sv' : 'ir'
       invalidateLiveIRBlockCache()
+      normalizeTableLinkSpacingInIR()
       syncMarkdownFromEditor(true)
-      tableManager?.scheduleRefresh()
+      tableManager?.handleEditorMutation()
     })
   }
 
@@ -688,6 +731,25 @@ export const createMarkdownEditor = async ({
     return dispatchNativeToolbarButton(button)
   }
 
+  const runNativeModeSwitchCommand = (nextMode: EditorVisualMode) => {
+    const editor = instance
+
+    if (!editor) {
+      return false
+    }
+
+    const button = editor.vditor.toolbar?.elements?.['edit-mode']?.querySelector(
+      `button[data-mode="${nextMode}"]`
+    ) as HTMLElement | null
+
+    if (!button) {
+      return false
+    }
+
+    editor.focus()
+    return dispatchNativeToolbarButton(button)
+  }
+
   const replaceSelectionWithMarkdown = (snippet: string) => {
     const editor = instance
 
@@ -702,48 +764,20 @@ export const createMarkdownEditor = async ({
     return true
   }
 
-  const readElementMarkdown = (element: Element) => {
-    const lute = instance?.vditor?.lute as LuteBlockLocator | undefined
-    return lute?.VditorIRDOM2Md(element.outerHTML) ?? null
-  }
-
-  const selectElementForReplacement = (element: Element) => {
-    if (currentMode !== 'ir' || !element.isConnected) {
-      return false
-    }
-
-    const selection = window.getSelection()
-
-    if (!selection) {
-      return false
-    }
-
-    const range = document.createRange()
-    range.selectNode(element)
-    selection.removeAllRanges()
-    selection.addRange(range)
-    return true
-  }
-
-  const replaceElementWithMarkdown = (
-    element: Element,
-    markdown: string,
-    { selectReplacementStart = false }: { selectReplacementStart?: boolean } = {}
+  const replaceMarkdownRange = (
+    from: number,
+    to: number,
+    nextText: string,
+    selection?: MarkdownSelection
   ) => {
-    if (currentMode !== 'ir') {
-      return false
-    }
-
-    const liveBlock = getLiveIRBlocks().find((candidate) => candidate.element === element) ?? null
-
-    if (!selectElementForReplacement(element) || !replaceSelectionWithMarkdown(markdown)) {
-      return false
-    }
-
-    if (selectReplacementStart && liveBlock) {
-      scheduleSelectionFromOffsets(liveBlock.from, liveBlock.from)
-    }
-
+    const replacement = applyMarkdownRangeToText(readMarkdown(), from, to, nextText, selection)
+    currentSelection = replacement.selection
+    applyMarkdown(replacement.markdown, { emit: true })
+    scheduleSelectionFromOffsets(replacement.selection.anchor, replacement.selection.head)
+    window.requestAnimationFrame(() => {
+      normalizeTableLinkSpacingInIR()
+      tableManager?.handleEditorMutation()
+    })
     return true
   }
 
@@ -815,22 +849,10 @@ export const createMarkdownEditor = async ({
       return false
     }
 
-    if (currentMode === 'ir') {
-      const firstElement = getIRRoot().firstElementChild
-      const range = createCollapsedRangeAtStart(firstElement ?? getIRRoot())
-
-      if (range) {
-        applySelectionPoints(
-          { node: range.startContainer, offset: range.startOffset },
-          { node: range.startContainer, offset: range.startOffset }
-        )
-      }
-    } else {
-      void setSelectionFromOffsets(0, 0)
-    }
-
-    currentSelection = { anchor: 11, head: 11 }
-    return replaceSelectionWithMarkdown('---\ntitle: \n---\n\n')
+    return replaceMarkdownRange(0, 0, '---\ntitle: \n---\n\n', {
+      anchor: 11,
+      head: 11
+    })
   }
 
   const clearCurrentFormatting = () => {
@@ -849,13 +871,18 @@ export const createMarkdownEditor = async ({
       return false
     }
 
-    const blockMarkdown = readElementMarkdown(block.element)
+    const duplicatedMarkdown = duplicateMarkdownBlock(block.text)
 
-    if (!blockMarkdown) {
+    if (duplicatedMarkdown.length === 0) {
       return false
     }
 
-    return replaceElementWithMarkdown(block.element, `${blockMarkdown}${blockMarkdown}`)
+    const insertionOffset = block.from + duplicatedMarkdown.length - block.text.replace(/\n+$/, '').length
+
+    return replaceMarkdownRange(block.from, block.to, duplicatedMarkdown, {
+      anchor: insertionOffset,
+      head: insertionOffset
+    })
   }
 
   const deleteCurrentBlock = () => {
@@ -869,23 +896,17 @@ export const createMarkdownEditor = async ({
       return false
     }
 
-    return replaceElementWithMarkdown(block.element, '')
+    return replaceMarkdownRange(block.from, block.to, '', {
+      anchor: block.from,
+      head: block.from
+    })
   }
 
-  const createCollapsedRangeAtStart = (element: Element | null) => {
-    if (!element) {
-      return null
-    }
-
-    const point = resolveTextPointInElement(element, 0)
-    const range = document.createRange()
-    range.setStart(point.node, point.offset)
-    range.collapse(true)
-    return range
-  }
-
-  const insertImageMarkdown = async (file: File) => {
-    const editor = getInstance()
+  const insertImageMarkdown = async (
+    file: File,
+    selectionSnapshot: SelectionOffsets,
+    markdownSnapshot: string
+  ) => {
     const assetPath = await persistImageAsset?.(file)
 
     if (!assetPath) {
@@ -893,18 +914,24 @@ export const createMarkdownEditor = async ({
     }
 
     const alt = file.name.replace(/\.[^.]+$/, '').trim() || DEFAULT_IMAGE_ALT
-    editor.focus()
-    editor.insertMD(`![${alt}](${sanitizeAssetPath(assetPath)})`)
-    window.requestAnimationFrame(() => {
-      syncMarkdownFromEditor(true)
+    const start = clampMarkdownOffset(markdownSnapshot, Math.min(selectionSnapshot.anchor, selectionSnapshot.head))
+    const end = clampMarkdownOffset(markdownSnapshot, Math.max(selectionSnapshot.anchor, selectionSnapshot.head))
+    const snippet = `![${alt}](${sanitizeAssetPath(assetPath)})`
+    const caretOffset = start + snippet.length
+
+    return replaceMarkdownRange(start, end, snippet, {
+      anchor: caretOffset,
+      head: caretOffset
     })
-    return true
   }
 
   const runAsyncImageCommand = () => {
     if (!pickImageFile) {
       return false
     }
+
+    const selectionSnapshot = getSelectionOffsets()
+    const markdownSnapshot = readMarkdown()
 
     void (async () => {
       const file = await pickImageFile()
@@ -913,7 +940,7 @@ export const createMarkdownEditor = async ({
         return
       }
 
-      await insertImageMarkdown(file)
+      await insertImageMarkdown(file, selectionSnapshot, markdownSnapshot)
     })()
 
     return true
@@ -939,7 +966,7 @@ export const createMarkdownEditor = async ({
 
     window.requestAnimationFrame(() => {
       syncMarkdownFromEditor(true)
-      tableManager?.scheduleRefresh()
+      tableManager?.handleEditorMutation()
     })
 
     return true
@@ -954,48 +981,23 @@ export const createMarkdownEditor = async ({
       return true
     }
 
-    const selection = currentSelection
-    const markdown = readMarkdown()
+    const selection = getSelectionOffsets()
 
-    withSuppressedInput(() => {
-      if (nextMode === 'sv') {
-        tableManager?.hideToolbar()
-        runtime.preview?.element && (runtime.preview.element.style.display = 'none')
-        runtime.sv?.element && (runtime.sv.element.style.display = 'block')
+    if (nextMode === 'sv') {
+      tableManager?.hideToolbar()
+    }
 
-        if (runtime.ir?.element.parentElement) {
-          runtime.ir.element.parentElement.style.display = 'none'
-        }
+    if (!runNativeModeSwitchCommand(nextMode)) {
+      return false
+    }
 
-        runtime.lute?.SetVditorIR?.(false)
-        runtime.lute?.SetVditorWYSIWYG?.(false)
-        runtime.lute?.SetVditorSV?.(true)
-        runtime.currentMode = 'sv'
-        currentMode = 'sv'
-        editor.setValue(markdown, false)
-      } else {
-        runtime.preview?.element && (runtime.preview.element.style.display = 'none')
-        runtime.sv?.element && (runtime.sv.element.style.display = 'none')
-
-        if (runtime.ir?.element.parentElement) {
-          runtime.ir.element.parentElement.style.display = 'block'
-        }
-
-        runtime.lute?.SetVditorIR?.(true)
-        runtime.lute?.SetVditorWYSIWYG?.(false)
-        runtime.lute?.SetVditorSV?.(false)
-        runtime.currentMode = 'ir'
-        currentMode = 'ir'
-        editor.setValue(markdown, false)
-        normalizeTableLinkSpacingInIR()
-      }
-    })
-
-    invalidateLiveIRBlockCache()
-    scheduleSelectionFromOffsets(selection.anchor, selection.head)
     window.requestAnimationFrame(() => {
-      editor.focus()
-      tableManager?.scheduleRefresh()
+      currentMode = runtime.currentMode === 'sv' ? 'sv' : 'ir'
+      scheduleSelectionFromOffsets(selection.anchor, selection.head)
+      window.requestAnimationFrame(() => {
+        editor.focus()
+        tableManager?.handleEditorMutation()
+      })
     })
 
     return true
@@ -1136,6 +1138,7 @@ export const createMarkdownEditor = async ({
         }
       }
     },
+    tab: getEditorTabString(currentPresentation),
     theme: 'classic',
     toolbar: HIDDEN_NATIVE_TOOLBAR_ITEMS,
     toolbarConfig: {
@@ -1184,15 +1187,15 @@ export const createMarkdownEditor = async ({
     input(markdown: string) {
       if (suppressInputDepth > 0) {
         syncMarkdownFromEditor(false, markdown)
-        tableManager?.scheduleRefresh()
+        tableManager?.handleEditorMutation()
         return
       }
 
       syncMarkdownFromEditor(true, markdown)
-      tableManager?.scheduleRefresh()
+      tableManager?.handleEditorMutation()
     },
     keydown() {
-      tableManager?.scheduleRefresh()
+      tableManager?.handleEditorMutation()
     },
     blur() {
       tableManager?.handleBlur()
@@ -1218,8 +1221,21 @@ export const createMarkdownEditor = async ({
     getIRRoot,
     getCurrentMode: () => currentMode,
     getSelectionRangeWithinIR,
-    replaceElementWithMarkdown,
-    getLute: () => instance?.vditor?.lute as LuteBlockLocator | undefined
+    getSelectionOffsets,
+    getTableBlock: (tableElement) => {
+      const block = getLiveIRBlocks().find((candidate) => candidate.element === tableElement) ?? null
+
+      if (!block) {
+        return null
+      }
+
+      return {
+        from: block.from,
+        to: block.to,
+        text: block.text
+      }
+    },
+    replaceMarkdownRange
   })
 
   const handleBackgroundPointerDown = (event: PointerEvent) => {
@@ -1244,6 +1260,7 @@ export const createMarkdownEditor = async ({
 
     event.preventDefault()
     event.stopPropagation()
+    event.stopImmediatePropagation()
 
     const resolvedHref = resolveLinkURL(href, getResolvedLinkBase())
 
@@ -1264,7 +1281,7 @@ export const createMarkdownEditor = async ({
     host.removeEventListener('click', handleLinkActivationClick, true)
   }
 
-  tableManager.scheduleRefresh()
+  tableManager.handleEditorMutation()
 
   const setPresentation = (presentation: EditorPresentation) => {
     currentPresentation = presentation
@@ -1324,6 +1341,10 @@ export const createMarkdownEditor = async ({
       return getSelectionOffsets()
     },
     pressKey(key: string) {
+      if (key === 'Tab') {
+        return replaceSelectionWithMarkdown(getEditorTabString(currentPresentation))
+      }
+
       if (key === 'Enter') {
         return runCommand('new-paragraph')
       }

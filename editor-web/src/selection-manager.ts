@@ -10,6 +10,10 @@ export type DOMPoint = {
   offset: number
 }
 
+type TextPointOptions = {
+  treatLineBreaksAsNewline?: boolean
+}
+
 type EditorVisualMode = 'ir' | 'sv'
 
 type IRBlockRecord = MarkdownBlock & {
@@ -48,6 +52,14 @@ const clampDomOffset = (node: Node, offset: number) => {
   }
 
   return clamp(offset, 0, node.childNodes.length)
+}
+
+const getChildNodeIndex = (node: Node) => {
+  if (!node.parentNode) {
+    return 0
+  }
+
+  return Array.prototype.indexOf.call(node.parentNode.childNodes, node)
 }
 
 const asElement = (node: Node | null) => {
@@ -119,50 +131,156 @@ export const applySelectionPoints = (anchorPoint: DOMPoint | null, headPoint: DO
   return true
 }
 
-const measureTextOffsetWithinElement = (element: Element, node: Node, offset: number) => {
+const measureNodeTextLength = (
+  node: Node,
+  { treatLineBreaksAsNewline = false }: TextPointOptions = {}
+): number => {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent?.length ?? 0
+  }
+
+  if (treatLineBreaksAsNewline && node instanceof HTMLBRElement) {
+    return 1
+  }
+
+  let total = 0
+
+  node.childNodes.forEach((child) => {
+    total += measureNodeTextLength(child, { treatLineBreaksAsNewline })
+  })
+
+  return total
+}
+
+const measureTextOffsetWithinElement = (
+  element: Element,
+  node: Node,
+  offset: number,
+  { treatLineBreaksAsNewline = false }: TextPointOptions = {}
+) => {
   if (!element.contains(node)) {
     return null
   }
 
-  const range = document.createRange()
-  range.setStart(element, 0)
-  range.setEnd(node, clampDomOffset(node, offset))
-  return range.toString().length
-}
+  let total = 0
+  let resolved = false
 
-export const resolveTextPointInElement = (element: Element, offset: number): DOMPoint => {
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-  let remaining = Math.max(0, offset)
-  let currentNode = walker.nextNode()
-  let lastTextNode: Text | null = null
+  const visit = (currentNode: Node): boolean => {
+    if (currentNode === node) {
+      if (currentNode.nodeType === Node.TEXT_NODE) {
+        total += clampDomOffset(currentNode, offset)
+        resolved = true
+        return true
+      }
 
-  while (currentNode) {
-    const textNode = currentNode as Text
-    const length = textNode.data.length
-    lastTextNode = textNode
+      const childLimit = clampDomOffset(currentNode, offset)
 
-    if (remaining <= length) {
-      return {
-        node: textNode,
-        offset: remaining
+      for (let childIndex = 0; childIndex < childLimit; childIndex += 1) {
+        total += measureNodeTextLength(currentNode.childNodes[childIndex] as Node, {
+          treatLineBreaksAsNewline
+        })
+      }
+
+      resolved = true
+      return true
+    }
+
+    if (currentNode.nodeType === Node.TEXT_NODE) {
+      total += currentNode.textContent?.length ?? 0
+      return false
+    }
+
+    if (treatLineBreaksAsNewline && currentNode instanceof HTMLBRElement) {
+      total += 1
+      return false
+    }
+
+    for (const childNode of Array.from(currentNode.childNodes)) {
+      if (visit(childNode)) {
+        return true
       }
     }
 
-    remaining -= length
-    currentNode = walker.nextNode()
+    return false
   }
 
-  if (lastTextNode) {
-    return {
-      node: lastTextNode,
-      offset: lastTextNode.data.length
-    }
-  }
+  visit(element)
+  return resolved ? total : null
+}
 
-  return {
+export const resolveTextPointInElement = (
+  element: Element,
+  offset: number,
+  { treatLineBreaksAsNewline = false }: TextPointOptions = {}
+): DOMPoint => {
+  let remaining = Math.max(0, offset)
+  let lastPoint: DOMPoint = {
     node: element,
-    offset: element.childNodes.length
+    offset: 0
   }
+
+  const visit = (currentNode: Node): DOMPoint | null => {
+    if (currentNode.nodeType === Node.TEXT_NODE) {
+      const textNode = currentNode as Text
+      const length = textNode.data.length
+
+      if (remaining <= length) {
+        return {
+          node: textNode,
+          offset: remaining
+        }
+      }
+
+      remaining -= length
+      lastPoint = {
+        node: textNode,
+        offset: length
+      }
+      return null
+    }
+
+    if (treatLineBreaksAsNewline && currentNode instanceof HTMLBRElement && currentNode.parentNode) {
+      const parentNode = currentNode.parentNode
+      const childIndex = getChildNodeIndex(currentNode)
+
+      if (remaining === 0) {
+        return {
+          node: parentNode,
+          offset: childIndex
+        }
+      }
+
+      remaining -= 1
+      lastPoint = {
+        node: parentNode,
+        offset: childIndex + 1
+      }
+
+      if (remaining === 0) {
+        return lastPoint
+      }
+
+      return null
+    }
+
+    for (const childNode of Array.from(currentNode.childNodes)) {
+      const resolved = visit(childNode)
+
+      if (resolved) {
+        return resolved
+      }
+    }
+
+    return null
+  }
+
+  const resolved = visit(element)
+
+  if (resolved) {
+    return resolved
+  }
+
+  return lastPoint
 }
 
 export const createSelectionManager = ({
@@ -219,10 +337,14 @@ export const createSelectionManager = ({
 
     if (currentMode === 'sv') {
       const anchor =
-        measureTextOffsetWithinElement(rootElement, selection.anchorNode, selection.anchorOffset) ??
+        measureTextOffsetWithinElement(rootElement, selection.anchorNode, selection.anchorOffset, {
+          treatLineBreaksAsNewline: true
+        }) ??
         currentSelection.anchor
       const head =
-        measureTextOffsetWithinElement(rootElement, selection.focusNode, selection.focusOffset) ??
+        measureTextOffsetWithinElement(rootElement, selection.focusNode, selection.focusOffset, {
+          treatLineBreaksAsNewline: true
+        }) ??
         currentSelection.head
 
       const nextSelection = { anchor, head }
@@ -282,7 +404,9 @@ export const createSelectionManager = ({
     const currentMode = getCurrentMode()
     const markdown = readMarkdown()
     const resolveSourcePoint = (offset: number) => {
-      return resolveTextPointInElement(getSVRoot(), clampMarkdownOffset(markdown, offset))
+      return resolveTextPointInElement(getSVRoot(), clampMarkdownOffset(markdown, offset), {
+        treatLineBreaksAsNewline: true
+      })
     }
     const resolveIRPoint = (offset: number) => {
       const blocks = getLiveIRBlocks()

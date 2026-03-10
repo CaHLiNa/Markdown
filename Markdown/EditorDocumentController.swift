@@ -351,6 +351,7 @@ final class EditorDocumentController: ObservableObject {
     private let workspaceMonitor = WorkspaceFileSystemMonitor()
     var unsavedChangesDecisionHandler: ((EditorTab) -> EditorUnsavedChangesDecision)?
     var saveTabOverride: ((UUID, @escaping (Bool) -> Void) -> Void)?
+    var currentEditorMarkdownOverride: ((@escaping (String) -> Void) -> Void)?
 
     init(markdown: String? = nil) {
         let preferences = Self.loadPreferences()
@@ -1126,30 +1127,53 @@ final class EditorDocumentController: ObservableObject {
             return
         }
 
+        if id == activeTabID {
+            currentEditorMarkdown { [weak self] markdown in
+                guard let self else {
+                    return
+                }
+
+                self.updateTab(id: id) {
+                    $0.markdown = markdown
+                }
+
+                guard let refreshedTab = self.tab(for: id) else {
+                    return
+                }
+
+                self.closeTabAfterResolvingUnsavedChanges(refreshedTab)
+            }
+            return
+        }
+
+        closeTabAfterResolvingUnsavedChanges(tab)
+    }
+
+    private func closeTabAfterResolvingUnsavedChanges(_ tab: EditorTab) {
         guard tab.isDirty else {
-            closeTabImmediately(id: id)
+            closeTabImmediately(id: tab.id)
             return
         }
 
         switch decideUnsavedChanges(for: tab) {
         case .save:
-            saveTab(id: id) { [weak self] didSave in
+            saveTab(id: tab.id) { [weak self] didSave in
                 guard didSave else {
                     return
                 }
 
                 if Thread.isMainThread {
                     MainActor.assumeIsolated {
-                        self?.closeTabImmediately(id: id)
+                        self?.closeTabImmediately(id: tab.id)
                     }
                 } else {
                     Task { @MainActor in
-                        self?.closeTabImmediately(id: id)
+                        self?.closeTabImmediately(id: tab.id)
                     }
                 }
             }
         case .discard:
-            closeTabImmediately(id: id)
+            closeTabImmediately(id: tab.id)
         case .cancel:
             return
         }
@@ -1525,6 +1549,11 @@ final class EditorDocumentController: ObservableObject {
     }
 
     private func currentEditorMarkdown(completion: @escaping (String) -> Void) {
+        if let currentEditorMarkdownOverride {
+            currentEditorMarkdownOverride(completion)
+            return
+        }
+
         editorController.currentMarkdown { [weak self] result in
             Task { @MainActor in
                 guard let self else {

@@ -30,6 +30,8 @@ final class EditorRuntimeStagerTests: XCTestCase {
             "lute.min.js": "window.Lute = {};",
             "zh_CN.js": "window.VditorI18n = {};",
             "ant.js": "window.VDITOR_ICON = {};",
+            "highlight.min.js": "window.hljs = {};",
+            "third-languages.js": "window.hljsThirdLanguages = {};",
             "github.min.css": ".hljs {}",
             "github-dark.min.css": ".hljs-dark {}",
             "katex.min.css": "@font-face { font-family: KaTeX_Main; src: url(fonts/KaTeX_Main-Regular.woff2); }",

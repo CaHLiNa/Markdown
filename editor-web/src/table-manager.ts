@@ -1,3 +1,20 @@
+import {
+  alignMarkdownTable,
+  alignMarkdownTableColumn,
+  deleteMarkdownTableColumn,
+  deleteMarkdownTableRow,
+  fillMarkdownTableBlanksFromFirstColumn,
+  fillMarkdownTableBlanksFromHeader,
+  insertMarkdownTableColumn,
+  insertMarkdownTableRow,
+  parseMarkdownTable,
+  resizeMarkdownTable,
+  serializeMarkdownTable,
+  type MarkdownTable,
+  type MarkdownTableAlignment
+} from './markdown-table'
+import type { SelectionOffsets } from './selection-manager'
+
 type EditorVisualMode = 'ir' | 'sv'
 
 type TableContext = {
@@ -5,7 +22,11 @@ type TableContext = {
   cellElement: HTMLTableCellElement
 }
 
-type TableAlignment = 'left' | 'center' | 'right'
+type TableBlockRecord = {
+  from: number
+  to: number
+  text: string
+}
 
 type TableToolbarAction =
   | 'align-left'
@@ -36,9 +57,18 @@ type TableContextMenuAction =
   | 'autofill-from-first-column'
   | 'delete-table'
 
-type TableLuteCodec = {
-  Md2VditorIRDOM: (markdown: string) => string
-  VditorIRDOM2Md: (html: string) => string
+type TableContextMenuItem = {
+  action: TableContextMenuAction
+  label: string
+  title: string
+  hasSubmenu?: boolean
+  separatorBefore?: boolean
+}
+
+type TableState = TableContext & {
+  block: TableBlockRecord
+  table: MarkdownTable | null
+  supportsStructuralEdits: boolean
 }
 
 type CreateTableManagerOptions = {
@@ -46,18 +76,19 @@ type CreateTableManagerOptions = {
   getIRRoot: () => HTMLElement
   getCurrentMode: () => EditorVisualMode
   getSelectionRangeWithinIR: () => Range | null
-  replaceElementWithMarkdown: (
-    element: Element,
+  getSelectionOffsets: () => SelectionOffsets
+  getTableBlock: (tableElement: HTMLTableElement) => TableBlockRecord | null
+  replaceMarkdownRange: (
+    from: number,
+    to: number,
     markdown: string,
-    options?: {
-      selectReplacementStart?: boolean
-    }
+    selection?: SelectionOffsets
   ) => boolean
-  getLute: () => TableLuteCodec | null | undefined
 }
 
 export type TableManager = {
   handleBlur: () => void
+  handleEditorMutation: () => void
   hideToolbar: () => void
   scheduleRefresh: () => void
   destroy: () => void
@@ -118,71 +149,6 @@ const TABLE_TOOLBAR_ALIGNMENT_ACTIONS: Array<{
   { action: 'align-right', icon: 'align-right', title: '当前列右对齐' }
 ]
 
-const TABLE_CONTEXT_MENU_ITEMS: Record<
-  TableContextMenuView,
-  Array<{
-    action: TableContextMenuAction
-    label: string
-    title: string
-    hasSubmenu?: boolean
-    separatorBefore?: boolean
-  }>
-> = {
-  root: [
-    { action: 'open-table-submenu', label: '表格', title: '表格操作', hasSubmenu: true },
-    {
-      action: 'insert-paragraph-above',
-      label: '在上方插入段落',
-      title: '在表格上方插入段落',
-      separatorBefore: true
-    },
-    {
-      action: 'insert-paragraph-below',
-      label: '在下方插入段落',
-      title: '在表格下方插入段落'
-    },
-    {
-      action: 'open-autofill-submenu',
-      label: '自动填充',
-      title: '自动填充表格内容',
-      hasSubmenu: true,
-      separatorBefore: true
-    }
-  ],
-  table: [
-    { action: 'insert-table-row-above', label: '上方插入行', title: '在当前行上方插入一行' },
-    { action: 'insert-table-row-below', label: '下方插入行', title: '在当前行下方插入一行' },
-    {
-      action: 'insert-table-column-left',
-      label: '左侧插入列',
-      title: '在当前列左侧插入一列',
-      separatorBefore: true
-    },
-    {
-      action: 'insert-table-column-right',
-      label: '右侧插入列',
-      title: '在当前列右侧插入一列'
-    },
-    { action: 'delete-table-row', label: '删除行', title: '删除当前行', separatorBefore: true },
-    { action: 'delete-table-column', label: '删除列', title: '删除当前列' },
-    { action: 'copy-table', label: '复制表格', title: '复制整个表格', separatorBefore: true },
-    {
-      action: 'format-table-source',
-      label: '格式化表格源码',
-      title: '格式化当前表格源码'
-    },
-    { action: 'delete-table', label: '删除表格', title: '删除整个表格', separatorBefore: true }
-  ],
-  autofill: [
-    { action: 'autofill-from-header', label: '用首行填充空白', title: '使用首行内容填充空白单元格' },
-    {
-      action: 'autofill-from-first-column',
-      label: '用首列填充空白',
-      title: '使用首列内容填充空白单元格'
-    }
-  ]
-}
-
 const clamp = (value: number, minimum: number, maximum: number) => {
   return Math.min(Math.max(value, minimum), maximum)
 }
@@ -197,10 +163,6 @@ const asElement = (node: Node | null) => {
 
 const findClosestElement = <T extends Element>(node: Node | null, selector: string) => {
   return asElement(node)?.closest(selector) as T | null
-}
-
-const normalizeVisualText = (value: string) => {
-  return value.replace(/\s+/g, ' ').trim()
 }
 
 const copyTextToClipboard = async (text: string) => {
@@ -225,13 +187,36 @@ const copyTextToClipboard = async (text: string) => {
   }
 }
 
+const isSupportedTableDOM = (tableElement: HTMLTableElement) => {
+  const rows = Array.from(tableElement.rows)
+
+  if (rows.length < 2) {
+    return false
+  }
+
+  const columnCount = rows[0]?.cells.length ?? 0
+
+  if (columnCount < 1) {
+    return false
+  }
+
+  return rows.every((row) => {
+    if (row.cells.length !== columnCount) {
+      return false
+    }
+
+    return Array.from(row.cells).every((cell) => cell.rowSpan === 1 && cell.colSpan === 1)
+  })
+}
+
 export const createTableManager = ({
   host,
   getIRRoot,
   getCurrentMode,
   getSelectionRangeWithinIR,
-  replaceElementWithMarkdown,
-  getLute
+  getSelectionOffsets,
+  getTableBlock,
+  replaceMarkdownRange
 }: CreateTableManagerOptions): TableManager => {
   let tableToolbarRefreshFrame = 0
   let tableToolbar: HTMLDivElement | null = null
@@ -241,8 +226,9 @@ export const createTableManager = ({
   let tableContextMenuView: TableContextMenuView = 'root'
   let tableGridPointerDown = false
   let activeTableContext: TableContext | null = null
-  let tableToolbarInteractionTimer = 0
   let suppressTableToolbarSelectionChange = false
+  let tableToolbarDeleteButton: HTMLButtonElement | null = null
+  const events = new AbortController()
   const tableToolbarButtons = new Map<TableToolbarAction, HTMLButtonElement>()
 
   const getTableContextFromRange = (range: Range): TableContext | null => {
@@ -292,209 +278,102 @@ export const createTableManager = ({
     return isLiveTableContext(activeTableContext) ? activeTableContext : null
   }
 
-  const getResolvedTableContext = () => {
-    return getCurrentTableContext() ?? getRetainedTableContext()
-  }
-
-  const markTableToolbarInteraction = () => {
-    suppressTableToolbarSelectionChange = true
-
-    if (tableToolbarInteractionTimer !== 0) {
-      window.clearTimeout(tableToolbarInteractionTimer)
+  const resolveTableState = (context: TableContext | null): TableState | null => {
+    if (!context || getCurrentMode() !== 'ir') {
+      return null
     }
 
-    tableToolbarInteractionTimer = window.setTimeout(() => {
-      suppressTableToolbarSelectionChange = false
-      tableToolbarInteractionTimer = 0
-    }, 120)
-  }
+    const block = getTableBlock(context.tableElement)
 
-  const readTableAlignment = (cellElement: HTMLTableCellElement) => {
-    const align = cellElement.getAttribute('align')
+    if (!block) {
+      return null
+    }
 
-    return align === 'center' || align === 'right' ? align : 'left'
-  }
+    const table = parseMarkdownTable(block.text)
+    const supportsStructuralEdits =
+      !!table &&
+      isSupportedTableDOM(context.tableElement) &&
+      context.tableElement.rows.length === table.rows.length + 1 &&
+      (context.tableElement.rows[0]?.cells.length ?? 0) === table.header.length
 
-  const getCurrentTableDimensions = (tableElement: HTMLTableElement) => {
     return {
-      rows: tableElement.rows.length,
-      columns: tableElement.rows[0]?.cells.length ?? 0
+      ...context,
+      block,
+      table,
+      supportsStructuralEdits
     }
   }
 
-  const getAllTableCells = (tableElement: HTMLTableElement) => {
-    return Array.from(tableElement.rows, (row) => Array.from(row.cells) as HTMLTableCellElement[]).flat()
+  const getResolvedTableState = () => {
+    return resolveTableState(getCurrentTableContext()) ?? resolveTableState(getRetainedTableContext())
   }
 
-  const isWholeTableSelection = (context: TableContext) => {
-    const selection = window.getSelection()
+  const beginTableToolbarInteraction = () => {
+    suppressTableToolbarSelectionChange = true
+  }
 
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+  const endTableToolbarInteraction = () => {
+    suppressTableToolbarSelectionChange = false
+    tableGridPointerDown = false
+  }
+
+  const getCurrentTableDimensions = (state: TableState) => {
+    if (state.table) {
+      return {
+        rows: state.table.rows.length + 1,
+        columns: state.table.header.length
+      }
+    }
+
+    return {
+      rows: state.tableElement.rows.length,
+      columns: state.tableElement.rows[0]?.cells.length ?? 0
+    }
+  }
+
+  const isWholeTableSelection = (state: TableState) => {
+    const selection = getSelectionOffsets()
+
+    if (selection.anchor === selection.head) {
       return false
     }
 
-    const range = selection.getRangeAt(0)
-    const cells = getAllTableCells(context.tableElement)
-    const commonAncestorWithinTable =
-      range.commonAncestorContainer === context.tableElement ||
-      context.tableElement.contains(range.commonAncestorContainer)
-    const intersectsEveryCell =
-      cells.length > 0 &&
-      cells.every((cellElement) => {
-        try {
-          return range.intersectsNode(cellElement)
-        } catch {
-          return false
-        }
-      })
+    const start = Math.min(selection.anchor, selection.head)
+    const end = Math.max(selection.anchor, selection.head)
 
-    return intersectsEveryCell && commonAncestorWithinTable
+    return start <= state.block.from && end >= state.block.to
   }
 
-  const readWholeTableAlignment = (context: TableContext) => {
-    const alignments = Array.from(context.tableElement.rows, (row) =>
-      Array.from(row.cells, (cell) => readTableAlignment(cell as HTMLTableCellElement))
-    ).flat()
-
-    if (alignments.length === 0) {
+  const readTableAlignment = (state: TableState) => {
+    if (!state.table) {
       return 'left'
     }
 
-    return alignments.every((align) => align === alignments[0]) ? alignments[0] : null
+    const alignment = state.table.alignments[state.cellElement.cellIndex] ?? null
+    return alignment ?? 'left'
   }
 
-  const ensureTableSections = (tableElement: HTMLTableElement) => {
-    const head = tableElement.tHead ?? tableElement.createTHead()
-    const headRow = head.rows[0] ?? head.insertRow()
-    const body = tableElement.tBodies[0] ?? tableElement.createTBody()
-
-    return {
-      headRow,
-      body
-    }
-  }
-
-  const insertTableCellAt = (row: HTMLTableRowElement, index: number, tagName: 'th' | 'td') => {
-    const cell = document.createElement(tagName)
-    const referenceCell = row.cells.item(index)
-
-    if (referenceCell) {
-      row.insertBefore(cell, referenceCell)
-    } else {
-      row.append(cell)
+  const readWholeTableAlignment = (state: TableState) => {
+    if (!state.table || state.table.alignments.length === 0) {
+      return 'left'
     }
 
-    return cell
+    const [firstAlignment, ...restAlignments] = state.table.alignments
+    return restAlignments.every((alignment) => alignment === firstAlignment)
+      ? firstAlignment ?? 'left'
+      : null
   }
 
-  const normalizeTableColumns = (tableElement: HTMLTableElement, targetColumns: number) => {
-    const { headRow, body } = ensureTableSections(tableElement)
-    const allRows = [headRow, ...Array.from(body.rows)]
-
-    allRows.forEach((row, rowIndex) => {
-      while (row.cells.length < targetColumns) {
-        insertTableCellAt(row, row.cells.length, rowIndex === 0 ? 'th' : 'td')
+  const replaceTableMarkdown = (state: TableState, markdown: string, selection?: SelectionOffsets) => {
+    return replaceMarkdownRange(
+      state.block.from,
+      state.block.to,
+      markdown,
+      selection ?? {
+        anchor: state.block.from,
+        head: state.block.from
       }
-
-      while (row.cells.length > targetColumns) {
-        row.deleteCell(row.cells.length - 1)
-      }
-    })
-  }
-
-  const readTableMarkdown = (tableElement: HTMLTableElement) => {
-    return getLute()?.VditorIRDOM2Md(tableElement.outerHTML) ?? null
-  }
-
-  const replaceTableWithHistory = (
-    context: TableContext,
-    modifyClone: (cloneTable: HTMLTableElement) => void
-  ) => {
-    const cloneTable = context.tableElement.cloneNode(true) as HTMLTableElement
-    modifyClone(cloneTable)
-    const nextMarkdown = readTableMarkdown(cloneTable)
-
-    if (nextMarkdown == null) {
-      return false
-    }
-
-    return replaceElementWithMarkdown(context.tableElement, nextMarkdown, {
-      selectReplacementStart: true
-    })
-  }
-
-  const resizeTableToDimensions = (context: TableContext, requestedRows: number, requestedColumns: number) => {
-    return replaceTableWithHistory(context, (cloneTable) => {
-      const targetRows = Math.max(2, requestedRows)
-      const targetColumns = Math.max(1, requestedColumns)
-      const { body } = ensureTableSections(cloneTable)
-
-      normalizeTableColumns(cloneTable, targetColumns)
-
-      while (body.rows.length < targetRows - 1) {
-        const row = body.insertRow()
-
-        for (let index = 0; index < targetColumns; index += 1) {
-          row.append(document.createElement('td'))
-        }
-      }
-
-      while (body.rows.length > targetRows - 1) {
-        body.deleteRow(body.rows.length - 1)
-      }
-    })
-  }
-
-  const insertTableRow = (context: TableContext, position: 'above' | 'below') => {
-    return replaceTableWithHistory(context, (cloneTable) => {
-      const row = context.cellElement.parentElement as HTMLTableRowElement
-      const insertIndex = position === 'above' ? Math.max(0, row.rowIndex) : row.rowIndex + 1
-      const newRow = cloneTable.insertRow(insertIndex)
-      const columnCount = Math.max(1, cloneTable.rows[0]?.cells.length ?? 1)
-
-      for (let index = 0; index < columnCount; index += 1) {
-        const cell = newRow.insertCell()
-        cell.innerHTML = getCurrentMode() === 'ir' ? '<br>' : ''
-      }
-    })
-  }
-
-  const deleteTableRow = (context: TableContext) => {
-    return replaceTableWithHistory(context, (cloneTable) => {
-      const row = context.cellElement.parentElement as HTMLTableRowElement
-      cloneTable.rows.item(row.rowIndex)?.remove()
-    })
-  }
-
-  const insertTableColumn = (context: TableContext, position: 'left' | 'right') => {
-    return replaceTableWithHistory(context, (cloneTable) => {
-      const cellIndex = context.cellElement.cellIndex
-      const insertIndex = position === 'left' ? cellIndex : cellIndex + 1
-
-      Array.from(cloneTable.rows).forEach((row, rowIndex) => {
-        const cell = row.insertCell(insertIndex)
-
-        if (row.parentElement?.tagName === 'THEAD' || (rowIndex === 0 && row.cells[0]?.tagName === 'TH')) {
-          const headerCell = document.createElement('th')
-          headerCell.innerHTML = '<br>'
-          cell.replaceWith(headerCell)
-        } else {
-          cell.innerHTML = getCurrentMode() === 'ir' ? '<br>' : ''
-        }
-      })
-    })
-  }
-
-  const deleteTableColumn = (context: TableContext) => {
-    return replaceTableWithHistory(context, (cloneTable) => {
-      const targetColumnIndex = context.cellElement.cellIndex
-
-      Array.from(cloneTable.rows).forEach((row) => {
-        if (row.cells[targetColumnIndex]) {
-          row.deleteCell(targetColumnIndex)
-        }
-      })
-    })
+    )
   }
 
   const hideTableToolbarPopover = () => {
@@ -517,94 +396,144 @@ export const createTableManager = ({
     tableToolbarPopover.replaceChildren()
   }
 
-  const copyCurrentTable = (context: TableContext) => {
-    const content = readTableMarkdown(context.tableElement)
-
-    if (!content) {
-      return false
-    }
-
+  const copyCurrentTable = (state: TableState) => {
     hideTableToolbarPopover()
-    void copyTextToClipboard(content)
+    void copyTextToClipboard(state.block.text)
     return true
   }
 
-  const formatCurrentTableSource = (context: TableContext) => {
-    const content = readTableMarkdown(context.tableElement)
-
-    if (!content) {
+  const formatCurrentTableSource = (state: TableState) => {
+    if (!state.table || !state.supportsStructuralEdits) {
       return false
     }
 
-    return replaceElementWithMarkdown(context.tableElement, content, {
-      selectReplacementStart: true
+    return replaceTableMarkdown(state, serializeMarkdownTable(state.table))
+  }
+
+  const insertParagraphNearTable = (state: TableState, position: 'above' | 'below') => {
+    const nextMarkdown =
+      position === 'above' ? `\n\n${state.block.text}` : `${state.block.text}\n\n`
+    const selectionOffset =
+      position === 'above' ? state.block.from : state.block.from + state.block.text.length + 2
+
+    return replaceMarkdownRange(state.block.from, state.block.to, nextMarkdown, {
+      anchor: selectionOffset,
+      head: selectionOffset
     })
   }
 
-  const insertParagraphNearTable = (context: TableContext, position: 'above' | 'below') => {
-    const tableMarkdown = readTableMarkdown(context.tableElement)
+  const deleteCurrentTable = (state?: TableState) => {
+    const currentState = state ?? getResolvedTableState()
 
-    if (!tableMarkdown) {
+    if (!currentState) {
       return false
     }
 
-    return replaceElementWithMarkdown(
-      context.tableElement,
-      position === 'above' ? `\n\n${tableMarkdown}` : `${tableMarkdown}\n\n`,
-      {
-        selectReplacementStart: position === 'above'
-      }
+    hideToolbar()
+    return replaceMarkdownRange(currentState.block.from, currentState.block.to, '', {
+      anchor: currentState.block.from,
+      head: currentState.block.from
+    })
+  }
+
+  const resizeTableToDimensions = (state: TableState, requestedRows: number, requestedColumns: number) => {
+    if (!state.table || !state.supportsStructuralEdits) {
+      return false
+    }
+
+    return replaceTableMarkdown(state, serializeMarkdownTable(resizeMarkdownTable(state.table, requestedRows, requestedColumns)))
+  }
+
+  const insertTableRow = (state: TableState, position: 'above' | 'below') => {
+    if (!state.table || !state.supportsStructuralEdits) {
+      return false
+    }
+
+    const rowElement =
+      state.cellElement.parentElement instanceof HTMLTableRowElement
+        ? state.cellElement.parentElement
+        : (state.cellElement.closest('tr') as HTMLTableRowElement | null)
+
+    return replaceTableMarkdown(
+      state,
+      serializeMarkdownTable(insertMarkdownTableRow(state.table, rowElement?.rowIndex ?? 0, position))
     )
   }
 
-  const fillTableBlanksFromHeaderRow = (context: TableContext) => {
-    return replaceTableWithHistory(context, (cloneTable) => {
-      const headerValues = Array.from(cloneTable.rows[0]?.cells ?? [], (cell) => cell.textContent ?? '')
+  const deleteTableRow = (state: TableState) => {
+    if (!state.table || !state.supportsStructuralEdits) {
+      return false
+    }
 
-      Array.from(cloneTable.tBodies[0]?.rows ?? []).forEach((row) => {
-        Array.from(row.cells).forEach((cell, columnIndex) => {
-          if (normalizeVisualText(cell.textContent ?? '').length === 0) {
-            cell.textContent = headerValues[columnIndex] ?? ''
-          }
-        })
-      })
-    })
+    const rowElement =
+      state.cellElement.parentElement instanceof HTMLTableRowElement
+        ? state.cellElement.parentElement
+        : (state.cellElement.closest('tr') as HTMLTableRowElement | null)
+    const nextTable = deleteMarkdownTableRow(state.table, rowElement?.rowIndex ?? 0)
+
+    if (!nextTable) {
+      return false
+    }
+
+    return replaceTableMarkdown(state, serializeMarkdownTable(nextTable))
   }
 
-  const fillTableBlanksFromFirstColumn = (context: TableContext) => {
-    return replaceTableWithHistory(context, (cloneTable) => {
-      Array.from(cloneTable.tBodies[0]?.rows ?? []).forEach((row) => {
-        const seed = row.cells.item(0)?.textContent ?? ''
+  const insertTableColumn = (state: TableState, position: 'left' | 'right') => {
+    if (!state.table || !state.supportsStructuralEdits) {
+      return false
+    }
 
-        if (normalizeVisualText(seed).length === 0) {
-          return
-        }
-
-        Array.from(row.cells).forEach((cell, columnIndex) => {
-          if (columnIndex > 0 && normalizeVisualText(cell.textContent ?? '').length === 0) {
-            cell.textContent = seed
-          }
-        })
-      })
-    })
+    return replaceTableMarkdown(
+      state,
+      serializeMarkdownTable(
+        insertMarkdownTableColumn(state.table, state.cellElement.cellIndex, position)
+      )
+    )
   }
 
-  const applyTableAlignment = (context: TableContext, align: TableAlignment) => {
-    return replaceTableWithHistory(context, (cloneTable) => {
-      const targetColumn = context.cellElement.cellIndex
+  const deleteTableColumn = (state: TableState) => {
+    if (!state.table || !state.supportsStructuralEdits) {
+      return false
+    }
 
-      Array.from(cloneTable.rows).forEach((row) => {
-        Array.from(row.cells).forEach((cell, columnIndex) => {
-          if (isWholeTableSelection(context) || columnIndex === targetColumn) {
-            if (align === 'left') {
-              cell.removeAttribute('align')
-            } else {
-              cell.setAttribute('align', align)
-            }
-          }
-        })
-      })
-    })
+    const nextTable = deleteMarkdownTableColumn(state.table, state.cellElement.cellIndex)
+
+    if (!nextTable) {
+      return false
+    }
+
+    return replaceTableMarkdown(state, serializeMarkdownTable(nextTable))
+  }
+
+  const fillTableBlanksFromHeaderRow = (state: TableState) => {
+    if (!state.table || !state.supportsStructuralEdits) {
+      return false
+    }
+
+    return replaceTableMarkdown(state, serializeMarkdownTable(fillMarkdownTableBlanksFromHeader(state.table)))
+  }
+
+  const fillTableBlanksFromFirstColumn = (state: TableState) => {
+    if (!state.table || !state.supportsStructuralEdits) {
+      return false
+    }
+
+    return replaceTableMarkdown(
+      state,
+      serializeMarkdownTable(fillMarkdownTableBlanksFromFirstColumn(state.table))
+    )
+  }
+
+  const applyTableAlignment = (state: TableState, align: MarkdownTableAlignment) => {
+    if (!state.table || !state.supportsStructuralEdits) {
+      return false
+    }
+
+    const nextTable = isWholeTableSelection(state)
+      ? alignMarkdownTable(state.table, align)
+      : alignMarkdownTableColumn(state.table, state.cellElement.cellIndex, align)
+
+    return replaceTableMarkdown(state, serializeMarkdownTable(nextTable))
   }
 
   const showTableToolbarPopover = (kind: TableToolbarPopoverKind) => {
@@ -625,30 +554,103 @@ export const createTableManager = ({
     return true
   }
 
-  const deleteCurrentTable = (context?: TableContext) => {
-    const currentContext = context ?? getResolvedTableContext()
+  const getContextMenuItems = (view: TableContextMenuView, state: TableState): TableContextMenuItem[] => {
+    const safeTableItems: TableContextMenuItem[] = [
+      { action: 'open-table-submenu', label: '表格', title: '表格操作', hasSubmenu: true },
+      {
+        action: 'insert-paragraph-above',
+        label: '在上方插入段落',
+        title: '在表格上方插入段落',
+        separatorBefore: true
+      },
+      {
+        action: 'insert-paragraph-below',
+        label: '在下方插入段落',
+        title: '在表格下方插入段落'
+      },
+      {
+        action: 'open-autofill-submenu',
+        label: '自动填充',
+        title: '自动填充表格内容',
+        hasSubmenu: true,
+        separatorBefore: true
+      }
+    ]
 
-    if (!currentContext) {
-      return false
+    const fallbackRootItems: TableContextMenuItem[] = [
+      {
+        action: 'insert-paragraph-above',
+        label: '在上方插入段落',
+        title: '在表格上方插入段落'
+      },
+      {
+        action: 'insert-paragraph-below',
+        label: '在下方插入段落',
+        title: '在表格下方插入段落'
+      },
+      {
+        action: 'copy-table',
+        label: '复制表格',
+        title: '复制整个表格',
+        separatorBefore: true
+      },
+      {
+        action: 'delete-table',
+        label: '删除表格',
+        title: '删除整个表格'
+      }
+    ]
+
+    if (!state.supportsStructuralEdits) {
+      return view === 'root' ? fallbackRootItems : []
     }
 
-    const nextTarget =
-      currentContext.tableElement.nextElementSibling ?? currentContext.tableElement.previousElementSibling
-
-    hideToolbar()
-    return replaceElementWithMarkdown(currentContext.tableElement, '', {
-      selectReplacementStart: !!nextTarget
-    })
+    switch (view) {
+      case 'root':
+        return safeTableItems
+      case 'table':
+        return [
+          { action: 'insert-table-row-above', label: '上方插入行', title: '在当前行上方插入一行' },
+          { action: 'insert-table-row-below', label: '下方插入行', title: '在当前行下方插入一行' },
+          {
+            action: 'insert-table-column-left',
+            label: '左侧插入列',
+            title: '在当前列左侧插入一列',
+            separatorBefore: true
+          },
+          {
+            action: 'insert-table-column-right',
+            label: '右侧插入列',
+            title: '在当前列右侧插入一列'
+          },
+          { action: 'delete-table-row', label: '删除行', title: '删除当前行', separatorBefore: true },
+          { action: 'delete-table-column', label: '删除列', title: '删除当前列' },
+          { action: 'copy-table', label: '复制表格', title: '复制整个表格', separatorBefore: true },
+          {
+            action: 'format-table-source',
+            label: '格式化表格源码',
+            title: '格式化当前表格源码'
+          },
+          { action: 'delete-table', label: '删除表格', title: '删除整个表格', separatorBefore: true }
+        ]
+      case 'autofill':
+        return [
+          { action: 'autofill-from-header', label: '用首行填充空白', title: '使用首行内容填充空白单元格' },
+          {
+            action: 'autofill-from-first-column',
+            label: '用首列填充空白',
+            title: '使用首列内容填充空白单元格'
+          }
+        ]
+    }
   }
 
-  const renderTableGridPopover = (context: TableContext) => {
-    if (!tableToolbarPopover || !showTableToolbarPopover('grid')) {
+  const renderTableGridPopover = (state: TableState) => {
+    if (!tableToolbarPopover || !showTableToolbarPopover('grid') || !state.supportsStructuralEdits) {
       return
     }
 
-    tableContextMenuView = 'root'
-
-    const { rows: currentRows, columns: currentColumns } = getCurrentTableDimensions(context.tableElement)
+    const { rows: currentRows, columns: currentColumns } = getCurrentTableDimensions(state)
     const maxRows = Math.max(TABLE_GRID_MIN_SIZE, currentRows + TABLE_GRID_BUFFER)
     const maxColumns = Math.max(TABLE_GRID_MIN_SIZE, currentColumns + TABLE_GRID_BUFFER)
     let selectedRows = currentRows
@@ -663,13 +665,13 @@ export const createTableManager = ({
     footerElement.className = 'editor-table-toolbar__grid-meta'
 
     const applySelection = () => {
+      hideTableToolbarPopover()
+
       if (selectedRows === currentRows && selectedColumns === currentColumns) {
-        hideTableToolbarPopover()
         return
       }
 
-      hideTableToolbarPopover()
-      void resizeTableToDimensions(context, selectedRows, selectedColumns)
+      void resizeTableToDimensions(state, selectedRows, selectedColumns)
     }
 
     const updateSelection = (rows: number, columns: number) => {
@@ -697,51 +699,125 @@ export const createTableManager = ({
         cellElement.className = 'editor-table-toolbar__grid-cell'
         cellElement.dataset.rows = String(rowIndex)
         cellElement.dataset.columns = String(columnIndex)
-        cellElement.addEventListener('pointerdown', (event) => {
-          markTableToolbarInteraction()
-          event.preventDefault()
-          tableGridPointerDown = true
-          updateSelection(rowIndex, columnIndex)
-        })
-        cellElement.addEventListener('pointerenter', () => {
-          if (tableGridPointerDown) {
+        cellElement.addEventListener(
+          'pointerdown',
+          (event) => {
+            beginTableToolbarInteraction()
+            event.preventDefault()
+            tableGridPointerDown = true
             updateSelection(rowIndex, columnIndex)
-          }
-        })
-        cellElement.addEventListener('pointerup', (event) => {
-          event.preventDefault()
+          },
+          { signal: events.signal }
+        )
+        cellElement.addEventListener(
+          'pointerenter',
+          () => {
+            if (tableGridPointerDown) {
+              updateSelection(rowIndex, columnIndex)
+            }
+          },
+          { signal: events.signal }
+        )
+        cellElement.addEventListener(
+          'pointerup',
+          (event) => {
+            event.preventDefault()
 
-          if (!tableGridPointerDown) {
-            return
-          }
+            if (!tableGridPointerDown) {
+              return
+            }
 
-          updateSelection(rowIndex, columnIndex)
-          tableGridPointerDown = false
-          applySelection()
-        })
-        cellElement.addEventListener('click', () => {
-          updateSelection(rowIndex, columnIndex)
-        })
+            updateSelection(rowIndex, columnIndex)
+            tableGridPointerDown = false
+            applySelection()
+          },
+          { signal: events.signal }
+        )
+        cellElement.addEventListener(
+          'click',
+          () => {
+            updateSelection(rowIndex, columnIndex)
+          },
+          { signal: events.signal }
+        )
 
         matrixElement.append(cellElement)
       }
     }
 
     updateSelection(currentRows, currentColumns)
-    footerElement.textContent = `调整为 ${currentRows} × ${currentColumns}`
     panelElement.append(matrixElement, footerElement)
     tableToolbarPopover.replaceChildren(panelElement)
   }
 
+  const runTableContextMenuAction = (action: TableContextMenuAction) => {
+    const state = getResolvedTableState()
+
+    if (!state) {
+      hideToolbar()
+      return false
+    }
+
+    retainTableContext(state)
+
+    switch (action) {
+      case 'open-table-submenu':
+        renderTableContextMenu('table')
+        return true
+      case 'open-autofill-submenu':
+        renderTableContextMenu('autofill')
+        return true
+      case 'insert-paragraph-above':
+        hideTableToolbarPopover()
+        return insertParagraphNearTable(state, 'above')
+      case 'insert-paragraph-below':
+        hideTableToolbarPopover()
+        return insertParagraphNearTable(state, 'below')
+      case 'insert-table-row-above':
+        hideTableToolbarPopover()
+        return insertTableRow(state, 'above')
+      case 'insert-table-row-below':
+        hideTableToolbarPopover()
+        return insertTableRow(state, 'below')
+      case 'insert-table-column-left':
+        hideTableToolbarPopover()
+        return insertTableColumn(state, 'left')
+      case 'insert-table-column-right':
+        hideTableToolbarPopover()
+        return insertTableColumn(state, 'right')
+      case 'delete-table-row':
+        hideTableToolbarPopover()
+        return deleteTableRow(state)
+      case 'delete-table-column':
+        hideTableToolbarPopover()
+        return deleteTableColumn(state)
+      case 'copy-table':
+        return copyCurrentTable(state)
+      case 'format-table-source':
+        hideTableToolbarPopover()
+        return formatCurrentTableSource(state)
+      case 'autofill-from-header':
+        hideTableToolbarPopover()
+        return fillTableBlanksFromHeaderRow(state)
+      case 'autofill-from-first-column':
+        hideTableToolbarPopover()
+        return fillTableBlanksFromFirstColumn(state)
+      case 'delete-table':
+        hideTableToolbarPopover()
+        return deleteCurrentTable(state)
+    }
+  }
+
   const createTableContextMenuPanel = (
     view: TableContextMenuView,
+    state: TableState,
     activeSubview: Exclude<TableContextMenuView, 'root'> | null = null
   ) => {
     const panelElement = document.createElement('div')
     panelElement.className = 'editor-table-toolbar__menu'
     panelElement.dataset.view = view
 
-    TABLE_CONTEXT_MENU_ITEMS[view].forEach((item) => {
+    getContextMenuItems(view, state).forEach((item) => {
       if (item.separatorBefore) {
         const separator = document.createElement('div')
         separator.className = 'editor-table-toolbar__menu-separator'
@@ -770,13 +846,21 @@ export const createTableManager = ({
         button.append(caret)
       }
 
-      button.addEventListener('pointerdown', (event) => {
-        markTableToolbarInteraction()
-        event.preventDefault()
-      })
-      button.addEventListener('click', () => {
-        void runTableContextMenuAction(item.action)
-      })
+      button.addEventListener(
+        'pointerdown',
+        (event) => {
+          beginTableToolbarInteraction()
+          event.preventDefault()
+        },
+        { signal: events.signal }
+      )
+      button.addEventListener(
+        'click',
+        () => {
+          void runTableContextMenuAction(item.action)
+        },
+        { signal: events.signal }
+      )
 
       panelElement.append(button)
     })
@@ -785,22 +869,24 @@ export const createTableManager = ({
   }
 
   const renderTableContextMenu = (view: TableContextMenuView = 'root') => {
-    if (!tableToolbarPopover || !showTableToolbarPopover('menu')) {
+    const state = getResolvedTableState()
+
+    if (!state || !tableToolbarPopover || !showTableToolbarPopover('menu')) {
       return
     }
 
     tableContextMenuView = view
 
     if (view === 'root') {
-      tableToolbarPopover.replaceChildren(createTableContextMenuPanel('root'))
+      tableToolbarPopover.replaceChildren(createTableContextMenuPanel('root', state))
       return
     }
 
     const stackElement = document.createElement('div')
     stackElement.className = 'editor-table-toolbar__menu-stack'
     stackElement.append(
-      createTableContextMenuPanel('root', view),
-      createTableContextMenuPanel(view, view)
+      createTableContextMenuPanel('root', state, view),
+      createTableContextMenuPanel(view, state, view)
     )
     tableToolbarPopover.replaceChildren(stackElement)
   }
@@ -817,12 +903,12 @@ export const createTableManager = ({
     tableToolbar.setAttribute('aria-hidden', 'true')
   }
 
-  const positionTableToolbar = (context: TableContext) => {
+  const positionTableToolbar = (state: TableState) => {
     if (!tableToolbar) {
       return
     }
 
-    const tableRect = context.tableElement.getBoundingClientRect()
+    const tableRect = state.tableElement.getBoundingClientRect()
     const hostRect = host.getBoundingClientRect()
 
     if (tableRect.width <= 0 || tableRect.height <= 0) {
@@ -835,9 +921,13 @@ export const createTableManager = ({
     tableToolbar.style.width = `${width}px`
 
     const toolbarRect = tableToolbar.getBoundingClientRect()
-    const top = Math.max(0, tableRect.top - hostRect.top - toolbarRect.height - 6)
+    const preferredTop = tableRect.top - hostRect.top - toolbarRect.height - 6
+    const fallbackTop = tableRect.bottom - hostRect.top + 6
+    const useFallbackPlacement = preferredTop < 0 && fallbackTop + toolbarRect.height <= host.clientHeight
+    const top = useFallbackPlacement ? fallbackTop : Math.max(0, preferredTop)
     const left = clamp(Math.round(tableRect.left - hostRect.left), 0, Math.max(0, host.clientWidth - width))
 
+    tableToolbar.dataset.placement = useFallbackPlacement ? 'below' : 'above'
     tableToolbar.style.top = `${Math.round(top)}px`
     tableToolbar.style.left = `${Math.round(left)}px`
   }
@@ -848,33 +938,49 @@ export const createTableManager = ({
     }
 
     const currentContext = getCurrentTableContext()
-    const context =
+    const state =
       suppressTableToolbarSelectionChange && !currentContext
-        ? getRetainedTableContext()
-        : retainTableContext(currentContext)
+        ? resolveTableState(getRetainedTableContext())
+        : resolveTableState(retainTableContext(currentContext))
 
-    if (!context) {
+    if (!state) {
       hideToolbar()
       return
     }
 
-    const activeAlign = isWholeTableSelection(context)
-      ? readWholeTableAlignment(context)
-      : readTableAlignment(context.cellElement)
+    const structuralEditsEnabled = state.supportsStructuralEdits
+    const activeAlign = structuralEditsEnabled
+      ? isWholeTableSelection(state)
+        ? readWholeTableAlignment(state)
+        : readTableAlignment(state)
+      : null
 
     for (const [action, button] of tableToolbarButtons.entries()) {
       const isActive =
-        (action === 'align-left' && activeAlign === 'left') ||
-        (action === 'align-center' && activeAlign === 'center') ||
-        (action === 'align-right' && activeAlign === 'right')
+        structuralEditsEnabled &&
+        ((action === 'align-left' && activeAlign === 'left') ||
+          (action === 'align-center' && activeAlign === 'center') ||
+          (action === 'align-right' && activeAlign === 'right'))
 
+      button.hidden = !structuralEditsEnabled
+      button.disabled = !structuralEditsEnabled
       button.dataset.active = isActive ? 'true' : 'false'
       button.setAttribute('aria-pressed', isActive ? 'true' : 'false')
     }
 
+    if (tableToolbarEntryButton) {
+      tableToolbarEntryButton.title = structuralEditsEnabled ? '表格工具' : '表格操作'
+      tableToolbarEntryButton.setAttribute('aria-label', tableToolbarEntryButton.title)
+    }
+
+    if (tableToolbarDeleteButton) {
+      tableToolbarDeleteButton.hidden = false
+      tableToolbarDeleteButton.disabled = false
+    }
+
     tableToolbar.hidden = false
     tableToolbar.setAttribute('aria-hidden', 'false')
-    positionTableToolbar(context)
+    positionTableToolbar(state)
   }
 
   const scheduleRefresh = () => {
@@ -889,85 +995,25 @@ export const createTableManager = ({
   }
 
   const runTableToolbarAction = (action: TableToolbarAction) => {
-    const context = getResolvedTableContext()
+    const state = getResolvedTableState()
 
-    if (!context) {
+    if (!state) {
       hideToolbar()
       return false
     }
 
-    retainTableContext(context)
+    retainTableContext(state)
     hideTableToolbarPopover()
-
-    if (action === 'delete-table') {
-      return deleteCurrentTable(context)
-    }
 
     switch (action) {
       case 'align-left':
-        return applyTableAlignment(context, 'left')
+        return applyTableAlignment(state, 'left')
       case 'align-center':
-        return applyTableAlignment(context, 'center')
+        return applyTableAlignment(state, 'center')
       case 'align-right':
-        return applyTableAlignment(context, 'right')
-    }
-  }
-
-  const runTableContextMenuAction = (action: TableContextMenuAction) => {
-    const context = getResolvedTableContext()
-
-    if (!context) {
-      hideToolbar()
-      return false
-    }
-
-    retainTableContext(context)
-
-    switch (action) {
-      case 'open-table-submenu':
-        renderTableContextMenu('table')
-        return true
-      case 'open-autofill-submenu':
-        renderTableContextMenu('autofill')
-        return true
-      case 'insert-paragraph-above':
-        hideTableToolbarPopover()
-        return insertParagraphNearTable(context, 'above')
-      case 'insert-paragraph-below':
-        hideTableToolbarPopover()
-        return insertParagraphNearTable(context, 'below')
-      case 'insert-table-row-above':
-        hideTableToolbarPopover()
-        return insertTableRow(context, 'above')
-      case 'insert-table-row-below':
-        hideTableToolbarPopover()
-        return insertTableRow(context, 'below')
-      case 'insert-table-column-left':
-        hideTableToolbarPopover()
-        return insertTableColumn(context, 'left')
-      case 'insert-table-column-right':
-        hideTableToolbarPopover()
-        return insertTableColumn(context, 'right')
-      case 'delete-table-row':
-        hideTableToolbarPopover()
-        return deleteTableRow(context)
-      case 'delete-table-column':
-        hideTableToolbarPopover()
-        return deleteTableColumn(context)
-      case 'copy-table':
-        return copyCurrentTable(context)
-      case 'format-table-source':
-        hideTableToolbarPopover()
-        return formatCurrentTableSource(context)
-      case 'autofill-from-header':
-        hideTableToolbarPopover()
-        return fillTableBlanksFromHeaderRow(context)
-      case 'autofill-from-first-column':
-        hideTableToolbarPopover()
-        return fillTableBlanksFromFirstColumn(context)
+        return applyTableAlignment(state, 'right')
       case 'delete-table':
-        hideTableToolbarPopover()
-        return deleteCurrentTable(context)
+        return deleteCurrentTable(state)
     }
   }
 
@@ -995,6 +1041,7 @@ export const createTableManager = ({
     tableToolbar = toolbarElement
     tableToolbarPopover = popoverElement
     tableToolbarEntryButton = entryButton
+    tableToolbarDeleteButton = deleteButton
 
     const configureIconButton = (
       button: HTMLButtonElement,
@@ -1008,21 +1055,29 @@ export const createTableManager = ({
       button.setAttribute('aria-label', title)
       button.title = title
       button.innerHTML = TABLE_TOOLBAR_ICONS[icon]
-      button.addEventListener('pointerdown', (event) => {
-        markTableToolbarInteraction()
+      button.addEventListener(
+        'pointerdown',
+        (event) => {
+          beginTableToolbarInteraction()
 
-        if (event.button === 0) {
-          event.preventDefault()
-        }
-      })
+          if (event.button === 0) {
+            event.preventDefault()
+          }
+        },
+        { signal: events.signal }
+      )
     }
 
     const openEntryGridPopover = () => {
-      markTableToolbarInteraction()
-      const context = getResolvedTableContext()
+      const state = getResolvedTableState()
 
-      if (!context) {
+      if (!state) {
         hideToolbar()
+        return
+      }
+
+      if (!state.supportsStructuralEdits) {
+        renderTableContextMenu('root')
         return
       }
 
@@ -1031,19 +1086,18 @@ export const createTableManager = ({
         return
       }
 
-      renderTableGridPopover(context)
+      renderTableGridPopover(state)
     }
 
-    const openEntryContextMenu = (forceOpen = false) => {
-      markTableToolbarInteraction()
-      const context = getResolvedTableContext()
+    const openEntryContextMenu = () => {
+      const state = getResolvedTableState()
 
-      if (!context) {
+      if (!state) {
         hideToolbar()
         return
       }
 
-      if (!forceOpen && tableToolbarPopoverKind === 'menu' && tableContextMenuView === 'root') {
+      if (tableToolbarPopoverKind === 'menu' && tableContextMenuView === 'root') {
         hideTableToolbarPopover()
         return
       }
@@ -1053,20 +1107,32 @@ export const createTableManager = ({
 
     configureIconButton(entryButton, 'table', '表格工具')
     entryButton.setAttribute('aria-haspopup', 'menu')
-    entryButton.addEventListener('click', () => {
-      openEntryGridPopover()
-    })
-    entryButton.addEventListener('contextmenu', (event) => {
-      markTableToolbarInteraction()
-      event.preventDefault()
-      event.stopPropagation()
-      openEntryContextMenu()
-    })
+    entryButton.addEventListener(
+      'click',
+      () => {
+        openEntryGridPopover()
+      },
+      { signal: events.signal }
+    )
+    entryButton.addEventListener(
+      'contextmenu',
+      (event) => {
+        beginTableToolbarInteraction()
+        event.preventDefault()
+        event.stopPropagation()
+        openEntryContextMenu()
+      },
+      { signal: events.signal }
+    )
 
     configureIconButton(deleteButton, 'trash', '删除整个表格')
-    deleteButton.addEventListener('click', () => {
-      void runTableToolbarAction('delete-table')
-    })
+    deleteButton.addEventListener(
+      'click',
+      () => {
+        void runTableToolbarAction('delete-table')
+      },
+      { signal: events.signal }
+    )
 
     const appendAlignmentButton = (
       container: HTMLElement,
@@ -1078,9 +1144,13 @@ export const createTableManager = ({
 
       configureIconButton(button, icon, title)
       button.dataset.action = action
-      button.addEventListener('click', () => {
-        void runTableToolbarAction(action)
-      })
+      button.addEventListener(
+        'click',
+        () => {
+          void runTableToolbarAction(action)
+        },
+        { signal: events.signal }
+      )
       tableToolbarButtons.set(action, button)
       container.append(button)
     }
@@ -1112,16 +1182,25 @@ export const createTableManager = ({
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null
+      const currentState = getResolvedTableState()
 
-      if (toolbarElement.contains(target)) {
+      if (tableToolbar?.contains(target)) {
+        return
+      }
+
+      if (currentState?.tableElement.contains(target)) {
+        window.requestAnimationFrame(() => {
+          hideTableToolbarPopover()
+          scheduleRefresh()
+        })
         return
       }
 
       window.requestAnimationFrame(() => {
         hideTableToolbarPopover()
-        const context = getCurrentTableContext()
+        const nextState = resolveTableState(getCurrentTableContext())
 
-        if (!context) {
+        if (!nextState) {
           hideToolbar()
           return
         }
@@ -1130,45 +1209,17 @@ export const createTableManager = ({
       })
     }
 
-    const handlePointerStateReset = () => {
-      tableGridPointerDown = false
-    }
-
-    document.addEventListener('selectionchange', handleSelectionChange)
-    document.addEventListener('pointerdown', handlePointerDown, true)
-    document.addEventListener('pointerup', handlePointerStateReset)
-    document.addEventListener('pointercancel', handlePointerStateReset)
-    document.addEventListener('scroll', handleViewportChange, true)
-    window.addEventListener('resize', handleViewportChange)
-
-    return () => {
-      if (tableToolbarRefreshFrame !== 0) {
-        window.cancelAnimationFrame(tableToolbarRefreshFrame)
-        tableToolbarRefreshFrame = 0
-      }
-
-      if (tableToolbarInteractionTimer !== 0) {
-        window.clearTimeout(tableToolbarInteractionTimer)
-        tableToolbarInteractionTimer = 0
-      }
-
-      document.removeEventListener('selectionchange', handleSelectionChange)
-      document.removeEventListener('pointerdown', handlePointerDown, true)
-      document.removeEventListener('pointerup', handlePointerStateReset)
-      document.removeEventListener('pointercancel', handlePointerStateReset)
-      document.removeEventListener('scroll', handleViewportChange, true)
-      window.removeEventListener('resize', handleViewportChange)
-
-      hideTableToolbarPopover()
-      tableToolbarButtons.clear()
-      tableToolbarPopover = null
-      tableToolbarEntryButton = null
-      tableToolbar?.remove()
-      tableToolbar = null
-    }
+    document.addEventListener('selectionchange', handleSelectionChange, { signal: events.signal })
+    document.addEventListener('pointerdown', handlePointerDown, { signal: events.signal })
+    document.addEventListener('pointerup', endTableToolbarInteraction, { signal: events.signal })
+    document.addEventListener('pointercancel', endTableToolbarInteraction, { signal: events.signal })
+    document.addEventListener('scroll', handleViewportChange, { signal: events.signal, capture: true })
+    host.addEventListener('pointerleave', endTableToolbarInteraction, { signal: events.signal })
+    window.addEventListener('resize', handleViewportChange, { signal: events.signal })
+    window.addEventListener('blur', endTableToolbarInteraction, { signal: events.signal })
   }
 
-  const removeListeners = installTableToolbar()
+  installTableToolbar()
 
   return {
     handleBlur() {
@@ -1176,10 +1227,30 @@ export const createTableManager = ({
         hideToolbar()
       }
     },
+    handleEditorMutation() {
+      const context = getCurrentTableContext() ?? getRetainedTableContext()
+
+      if (context || !tableToolbar?.hidden) {
+        scheduleRefresh()
+      }
+    },
     hideToolbar,
     scheduleRefresh,
     destroy() {
-      removeListeners()
+      if (tableToolbarRefreshFrame !== 0) {
+        window.cancelAnimationFrame(tableToolbarRefreshFrame)
+        tableToolbarRefreshFrame = 0
+      }
+
+      endTableToolbarInteraction()
+      hideTableToolbarPopover()
+      events.abort()
+      tableToolbarButtons.clear()
+      tableToolbarDeleteButton = null
+      tableToolbarPopover = null
+      tableToolbarEntryButton = null
+      tableToolbar?.remove()
+      tableToolbar = null
     }
   }
 }

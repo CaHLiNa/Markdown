@@ -28,6 +28,9 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         let controller = EditorDocumentController()
         controller.createUntitledDocument()
         controller.currentMarkdown = "modified"
+        controller.currentEditorMarkdownOverride = { completion in
+            completion("modified")
+        }
         controller.unsavedChangesDecisionHandler = { _ in .cancel }
 
         controller.closeCurrentTab()
@@ -41,6 +44,9 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         let controller = EditorDocumentController()
         controller.createUntitledDocument()
         controller.currentMarkdown = "modified"
+        controller.currentEditorMarkdownOverride = { completion in
+            completion("modified")
+        }
         controller.unsavedChangesDecisionHandler = { _ in .discard }
 
         controller.closeCurrentTab()
@@ -49,11 +55,32 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         XCTAssertNil(controller.activeTabID, "Expected there to be no active tab after closing the last dirty tab.")
     }
 
+    func testClosingActiveTabRefreshesEditorMarkdownBeforeDirtyCheck() {
+        resetPersistentState()
+        let controller = EditorDocumentController()
+        controller.createUntitledDocument()
+        controller.currentEditorMarkdownOverride = { completion in
+            completion("modified just before close")
+        }
+        controller.unsavedChangesDecisionHandler = { tab in
+            XCTAssertEqual(tab.markdown, "modified just before close")
+            return .cancel
+        }
+
+        controller.closeCurrentTab()
+
+        XCTAssertEqual(controller.tabs.count, 1, "Expected cancel to keep the refreshed dirty tab open.")
+        XCTAssertEqual(controller.currentMarkdown, "modified just before close")
+    }
+
     func testClosingDirtyTabAfterSaveClosesTab() {
         resetPersistentState()
         let controller = EditorDocumentController()
         controller.createUntitledDocument()
         controller.currentMarkdown = "modified"
+        controller.currentEditorMarkdownOverride = { completion in
+            completion("modified")
+        }
         controller.unsavedChangesDecisionHandler = { _ in .save }
         controller.saveTabOverride = { _, completion in
             completion(true)
