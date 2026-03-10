@@ -210,16 +210,23 @@ struct EditorWebView: NSViewRepresentable {
         const errorEvent = event;
         const target = errorEvent.target instanceof Element ? errorEvent.target : null;
 
+        if (target) {
+          post('warn', [
+            'Resource load failed',
+            target.tagName ?? null,
+            target.getAttribute?.('src') ?? null,
+            target.getAttribute?.('href') ?? null,
+            target?.outerHTML ?? null
+          ]);
+          return;
+        }
+
         post('error', [
           errorEvent.message,
           errorEvent.filename,
           errorEvent.lineno,
           errorEvent.colno,
           errorEvent.error,
-          target?.tagName ?? null,
-          target?.getAttribute?.('src') ?? null,
-          target?.getAttribute?.('href') ?? null,
-          target?.outerHTML ?? null
         ]);
       }, true);
 
