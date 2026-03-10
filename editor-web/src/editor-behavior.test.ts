@@ -514,6 +514,37 @@ describe('editor behavior', () => {
     vi.useRealTimers()
   })
 
+  it('still upgrades two consecutive dollars when the second key arrives before selection catches up', async () => {
+    vi.useFakeTimers()
+
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root
+    })
+    const instance = mockVditorState.instances[0]
+
+    if (!instance) {
+      throw new Error('expected mock Vditor instance')
+    }
+
+    const firstEvent = triggerEditorKeydown(instance, '$')
+
+    editor.setSelectionInParagraph(0, 0)
+
+    const secondEvent = triggerEditorKeydown(instance, '$')
+
+    expect(firstEvent.defaultPrevented).toBe(true)
+    expect(secondEvent.defaultPrevented).toBe(true)
+    expect(editor.getMarkdown()).toBe('$$\n\n$$')
+    expect(editor.getSelectionOffsets()).toEqual({ anchor: 3, head: 3 })
+
+    await editor.destroy()
+    vi.useRealTimers()
+  })
+
   it('auto-closes at the current caret after content is typed before the inline delay expires', async () => {
     vi.useFakeTimers()
 

@@ -822,7 +822,12 @@ export const createMarkdownEditor = async ({
     if (pendingOpenOffset != null) {
       event.preventDefault()
 
-      if (offset === pendingOpenOffset + 1 && markdown[pendingOpenOffset] === '$') {
+      if (
+        markdown[pendingOpenOffset] === '$' &&
+        markdown.length === pendingInlineMathDollarInsert?.markdownLength &&
+        offset >= pendingOpenOffset &&
+        offset <= pendingOpenOffset + 1
+      ) {
         return upgradePendingDollarToDisplayMath(pendingOpenOffset)
       }
 
