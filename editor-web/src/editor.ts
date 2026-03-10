@@ -64,6 +64,12 @@ type ApplyMarkdownOptions = {
   clearStack?: boolean
 }
 
+type PendingInlineMathDollarInsert = {
+  openOffset: number
+  markdownLength: number
+  timerID: number
+}
+
 type RuntimeEditorCommand = EditorCommand | 'strike' | 'quote' | 'list'
 
 type VditorUndoController = {
@@ -149,8 +155,8 @@ const VDITOR_CDN = new URL('./vditor', window.location.href).toString()
 const DEFAULT_INLINE_PLACEHOLDER = 'text'
 const DEFAULT_IMAGE_ALT = 'image'
 const DEFAULT_TABLE_SNIPPET = '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1 | Value 2 |'
-const LIST_MARKER_PATTERN = /^(?:[-+*]|\d+\.)\s+/
-const TASK_MARKER_PATTERN = /^\[[ xX]\]\s+/
+const INLINE_MATH_AUTO_PAIR_DELAY_MS = 250
+const DISPLAY_MATH_AUTO_PAIR_SNIPPET = '$$\n\n$$'
 const HIDDEN_NATIVE_TOOLBAR_ITEMS = [
   'headings',
   'bold',
@@ -216,44 +222,6 @@ const hasOddTrailingBackslashes = (value: string) => {
   }
 
   return count % 2 === 1
-}
-
-const stripLeadingInlineMathLineMarkers = (line: string) => {
-  let remaining = line
-  let didStrip = true
-
-  while (didStrip) {
-    didStrip = false
-
-    const blockquoteMatch = remaining.match(/^\s{0,3}>\s?/)
-
-    if (blockquoteMatch) {
-      remaining = remaining.slice(blockquoteMatch[0].length)
-      didStrip = true
-    }
-
-    const indentationMatch = remaining.match(/^\s+/)
-
-    if (indentationMatch) {
-      remaining = remaining.slice(indentationMatch[0].length)
-    }
-
-    const listMarkerMatch = remaining.match(LIST_MARKER_PATTERN)
-
-    if (listMarkerMatch) {
-      remaining = remaining.slice(listMarkerMatch[0].length)
-      didStrip = true
-    }
-
-    const taskMarkerMatch = remaining.match(TASK_MARKER_PATTERN)
-
-    if (taskMarkerMatch) {
-      remaining = remaining.slice(taskMarkerMatch[0].length)
-      didStrip = true
-    }
-  }
-
-  return remaining
 }
 
 const asElement = (node: Node | null) => {
@@ -366,6 +334,7 @@ export const createMarkdownEditor = async ({
     anchor: 0,
     head: 0
   }
+  let pendingInlineMathDollarInsert: PendingInlineMathDollarInsert | null = null
   let pendingInlineMathClosingOffset: number | null = null
   let suppressInputDepth = 0
   let removeBackgroundPointerListener: (() => void) | null = null
@@ -661,7 +630,16 @@ export const createMarkdownEditor = async ({
     return didNormalize
   }
 
-  const isInlineMathAutoPairContext = (markdown: string, selection: SelectionOffsets) => {
+  const clearPendingInlineMathDollarInsert = () => {
+    if (!pendingInlineMathDollarInsert) {
+      return
+    }
+
+    window.clearTimeout(pendingInlineMathDollarInsert.timerID)
+    pendingInlineMathDollarInsert = null
+  }
+
+  const isInlineMathDollarHandledContext = (markdown: string, selection: SelectionOffsets) => {
     if (!currentPresentation.enableMath || selection.anchor !== selection.head) {
       return false
     }
@@ -674,18 +652,104 @@ export const createMarkdownEditor = async ({
     }
 
     const lineStart = markdown.lastIndexOf('\n', Math.max(0, offset - 1)) + 1
-    const lineEndCandidate = markdown.indexOf('\n', offset)
-    const lineEnd = lineEndCandidate === -1 ? markdown.length : lineEndCandidate
     const beforeCaret = markdown.slice(lineStart, offset)
 
     if (hasOddTrailingBackslashes(beforeCaret)) {
       return false
     }
 
-    const currentLine = markdown.slice(lineStart, lineEnd)
-    const normalizedLine = stripLeadingInlineMathLineMarkers(currentLine)
+    return true
+  }
 
-    return normalizedLine.trim().length > 0
+  const materializeDelayedInlineMathClose = (openOffset: number) => {
+    const pendingDollarInsert = pendingInlineMathDollarInsert
+
+    if (pendingDollarInsert?.openOffset !== openOffset) {
+      return false
+    }
+
+    pendingInlineMathDollarInsert = null
+
+    const markdown = readMarkdown()
+
+    if (markdown[openOffset] !== '$') {
+      return false
+    }
+
+    const selection = getSelectionOffsets()
+
+    if (selection.anchor !== selection.head) {
+      return false
+    }
+
+    let insertionOffset = clampMarkdownOffset(markdown, selection.anchor)
+
+    if (insertionOffset === openOffset + 1 && markdown.length > pendingDollarInsert.markdownLength) {
+      insertionOffset = clampMarkdownOffset(
+        markdown,
+        openOffset + 1 + (markdown.length - pendingDollarInsert.markdownLength)
+      )
+    }
+
+    if (insertionOffset < openOffset + 1) {
+      return false
+    }
+
+    const openBlock = getResolvedActiveBlock(markdown, openOffset)
+    const caretBlock = getResolvedActiveBlock(markdown, insertionOffset)
+
+    if (
+      openBlock?.from !== caretBlock?.from ||
+      openBlock?.to !== caretBlock?.to ||
+      openBlock?.type !== caretBlock?.type
+    ) {
+      return false
+    }
+
+    const didInsert = replaceMarkdownRange(insertionOffset, insertionOffset, '$', {
+      anchor: insertionOffset,
+      head: insertionOffset
+    })
+
+    if (didInsert) {
+      pendingInlineMathClosingOffset = insertionOffset
+    }
+
+    return didInsert
+  }
+
+  const scheduleDelayedInlineMathClose = (openOffset: number) => {
+    clearPendingInlineMathDollarInsert()
+
+    pendingInlineMathDollarInsert = {
+      openOffset,
+      markdownLength: readMarkdown().length,
+      timerID: window.setTimeout(() => {
+        materializeDelayedInlineMathClose(openOffset)
+      }, INLINE_MATH_AUTO_PAIR_DELAY_MS)
+    }
+  }
+
+  const insertLiteralDollar = (offset: number) => {
+    return replaceMarkdownRange(offset, offset, '$', {
+      anchor: offset + 1,
+      head: offset + 1
+    })
+  }
+
+  const upgradePendingDollarToDisplayMath = (openOffset: number) => {
+    clearPendingInlineMathDollarInsert()
+    pendingInlineMathClosingOffset = null
+
+    return replaceMarkdownRange(
+      openOffset,
+      openOffset + 1,
+      DISPLAY_MATH_AUTO_PAIR_SNIPPET,
+      {
+        anchor: openOffset + 3,
+        head: openOffset + 3
+      }
+    )
   }
 
   const syncPendingInlineMathClosingOffset = (nextMarkdown: string) => {
@@ -749,20 +813,60 @@ export const createMarkdownEditor = async ({
       return true
     }
 
-    if (!isInlineMathAutoPairContext(markdown, selection)) {
+    if (!isInlineMathDollarHandledContext(markdown, selection)) {
       return false
     }
 
+    const pendingOpenOffset = pendingInlineMathDollarInsert?.openOffset
+
+    if (pendingOpenOffset != null) {
+      event.preventDefault()
+
+      if (offset === pendingOpenOffset + 1 && markdown[pendingOpenOffset] === '$') {
+        return upgradePendingDollarToDisplayMath(pendingOpenOffset)
+      }
+
+      clearPendingInlineMathDollarInsert()
+      pendingInlineMathClosingOffset = null
+      return insertLiteralDollar(offset)
+    }
+
     event.preventDefault()
+    pendingInlineMathClosingOffset = null
+    const didInsert = insertLiteralDollar(offset)
 
-    const closeOffset = offset + 1
+    if (didInsert) {
+      scheduleDelayedInlineMathClose(offset)
+    }
 
-    replaceMarkdownRange(offset, offset, '$$', {
-      anchor: closeOffset,
-      head: closeOffset
-    })
-    pendingInlineMathClosingOffset = closeOffset
-    return true
+    return didInsert
+  }
+
+  const inferPendingInlineMathSelectionFromInput = (nextMarkdown: string) => {
+    if (!pendingInlineMathDollarInsert) {
+      return
+    }
+
+    const delta = nextMarkdown.length - currentMarkdown.length
+
+    if (delta <= 0) {
+      return
+    }
+
+    const selection = getSelectionOffsets()
+
+    if (
+      selection.anchor !== selection.head ||
+      selection.anchor !== pendingInlineMathDollarInsert.openOffset + 1
+    ) {
+      return
+    }
+
+    const inferredOffset = clampMarkdownOffset(nextMarkdown, selection.anchor + delta)
+    currentSelection = {
+      anchor: inferredOffset,
+      head: inferredOffset
+    }
   }
 
   const syncMarkdownFromEditor = (emit: boolean, knownMarkdown?: string) => {
@@ -772,6 +876,7 @@ export const createMarkdownEditor = async ({
       return
     }
 
+    inferPendingInlineMathSelectionFromInput(nextMarkdown)
     syncPendingInlineMathClosingOffset(nextMarkdown)
     currentMarkdown = nextMarkdown
     invalidateLiveIRBlockCache()
@@ -787,6 +892,7 @@ export const createMarkdownEditor = async ({
   ) => {
     const editor = getInstance()
     const normalizedMarkdown = normalizeMarkdownForEditor(markdown)
+    clearPendingInlineMathDollarInsert()
     pendingInlineMathClosingOffset = null
     invalidateLiveIRBlockCache()
 
@@ -1560,6 +1666,7 @@ export const createMarkdownEditor = async ({
       void setSelectionFromOffsets(anchor, head)
     },
     async destroy() {
+      clearPendingInlineMathDollarInsert()
       removeBackgroundPointerListener?.()
       removeBackgroundPointerListener = null
       removeLinkActivationListener?.()

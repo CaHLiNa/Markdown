@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add context-aware inline math dollar pairing so a single `$` auto-pairs in inline contexts without triggering the upstream `$$` block-math behavior.
+**Goal:** Add delayed dollar pairing so a first `$` becomes inline math after a short timeout, while two consecutive `$` keystrokes expand into a display-math block.
 
-**Architecture:** Keep the fix inside `editor-web/src/editor.ts` by intercepting `keydown` before Vditor inserts text. Use current markdown + selection + active block context to decide whether to pair, skip over an existing closing `$`, or fall back to Vditor's native behavior.
+**Architecture:** Keep the fix inside `editor-web/src/editor.ts` with a small timeout-backed state machine. The first `$` is inserted immediately by our wrapper; a pending timer later inserts the inline closing `$` unless a consecutive second `$` arrives first, in which case the wrapper upgrades the pending marker into `$$\n\n$$`.
 
 **Tech Stack:** TypeScript, Vitest, Vditor, DOM Selection APIs
 
@@ -17,40 +17,42 @@
 
 **Step 1: Write the failing tests**
 
-- Add a test that places the caret inside a paragraph with existing text, presses `$`, and expects the markdown to become paired inline delimiters with the caret between them.
-- Add a test that presses `$` again while the caret is immediately before the auto-inserted closing delimiter and expects the caret to move right without changing markdown.
-- Add a test that presses `$` in an empty paragraph and expects the custom handler not to intercept, so markdown remains unchanged in the mocked environment and `preventDefault` is not called.
+- Add a test that presses a single `$`, verifies one literal `$` appears immediately, advances fake timers, and then expects the closing `$` to be inserted with the caret between the pair.
+- Add a test that types `$`, then mutates the editor to `$x`, advances fake timers, and expects the delayed close to yield `$x$`.
+- Add a test that presses two consecutive `$` within the timeout window and expects the markdown to become `$$\n\n$$` with the caret on the blank middle line.
 
 **Step 2: Run the focused test command and verify failure**
 
 Run: `npm test -- src/editor-behavior.test.ts`
 
-Expected: new tests fail because no custom dollar pairing logic exists yet.
+Expected: new tests fail because the editor still uses the previous immediate/context-aware pairing path.
 
-### Task 2: Implement context-aware dollar pairing
+### Task 2: Implement delayed dollar pairing
 
 **Files:**
 - Modify: `/Users/math173sr/Documents/GitHub项目/Markdown/editor-web/src/editor.ts`
 
-**Step 1: Add small helpers**
+**Step 1: Add the timeout-backed state**
 
-- Add helpers to inspect escaped backslashes before the caret.
-- Add helpers to extract the current line and determine whether the line still has real inline content after stripping blockquote/list/task markers.
-- Add a helper that decides whether the active block is safe for inline pairing.
+- Add a pending-dollar state object that tracks the first `$` insertion offset and timeout handle.
+- Add helpers to schedule, cancel, and validate the pending delayed close.
+- Keep the existing closing-marker skip state for already-materialized inline pairs.
 
 **Step 2: Implement the keydown interception**
 
 - Extend the Vditor `keydown` option to receive the DOM event.
 - On single `$`:
-  - bail out for composing, modifiers, non-collapsed selection, code blocks, or escaped `\$`
+  - bail out for composing, modifiers, non-collapsed selection, code blocks, or math blocks
   - if the caret is before an auto-paired closing `$`, prevent default and move the selection right
-  - if the current line is an inline context, prevent default and insert paired `$` delimiters with the caret in the middle
-  - otherwise do nothing and allow native behavior
+  - if there is no pending first `$`, prevent default, insert a single `$`, and start the timeout
+  - if a pending first `$` exists at the immediately preceding offset, prevent default, cancel the timeout, and upgrade the content to `$$\n\n$$`
+  - if a pending first `$` exists but the caret has moved past additional content, prevent default, cancel the timeout, and insert a literal closing `$` instead of triggering display math
 
 **Step 3: Keep existing editor side effects intact**
 
 - Preserve the existing `tableManager?.handleEditorMutation()` callback path after keydown handling.
 - Ensure markdown sync and selection scheduling still use the existing `replaceMarkdownRange` and selection helpers.
+- Clear pending timeout state during explicit markdown loads and editor teardown so stale timers cannot mutate a destroyed editor.
 
 ### Task 3: Verify the fix and rebuild the embedded runtime
 

@@ -444,7 +444,9 @@ describe('editor behavior', () => {
     await editor.destroy()
   })
 
-  it('auto-pairs a single dollar inside inline paragraph content', async () => {
+  it('inserts a single dollar immediately and auto-closes it after the inline delay', async () => {
+    vi.useFakeTimers()
+
     const root = document.createElement('div')
 
     document.body.append(root)
@@ -464,72 +466,25 @@ describe('editor behavior', () => {
     const event = triggerEditorKeydown(instance, '$')
 
     expect(event.defaultPrevented).toBe(true)
+    expect(editor.getMarkdown()).toBe('alpha $beta')
+    expect(editor.getSelectionOffsets()).toEqual({ anchor: 7, head: 7 })
+
+    await vi.advanceTimersByTimeAsync(249)
+
+    expect(editor.getMarkdown()).toBe('alpha $beta')
+
+    await vi.advanceTimersByTimeAsync(1)
+
     expect(editor.getMarkdown()).toBe('alpha $$beta')
     expect(editor.getSelectionOffsets()).toEqual({ anchor: 7, head: 7 })
 
     await editor.destroy()
+    vi.useRealTimers()
   })
 
-  it('moves across the auto-paired closing dollar without changing markdown', async () => {
-    const root = document.createElement('div')
+  it('turns two consecutive dollars into a display math block before the inline delay expires', async () => {
+    vi.useFakeTimers()
 
-    document.body.append(root)
-
-    const editor = await createMarkdownEditor({
-      root,
-      initialMarkdown: 'alpha beta'
-    })
-    const instance = mockVditorState.instances[0]
-
-    editor.setSelectionInParagraph(0, 6)
-
-    if (!instance) {
-      throw new Error('expected mock Vditor instance')
-    }
-
-    triggerEditorKeydown(instance, '$')
-
-    const jumpEvent = triggerEditorKeydown(instance, '$')
-
-    expect(jumpEvent.defaultPrevented).toBe(true)
-    expect(editor.getMarkdown()).toBe('alpha $$beta')
-    expect(editor.getSelectionOffsets()).toEqual({ anchor: 8, head: 8 })
-
-    await editor.destroy()
-  })
-
-  it('keeps tracking the auto-paired closing dollar after typing inside the pair', async () => {
-    const root = document.createElement('div')
-
-    document.body.append(root)
-
-    const editor = await createMarkdownEditor({
-      root,
-      initialMarkdown: 'alpha beta'
-    })
-    const instance = mockVditorState.instances[0]
-
-    editor.setSelectionInParagraph(0, 6)
-
-    if (!instance) {
-      throw new Error('expected mock Vditor instance')
-    }
-
-    triggerEditorKeydown(instance, '$')
-    instance.setValue('alpha $x$beta')
-    editor.setSelectionInParagraph(0, 8)
-    instance.options.input?.('alpha $x$beta')
-
-    const jumpEvent = triggerEditorKeydown(instance, '$')
-
-    expect(jumpEvent.defaultPrevented).toBe(true)
-    expect(editor.getMarkdown()).toBe('alpha $x$beta')
-    expect(editor.getSelectionOffsets()).toEqual({ anchor: 9, head: 9 })
-
-    await editor.destroy()
-  })
-
-  it('does not auto-pair a single dollar in an empty paragraph', async () => {
     const root = document.createElement('div')
 
     document.body.append(root)
@@ -539,19 +494,89 @@ describe('editor behavior', () => {
     })
     const instance = mockVditorState.instances[0]
 
-    editor.setSelectionInParagraph(0, 0)
+    if (!instance) {
+      throw new Error('expected mock Vditor instance')
+    }
+
+    const firstEvent = triggerEditorKeydown(instance, '$')
+    const secondEvent = triggerEditorKeydown(instance, '$')
+
+    expect(firstEvent.defaultPrevented).toBe(true)
+    expect(secondEvent.defaultPrevented).toBe(true)
+    expect(editor.getMarkdown()).toBe('$$\n\n$$')
+    expect(editor.getSelectionOffsets()).toEqual({ anchor: 3, head: 3 })
+
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(editor.getMarkdown()).toBe('$$\n\n$$')
+
+    await editor.destroy()
+    vi.useRealTimers()
+  })
+
+  it('auto-closes at the current caret after content is typed before the inline delay expires', async () => {
+    vi.useFakeTimers()
+
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'alpha beta'
+    })
+    const instance = mockVditorState.instances[0]
+
+    editor.setSelectionInParagraph(0, 6)
 
     if (!instance) {
       throw new Error('expected mock Vditor instance')
     }
 
-    const event = triggerEditorKeydown(instance, '$')
+    triggerEditorKeydown(instance, '$')
+    instance.setValue('alpha $xbeta')
+    editor.setSelectionInParagraph(0, 8)
+    instance.options.input?.('alpha $xbeta')
 
-    expect(event.defaultPrevented).toBe(false)
-    expect(editor.getMarkdown()).toBe('')
-    expect(editor.getSelectionOffsets()).toEqual({ anchor: 0, head: 0 })
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(editor.getMarkdown()).toBe('alpha $x$beta')
+    expect(editor.getSelectionOffsets()).toEqual({ anchor: 8, head: 8 })
 
     await editor.destroy()
+    vi.useRealTimers()
+  })
+
+  it('moves across the delayed auto-paired closing dollar without changing markdown', async () => {
+    vi.useFakeTimers()
+
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'alpha beta'
+    })
+    const instance = mockVditorState.instances[0]
+
+    editor.setSelectionInParagraph(0, 6)
+
+    if (!instance) {
+      throw new Error('expected mock Vditor instance')
+    }
+
+    triggerEditorKeydown(instance, '$')
+    await vi.advanceTimersByTimeAsync(250)
+
+    const jumpEvent = triggerEditorKeydown(instance, '$')
+
+    expect(jumpEvent.defaultPrevented).toBe(true)
+    expect(editor.getMarkdown()).toBe('alpha $$beta')
+    expect(editor.getSelectionOffsets()).toEqual({ anchor: 8, head: 8 })
+
+    await editor.destroy()
+    vi.useRealTimers()
   })
 
   it('switches source mode through the native edit-mode toolbar', async () => {
