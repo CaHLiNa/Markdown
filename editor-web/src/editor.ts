@@ -557,10 +557,10 @@ export const createMarkdownEditor = async ({
     return didNormalize
   }
 
-  const syncMarkdownFromEditor = (emit: boolean) => {
+  const syncMarkdownFromEditor = (emit: boolean, knownMarkdown?: string) => {
     normalizeTableLinkSpacingInIR()
 
-    const nextMarkdown = readMarkdown()
+    const nextMarkdown = knownMarkdown ?? readMarkdown()
 
     if (nextMarkdown === currentMarkdown) {
       return
@@ -702,6 +702,51 @@ export const createMarkdownEditor = async ({
     return true
   }
 
+  const readElementMarkdown = (element: Element) => {
+    const lute = instance?.vditor?.lute as LuteBlockLocator | undefined
+    return lute?.VditorIRDOM2Md(element.outerHTML) ?? null
+  }
+
+  const selectElementForReplacement = (element: Element) => {
+    if (currentMode !== 'ir' || !element.isConnected) {
+      return false
+    }
+
+    const selection = window.getSelection()
+
+    if (!selection) {
+      return false
+    }
+
+    const range = document.createRange()
+    range.selectNode(element)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    return true
+  }
+
+  const replaceElementWithMarkdown = (
+    element: Element,
+    markdown: string,
+    { selectReplacementStart = false }: { selectReplacementStart?: boolean } = {}
+  ) => {
+    if (currentMode !== 'ir') {
+      return false
+    }
+
+    const liveBlock = getLiveIRBlocks().find((candidate) => candidate.element === element) ?? null
+
+    if (!selectElementForReplacement(element) || !replaceSelectionWithMarkdown(markdown)) {
+      return false
+    }
+
+    if (selectReplacementStart && liveBlock) {
+      scheduleSelectionFromOffsets(liveBlock.from, liveBlock.from)
+    }
+
+    return true
+  }
+
   const getCurrentSelectionText = () => {
     return instance?.getSelection() ?? window.getSelection()?.toString() ?? ''
   }
@@ -804,9 +849,13 @@ export const createMarkdownEditor = async ({
       return false
     }
 
-    const clone = block.element.cloneNode(true) as Element
-    block.element.after(clone)
-    return syncIRMutation(createCollapsedRangeAtStart(clone))
+    const blockMarkdown = readElementMarkdown(block.element)
+
+    if (!blockMarkdown) {
+      return false
+    }
+
+    return replaceElementWithMarkdown(block.element, `${blockMarkdown}${blockMarkdown}`)
   }
 
   const deleteCurrentBlock = () => {
@@ -820,18 +869,7 @@ export const createMarkdownEditor = async ({
       return false
     }
 
-    const nextTarget = block.element.nextElementSibling ?? block.element.previousElementSibling
-    block.element.remove()
-
-    if (getIRRoot().childElementCount === 0) {
-      const paragraph = document.createElement('p')
-      paragraph.dataset.block = '0'
-      paragraph.append(document.createElement('br'))
-      getIRRoot().append(paragraph)
-      return syncIRMutation(createCollapsedRangeAtStart(paragraph))
-    }
-
-    return syncIRMutation(createCollapsedRangeAtStart(nextTarget ?? getIRRoot().lastElementChild))
+    return replaceElementWithMarkdown(block.element, '')
   }
 
   const createCollapsedRangeAtStart = (element: Element | null) => {
@@ -844,60 +882,6 @@ export const createMarkdownEditor = async ({
     range.setStart(point.node, point.offset)
     range.collapse(true)
     return range
-  }
-
-  const syncIRMutation = (range: Range | null) => {
-    if (!instance || currentMode !== 'ir') {
-      return false
-    }
-
-    if (!range) {
-      return false
-    }
-
-    const selection = window.getSelection()
-
-    if (!selection) {
-      return false
-    }
-
-    selection.removeAllRanges()
-    selection.addRange(range.cloneRange())
-    instance.focus()
-    instance.insertValue('')
-
-    syncStateAfterNativeCommand()
-    return true
-  }
-
-  const syncIRMutationAtStart = (element: Element | null) => {
-    return syncIRMutation(createCollapsedRangeAtStart(element))
-  }
-
-  const triggerVditorInput = (preferredTarget?: Element | null) => {
-    if (!instance) {
-      return false
-    }
-
-    if (currentMode === 'ir' && preferredTarget) {
-      const range = createCollapsedRangeAtStart(preferredTarget)
-      const selection = window.getSelection()
-
-      if (range && selection) {
-        selection.removeAllRanges()
-        selection.addRange(range)
-      }
-    }
-
-    const root = currentMode === 'sv' ? getSVRoot() : getIRRoot()
-    root.dispatchEvent(
-      new Event('input', {
-        bubbles: true,
-        cancelable: true
-      })
-    )
-    syncStateAfterNativeCommand()
-    return true
   }
 
   const insertImageMarkdown = async (file: File) => {
@@ -1197,14 +1181,14 @@ export const createMarkdownEditor = async ({
 
       scheduleSelectionFromOffsets(0, 0)
     },
-    input() {
+    input(markdown: string) {
       if (suppressInputDepth > 0) {
-        syncMarkdownFromEditor(false)
+        syncMarkdownFromEditor(false, markdown)
         tableManager?.scheduleRefresh()
         return
       }
 
-      syncMarkdownFromEditor(true)
+      syncMarkdownFromEditor(true, markdown)
       tableManager?.scheduleRefresh()
     },
     keydown() {
@@ -1234,8 +1218,7 @@ export const createMarkdownEditor = async ({
     getIRRoot,
     getCurrentMode: () => currentMode,
     getSelectionRangeWithinIR,
-    syncIRMutationAtStart,
-    triggerVditorInput,
+    replaceElementWithMarkdown,
     getLute: () => instance?.vditor?.lute as LuteBlockLocator | undefined
   })
 

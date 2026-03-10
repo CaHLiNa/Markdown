@@ -231,11 +231,21 @@ export const createSelectionManager = ({
     }
 
     const blocks = getLiveIRBlocks()
+
+    if (blocks.length === 0) {
+      return currentSelection
+    }
+
     const resolveOffset = (node: Node, offset: number) => {
       const blockElement = getClosestIRBlockElement(node)
+
+      if (!blockElement) {
+        return null
+      }
+
       const block = blocks.find((candidate) => candidate.element === blockElement)
 
-      if (!block || !blockElement) {
+      if (!block) {
         return null
       }
 

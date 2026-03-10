@@ -46,8 +46,13 @@ type CreateTableManagerOptions = {
   getIRRoot: () => HTMLElement
   getCurrentMode: () => EditorVisualMode
   getSelectionRangeWithinIR: () => Range | null
-  syncIRMutationAtStart: (element: Element | null) => boolean
-  triggerVditorInput: (preferredTarget?: Element | null) => boolean
+  replaceElementWithMarkdown: (
+    element: Element,
+    markdown: string,
+    options?: {
+      selectReplacementStart?: boolean
+    }
+  ) => boolean
   getLute: () => TableLuteCodec | null | undefined
 }
 
@@ -225,8 +230,7 @@ export const createTableManager = ({
   getIRRoot,
   getCurrentMode,
   getSelectionRangeWithinIR,
-  syncIRMutationAtStart,
-  triggerVditorInput,
+  replaceElementWithMarkdown,
   getLute
 }: CreateTableManagerOptions): TableManager => {
   let tableToolbarRefreshFrame = 0
@@ -398,107 +402,99 @@ export const createTableManager = ({
     })
   }
 
-  const syncTableMutation = (context: TableContext, preferredCell?: HTMLTableCellElement | null) => {
-    const activeCell =
-      preferredCell && preferredCell.isConnected
-        ? preferredCell
-        : ((context.tableElement.querySelector('td, th') as HTMLTableCellElement | null) ?? null)
+  const readTableMarkdown = (tableElement: HTMLTableElement) => {
+    return getLute()?.VditorIRDOM2Md(tableElement.outerHTML) ?? null
+  }
 
-    return syncIRMutationAtStart(activeCell ?? context.tableElement)
+  const replaceTableWithHistory = (
+    context: TableContext,
+    modifyClone: (cloneTable: HTMLTableElement) => void
+  ) => {
+    const cloneTable = context.tableElement.cloneNode(true) as HTMLTableElement
+    modifyClone(cloneTable)
+    const nextMarkdown = readTableMarkdown(cloneTable)
+
+    if (nextMarkdown == null) {
+      return false
+    }
+
+    return replaceElementWithMarkdown(context.tableElement, nextMarkdown, {
+      selectReplacementStart: true
+    })
   }
 
   const resizeTableToDimensions = (context: TableContext, requestedRows: number, requestedColumns: number) => {
-    const targetRows = Math.max(2, requestedRows)
-    const targetColumns = Math.max(1, requestedColumns)
-    const { headRow, body } = ensureTableSections(context.tableElement)
+    return replaceTableWithHistory(context, (cloneTable) => {
+      const targetRows = Math.max(2, requestedRows)
+      const targetColumns = Math.max(1, requestedColumns)
+      const { body } = ensureTableSections(cloneTable)
 
-    normalizeTableColumns(context.tableElement, targetColumns)
+      normalizeTableColumns(cloneTable, targetColumns)
 
-    while (body.rows.length < targetRows - 1) {
-      const row = body.insertRow()
+      while (body.rows.length < targetRows - 1) {
+        const row = body.insertRow()
 
-      for (let index = 0; index < targetColumns; index += 1) {
-        row.append(document.createElement('td'))
+        for (let index = 0; index < targetColumns; index += 1) {
+          row.append(document.createElement('td'))
+        }
       }
-    }
 
-    while (body.rows.length > targetRows - 1) {
-      body.deleteRow(body.rows.length - 1)
-    }
-
-    const targetRow = context.tableElement.rows.item(
-      clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, targetRows - 1)
-    )
-    const targetCell = targetRow?.cells.item(clamp(context.cellElement.cellIndex, 0, targetColumns - 1)) as
-      | HTMLTableCellElement
-      | null
-
-    return syncTableMutation(context, targetCell ?? headRow.cells.item(0))
+      while (body.rows.length > targetRows - 1) {
+        body.deleteRow(body.rows.length - 1)
+      }
+    })
   }
 
   const insertTableRow = (context: TableContext, position: 'above' | 'below') => {
-    const row = context.cellElement.parentElement as HTMLTableRowElement
-    const insertIndex = position === 'above' ? Math.max(0, row.rowIndex) : row.rowIndex + 1
-    const newRow = context.tableElement.insertRow(insertIndex)
-    const columnCount = Math.max(1, context.tableElement.rows[0]?.cells.length ?? 1)
+    return replaceTableWithHistory(context, (cloneTable) => {
+      const row = context.cellElement.parentElement as HTMLTableRowElement
+      const insertIndex = position === 'above' ? Math.max(0, row.rowIndex) : row.rowIndex + 1
+      const newRow = cloneTable.insertRow(insertIndex)
+      const columnCount = Math.max(1, cloneTable.rows[0]?.cells.length ?? 1)
 
-    for (let index = 0; index < columnCount; index += 1) {
-      const cell = newRow.insertCell()
-      cell.innerHTML = getCurrentMode() === 'ir' ? '<br>' : ''
-    }
-
-    const nextCell = newRow.cells.item(clamp(context.cellElement.cellIndex, 0, columnCount - 1))
-    return triggerVditorInput(nextCell)
-  }
-
-  const deleteTableRow = (context: TableContext) => {
-    const row = context.cellElement.parentElement as HTMLTableRowElement
-    const nextRow = context.tableElement.rows.item(row.rowIndex + 1) ?? context.tableElement.rows.item(row.rowIndex - 1)
-    row.remove()
-
-    const nextCell =
-      (nextRow?.cells.item(clamp(context.cellElement.cellIndex, 0, Math.max(0, (nextRow?.cells.length ?? 1) - 1))) as
-        | HTMLTableCellElement
-        | null) ?? null
-    return triggerVditorInput(nextCell ?? context.tableElement)
-  }
-
-  const insertTableColumn = (context: TableContext, position: 'left' | 'right') => {
-    const cellIndex = context.cellElement.cellIndex
-    const insertIndex = position === 'left' ? cellIndex : cellIndex + 1
-
-    Array.from(context.tableElement.rows).forEach((row, rowIndex) => {
-      const cell = row.insertCell(insertIndex)
-
-      if (row.parentElement?.tagName === 'THEAD' || (rowIndex === 0 && row.cells[0]?.tagName === 'TH')) {
-        const headerCell = document.createElement('th')
-        headerCell.innerHTML = '<br>'
-        cell.replaceWith(headerCell)
-      } else {
+      for (let index = 0; index < columnCount; index += 1) {
+        const cell = newRow.insertCell()
         cell.innerHTML = getCurrentMode() === 'ir' ? '<br>' : ''
       }
     })
+  }
 
-    const targetRow = context.cellElement.parentElement as HTMLTableRowElement
-    const nextCell = targetRow.cells.item(clamp(insertIndex, 0, Math.max(0, targetRow.cells.length - 1)))
-    return triggerVditorInput(nextCell)
+  const deleteTableRow = (context: TableContext) => {
+    return replaceTableWithHistory(context, (cloneTable) => {
+      const row = context.cellElement.parentElement as HTMLTableRowElement
+      cloneTable.rows.item(row.rowIndex)?.remove()
+    })
+  }
+
+  const insertTableColumn = (context: TableContext, position: 'left' | 'right') => {
+    return replaceTableWithHistory(context, (cloneTable) => {
+      const cellIndex = context.cellElement.cellIndex
+      const insertIndex = position === 'left' ? cellIndex : cellIndex + 1
+
+      Array.from(cloneTable.rows).forEach((row, rowIndex) => {
+        const cell = row.insertCell(insertIndex)
+
+        if (row.parentElement?.tagName === 'THEAD' || (rowIndex === 0 && row.cells[0]?.tagName === 'TH')) {
+          const headerCell = document.createElement('th')
+          headerCell.innerHTML = '<br>'
+          cell.replaceWith(headerCell)
+        } else {
+          cell.innerHTML = getCurrentMode() === 'ir' ? '<br>' : ''
+        }
+      })
+    })
   }
 
   const deleteTableColumn = (context: TableContext) => {
-    const targetColumnIndex = context.cellElement.cellIndex
+    return replaceTableWithHistory(context, (cloneTable) => {
+      const targetColumnIndex = context.cellElement.cellIndex
 
-    Array.from(context.tableElement.rows).forEach((row) => {
-      if (row.cells[targetColumnIndex]) {
-        row.deleteCell(targetColumnIndex)
-      }
+      Array.from(cloneTable.rows).forEach((row) => {
+        if (row.cells[targetColumnIndex]) {
+          row.deleteCell(targetColumnIndex)
+        }
+      })
     })
-
-    const targetRow = context.tableElement.rows.item(
-      clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, context.tableElement.rows.length - 1)
-    )
-    const nextColumn = clamp(targetColumnIndex, 0, Math.max(0, (targetRow?.cells.length ?? 1) - 1))
-
-    return triggerVditorInput((targetRow?.cells.item(nextColumn) as HTMLTableCellElement | null) ?? context.tableElement)
   }
 
   const hideTableToolbarPopover = () => {
@@ -522,7 +518,7 @@ export const createTableManager = ({
   }
 
   const copyCurrentTable = (context: TableContext) => {
-    const content = getLute()?.VditorIRDOM2Md(context.tableElement.outerHTML)
+    const content = readTableMarkdown(context.tableElement)
 
     if (!content) {
       return false
@@ -534,102 +530,81 @@ export const createTableManager = ({
   }
 
   const formatCurrentTableSource = (context: TableContext) => {
-    const lute = getLute()
+    const content = readTableMarkdown(context.tableElement)
 
-    if (!lute) {
+    if (!content) {
       return false
     }
 
-    const container = document.createElement('div')
-    container.innerHTML = lute.Md2VditorIRDOM(lute.VditorIRDOM2Md(context.tableElement.outerHTML))
-    const nextTable = container.querySelector('table')
-
-    if (!(nextTable instanceof HTMLTableElement)) {
-      return false
-    }
-
-    const nextCell =
-      (nextTable.querySelector('td, th') as HTMLTableCellElement | null) ??
-      (nextTable.rows[0]?.cells.item(0) as HTMLTableCellElement | null)
-
-    if (!nextCell) {
-      return false
-    }
-
-    context.tableElement.replaceWith(nextTable)
-
-    return syncTableMutation(
-      {
-        tableElement: nextTable,
-        cellElement: nextCell
-      },
-      nextCell
-    )
+    return replaceElementWithMarkdown(context.tableElement, content, {
+      selectReplacementStart: true
+    })
   }
 
   const insertParagraphNearTable = (context: TableContext, position: 'above' | 'below') => {
-    const paragraph = document.createElement('p')
-    paragraph.dataset.block = '0'
-    paragraph.append(document.createElement('br'))
+    const tableMarkdown = readTableMarkdown(context.tableElement)
 
-    if (position === 'above') {
-      context.tableElement.before(paragraph)
-    } else {
-      context.tableElement.after(paragraph)
+    if (!tableMarkdown) {
+      return false
     }
 
-    return syncIRMutationAtStart(paragraph)
+    return replaceElementWithMarkdown(
+      context.tableElement,
+      position === 'above' ? `\n\n${tableMarkdown}` : `${tableMarkdown}\n\n`,
+      {
+        selectReplacementStart: position === 'above'
+      }
+    )
   }
 
   const fillTableBlanksFromHeaderRow = (context: TableContext) => {
-    const headerValues = Array.from(context.tableElement.rows[0]?.cells ?? [], (cell) => cell.textContent ?? '')
+    return replaceTableWithHistory(context, (cloneTable) => {
+      const headerValues = Array.from(cloneTable.rows[0]?.cells ?? [], (cell) => cell.textContent ?? '')
 
-    Array.from(context.tableElement.tBodies[0]?.rows ?? []).forEach((row) => {
-      Array.from(row.cells).forEach((cell, columnIndex) => {
-        if (normalizeVisualText(cell.textContent ?? '').length === 0) {
-          cell.textContent = headerValues[columnIndex] ?? ''
-        }
+      Array.from(cloneTable.tBodies[0]?.rows ?? []).forEach((row) => {
+        Array.from(row.cells).forEach((cell, columnIndex) => {
+          if (normalizeVisualText(cell.textContent ?? '').length === 0) {
+            cell.textContent = headerValues[columnIndex] ?? ''
+          }
+        })
       })
     })
-
-    return syncTableMutation(context, context.cellElement)
   }
 
   const fillTableBlanksFromFirstColumn = (context: TableContext) => {
-    Array.from(context.tableElement.tBodies[0]?.rows ?? []).forEach((row) => {
-      const seed = row.cells.item(0)?.textContent ?? ''
+    return replaceTableWithHistory(context, (cloneTable) => {
+      Array.from(cloneTable.tBodies[0]?.rows ?? []).forEach((row) => {
+        const seed = row.cells.item(0)?.textContent ?? ''
 
-      if (normalizeVisualText(seed).length === 0) {
-        return
-      }
-
-      Array.from(row.cells).forEach((cell, columnIndex) => {
-        if (columnIndex > 0 && normalizeVisualText(cell.textContent ?? '').length === 0) {
-          cell.textContent = seed
+        if (normalizeVisualText(seed).length === 0) {
+          return
         }
+
+        Array.from(row.cells).forEach((cell, columnIndex) => {
+          if (columnIndex > 0 && normalizeVisualText(cell.textContent ?? '').length === 0) {
+            cell.textContent = seed
+          }
+        })
       })
     })
-
-    return syncTableMutation(context, context.cellElement)
   }
 
   const applyTableAlignment = (context: TableContext, align: TableAlignment) => {
-    const targetColumn = context.cellElement.cellIndex
-    const rows = Array.from(context.tableElement.rows)
+    return replaceTableWithHistory(context, (cloneTable) => {
+      const targetColumn = context.cellElement.cellIndex
 
-    rows.forEach((row) => {
-      Array.from(row.cells).forEach((cell, columnIndex) => {
-        if (isWholeTableSelection(context) || columnIndex === targetColumn) {
-          if (align === 'left') {
-            cell.removeAttribute('align')
-          } else {
-            cell.setAttribute('align', align)
+      Array.from(cloneTable.rows).forEach((row) => {
+        Array.from(row.cells).forEach((cell, columnIndex) => {
+          if (isWholeTableSelection(context) || columnIndex === targetColumn) {
+            if (align === 'left') {
+              cell.removeAttribute('align')
+            } else {
+              cell.setAttribute('align', align)
+            }
           }
-        }
+        })
       })
     })
-
-    return syncTableMutation(context, context.cellElement)
   }
 
   const showTableToolbarPopover = (kind: TableToolbarPopoverKind) => {
@@ -660,18 +635,10 @@ export const createTableManager = ({
     const nextTarget =
       currentContext.tableElement.nextElementSibling ?? currentContext.tableElement.previousElementSibling
 
-    currentContext.tableElement.remove()
     hideToolbar()
-
-    if (getIRRoot().childElementCount === 0) {
-      const paragraph = document.createElement('p')
-      paragraph.dataset.block = '0'
-      paragraph.append(document.createElement('br'))
-      getIRRoot().append(paragraph)
-      return syncIRMutationAtStart(paragraph)
-    }
-
-    return syncIRMutationAtStart(nextTarget)
+    return replaceElementWithMarkdown(currentContext.tableElement, '', {
+      selectReplacementStart: !!nextTarget
+    })
   }
 
   const renderTableGridPopover = (context: TableContext) => {
