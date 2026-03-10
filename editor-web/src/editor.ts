@@ -14,6 +14,7 @@ import {
   collectIRBlocksFromContainer,
   extractMarkdownBlocksFromVditorIRDOM,
   getMarkdownBlockTypeFromIRNode,
+  normalizeMarkdownForEditor,
   type IRBlockRecord,
   type LuteBlockLocator
 } from './markdown-parser'
@@ -97,9 +98,12 @@ type VditorRuntime = Vditor['vditor'] & {
   lute?: Vditor['vditor']['lute'] & {
     SetChineseParagraphBeginningSpace?: (enabled: boolean) => void
     SetIndentCodeBlock?: (enabled: boolean) => void
+    SetInlineMath?: (enabled: boolean) => void
+    SetInlineMathAllowDigitAfterOpenMarker?: (enabled: boolean) => void
     SetLinkBase?: (value: string) => void
     SetParagraphBeginningSpace?: (enabled: boolean) => void
     SetUnorderedListMarker?: (value: string) => void
+    SetVditorMathBlockPreview?: (enabled: boolean) => void
     SetVditorIR?: (enabled: boolean) => void
     SetVditorSV?: (enabled: boolean) => void
     SetVditorWYSIWYG?: (enabled: boolean) => void
@@ -145,6 +149,8 @@ const VDITOR_CDN = new URL('./vditor', window.location.href).toString()
 const DEFAULT_INLINE_PLACEHOLDER = 'text'
 const DEFAULT_IMAGE_ALT = 'image'
 const DEFAULT_TABLE_SNIPPET = '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1 | Value 2 |'
+const LIST_MARKER_PATTERN = /^(?:[-+*]|\d+\.)\s+/
+const TASK_MARKER_PATTERN = /^\[[ xX]\]\s+/
 const HIDDEN_NATIVE_TOOLBAR_ITEMS = [
   'headings',
   'bold',
@@ -200,6 +206,54 @@ const clamp = (value: number, minimum: number, maximum: number) => {
 
 const clampMarkdownOffset = (markdown: string, offset: number) => {
   return clamp(Number.isFinite(offset) ? Math.floor(offset) : 0, 0, markdown.length)
+}
+
+const hasOddTrailingBackslashes = (value: string) => {
+  let count = 0
+
+  for (let index = value.length - 1; index >= 0 && value[index] === '\\'; index -= 1) {
+    count += 1
+  }
+
+  return count % 2 === 1
+}
+
+const stripLeadingInlineMathLineMarkers = (line: string) => {
+  let remaining = line
+  let didStrip = true
+
+  while (didStrip) {
+    didStrip = false
+
+    const blockquoteMatch = remaining.match(/^\s{0,3}>\s?/)
+
+    if (blockquoteMatch) {
+      remaining = remaining.slice(blockquoteMatch[0].length)
+      didStrip = true
+    }
+
+    const indentationMatch = remaining.match(/^\s+/)
+
+    if (indentationMatch) {
+      remaining = remaining.slice(indentationMatch[0].length)
+    }
+
+    const listMarkerMatch = remaining.match(LIST_MARKER_PATTERN)
+
+    if (listMarkerMatch) {
+      remaining = remaining.slice(listMarkerMatch[0].length)
+      didStrip = true
+    }
+
+    const taskMarkerMatch = remaining.match(TASK_MARKER_PATTERN)
+
+    if (taskMarkerMatch) {
+      remaining = remaining.slice(taskMarkerMatch[0].length)
+      didStrip = true
+    }
+  }
+
+  return remaining
 }
 
 const asElement = (node: Node | null) => {
@@ -279,6 +333,9 @@ export const __editorTestUtils = {
   },
   getMarkdownBlockTypeFromIRNode(element: Element) {
     return getMarkdownBlockTypeFromIRNode(element)
+  },
+  normalizeMarkdownForEditor(markdown: string) {
+    return normalizeMarkdownForEditor(markdown)
   }
 }
 
@@ -297,9 +354,10 @@ export const createMarkdownEditor = async ({
   const host = document.createElement('div')
   host.className = 'editor-host'
   mountRoot.replaceChildren(host)
+  const normalizedInitialMarkdown = normalizeMarkdownForEditor(initialMarkdown)
 
   let instance: Vditor | null = null
-  let currentMarkdown = initialMarkdown
+  let currentMarkdown = normalizedInitialMarkdown
   let currentDocumentBaseURL = initialDocumentBaseURL
   let currentPresentation: EditorPresentation = defaultEditorPresentation
   let appliedDocumentBaseURL: string | null = null
@@ -308,6 +366,7 @@ export const createMarkdownEditor = async ({
     anchor: 0,
     head: 0
   }
+  let pendingInlineMathClosingOffset: number | null = null
   let suppressInputDepth = 0
   let removeBackgroundPointerListener: (() => void) | null = null
   let removeLinkActivationListener: (() => void) | null = null
@@ -502,7 +561,7 @@ export const createMarkdownEditor = async ({
     const nextTab = getEditorTabString(currentPresentation)
 
     runtime.lute?.SetLinkBase?.(nextLinkBase)
-    applyLuteRuntimeOptions(runtime.lute)
+    applyLuteRuntimeOptions(runtime.lute, currentPresentation)
     if (runtime.options) {
       runtime.options.tab = nextTab
     }
@@ -536,7 +595,7 @@ export const createMarkdownEditor = async ({
   }
 
   const readMarkdown = () => {
-    return instance?.getValue() ?? currentMarkdown
+    return normalizeMarkdownForEditor(instance?.getValue() ?? currentMarkdown)
   }
 
   const getIRRoot = () => {
@@ -602,13 +661,118 @@ export const createMarkdownEditor = async ({
     return didNormalize
   }
 
+  const isInlineMathAutoPairContext = (markdown: string, selection: SelectionOffsets) => {
+    if (!currentPresentation.enableMath || selection.anchor !== selection.head) {
+      return false
+    }
+
+    const offset = clampMarkdownOffset(markdown, selection.anchor)
+    const activeBlock = getResolvedActiveBlock(markdown, offset)
+
+    if (activeBlock?.type === 'code' || activeBlock?.type === 'math') {
+      return false
+    }
+
+    const lineStart = markdown.lastIndexOf('\n', Math.max(0, offset - 1)) + 1
+    const lineEndCandidate = markdown.indexOf('\n', offset)
+    const lineEnd = lineEndCandidate === -1 ? markdown.length : lineEndCandidate
+    const beforeCaret = markdown.slice(lineStart, offset)
+
+    if (hasOddTrailingBackslashes(beforeCaret)) {
+      return false
+    }
+
+    const currentLine = markdown.slice(lineStart, lineEnd)
+    const normalizedLine = stripLeadingInlineMathLineMarkers(currentLine)
+
+    return normalizedLine.trim().length > 0
+  }
+
+  const syncPendingInlineMathClosingOffset = (nextMarkdown: string) => {
+    if (pendingInlineMathClosingOffset == null) {
+      return
+    }
+
+    const selection = getSelectionOffsets()
+    const delta = nextMarkdown.length - currentMarkdown.length
+
+    if (delta !== 0) {
+      const selectionFloor = Math.min(selection.anchor, selection.head)
+
+      if (selectionFloor <= pendingInlineMathClosingOffset + Math.max(delta, 0)) {
+        pendingInlineMathClosingOffset += delta
+      } else {
+        pendingInlineMathClosingOffset = null
+        return
+      }
+    }
+
+    if (
+      pendingInlineMathClosingOffset < 0 ||
+      pendingInlineMathClosingOffset >= nextMarkdown.length ||
+      nextMarkdown[pendingInlineMathClosingOffset] !== '$'
+    ) {
+      pendingInlineMathClosingOffset = null
+    }
+  }
+
+  const handleInlineMathDollarKeydown = (event?: KeyboardEvent) => {
+    const selection = getSelectionOffsets()
+
+    if (
+      !event ||
+      event.key !== '$' ||
+      event.isComposing ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      selection.anchor !== selection.head
+    ) {
+      return false
+    }
+
+    const markdown = readMarkdown()
+    const offset = clampMarkdownOffset(markdown, selection.anchor)
+
+    if (
+      pendingInlineMathClosingOffset != null &&
+      offset === pendingInlineMathClosingOffset &&
+      markdown[offset] === '$'
+    ) {
+      event.preventDefault()
+      pendingInlineMathClosingOffset = null
+      currentSelection = {
+        anchor: offset + 1,
+        head: offset + 1
+      }
+      scheduleSelectionFromOffsets(offset + 1, offset + 1)
+      return true
+    }
+
+    if (!isInlineMathAutoPairContext(markdown, selection)) {
+      return false
+    }
+
+    event.preventDefault()
+
+    const closeOffset = offset + 1
+
+    replaceMarkdownRange(offset, offset, '$$', {
+      anchor: closeOffset,
+      head: closeOffset
+    })
+    pendingInlineMathClosingOffset = closeOffset
+    return true
+  }
+
   const syncMarkdownFromEditor = (emit: boolean, knownMarkdown?: string) => {
-    const nextMarkdown = knownMarkdown ?? readMarkdown()
+    const nextMarkdown = normalizeMarkdownForEditor(knownMarkdown ?? readMarkdown())
 
     if (nextMarkdown === currentMarkdown) {
       return
     }
 
+    syncPendingInlineMathClosingOffset(nextMarkdown)
     currentMarkdown = nextMarkdown
     invalidateLiveIRBlockCache()
 
@@ -622,16 +786,18 @@ export const createMarkdownEditor = async ({
     { emit = false, clearStack = false }: ApplyMarkdownOptions = {}
   ) => {
     const editor = getInstance()
+    const normalizedMarkdown = normalizeMarkdownForEditor(markdown)
+    pendingInlineMathClosingOffset = null
     invalidateLiveIRBlockCache()
 
     withSuppressedInput(() => {
-      editor.setValue(markdown, clearStack)
+      editor.setValue(normalizedMarkdown, clearStack)
     })
 
-    currentMarkdown = markdown
+    currentMarkdown = normalizedMarkdown
 
     if (emit) {
-      onMarkdownChange?.(markdown)
+      onMarkdownChange?.(normalizedMarkdown)
     }
   }
 
@@ -1178,8 +1344,8 @@ export const createMarkdownEditor = async ({
       applyDocumentBaseURL(currentDocumentBaseURL, false)
       applyEditableRuntimeOptions()
 
-      if (initialMarkdown.length > 0) {
-        applyMarkdown(initialMarkdown, { clearStack: true })
+      if (normalizedInitialMarkdown.length > 0) {
+        applyMarkdown(normalizedInitialMarkdown, { clearStack: true })
       }
 
       scheduleSelectionFromOffsets(0, 0)
@@ -1194,7 +1360,8 @@ export const createMarkdownEditor = async ({
       syncMarkdownFromEditor(true, markdown)
       tableManager?.handleEditorMutation()
     },
-    keydown() {
+    keydown(event: KeyboardEvent) {
+      handleInlineMathDollarKeydown(event)
       tableManager?.handleEditorMutation()
     },
     blur() {

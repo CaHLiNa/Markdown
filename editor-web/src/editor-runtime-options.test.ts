@@ -31,13 +31,25 @@ describe('editor-runtime-options', () => {
       },
       SetIndentCodeBlock(enabled) {
         calls.push(`indent-code-block:${String(enabled)}`)
+      },
+      SetInlineMath(enabled) {
+        calls.push(`inline-math:${String(enabled)}`)
+      },
+      SetInlineMathAllowDigitAfterOpenMarker(enabled) {
+        calls.push(`inline-math-digit:${String(enabled)}`)
+      },
+      SetVditorMathBlockPreview(enabled) {
+        calls.push(`math-block-preview:${String(enabled)}`)
       }
-    })
+    }, defaultEditorPresentation)
 
     expect(calls).toEqual([
       'chinese:true',
       'paragraph:true',
-      'indent-code-block:false'
+      'indent-code-block:false',
+      'inline-math:true',
+      'inline-math-digit:true',
+      'math-block-preview:true'
     ])
   })
 

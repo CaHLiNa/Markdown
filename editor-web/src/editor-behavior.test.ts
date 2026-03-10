@@ -142,6 +142,7 @@ class MockVditor {
   public options: {
     after?: () => void
     input?: (markdown: string) => void
+    keydown?: (event: KeyboardEvent) => void
     tab?: string
   }
 
@@ -175,9 +176,12 @@ class MockVditor {
       VditorIRDOM2Md: (html: string) => string
       SetChineseParagraphBeginningSpace: ReturnType<typeof vi.fn>
       SetIndentCodeBlock: ReturnType<typeof vi.fn>
+      SetInlineMath: ReturnType<typeof vi.fn>
+      SetInlineMathAllowDigitAfterOpenMarker: ReturnType<typeof vi.fn>
       SetLinkBase: ReturnType<typeof vi.fn>
       SetParagraphBeginningSpace: ReturnType<typeof vi.fn>
       SetUnorderedListMarker: ReturnType<typeof vi.fn>
+      SetVditorMathBlockPreview: ReturnType<typeof vi.fn>
       SetVditorIR: ReturnType<typeof vi.fn>
       SetVditorSV: ReturnType<typeof vi.fn>
       SetVditorWYSIWYG: ReturnType<typeof vi.fn>
@@ -259,6 +263,7 @@ class MockVditor {
     options: {
       after?: () => void
       input?: (markdown: string) => void
+      keydown?: (event: KeyboardEvent) => void
       tab?: string
     }
   ) {
@@ -297,9 +302,12 @@ class MockVditor {
         },
         SetChineseParagraphBeginningSpace: vi.fn(),
         SetIndentCodeBlock: vi.fn(),
+        SetInlineMath: vi.fn(),
+        SetInlineMathAllowDigitAfterOpenMarker: vi.fn(),
         SetLinkBase: vi.fn(),
         SetParagraphBeginningSpace: vi.fn(),
         SetUnorderedListMarker: vi.fn(),
+        SetVditorMathBlockPreview: vi.fn(),
         SetVditorIR: vi.fn(),
         SetVditorSV: vi.fn(),
         SetVditorWYSIWYG: vi.fn()
@@ -324,6 +332,16 @@ vi.mock('vditor', () => {
 const flushAsync = async () => {
   await Promise.resolve()
   await Promise.resolve()
+}
+
+const triggerEditorKeydown = (instance: MockVditor, key: string) => {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    cancelable: true
+  })
+
+  instance.options.keydown?.(event)
+  return event
 }
 
 describe('editor behavior', () => {
@@ -363,6 +381,175 @@ describe('editor behavior', () => {
     })
 
     expect(instance?.vditor.options.tab).toBe('\t')
+
+    await editor.destroy()
+  })
+
+  it('synchronizes math runtime switches with the current presentation', async () => {
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({ root })
+    const instance = mockVditorState.instances[0]
+
+    expect(instance?.vditor.lute.SetInlineMath).toHaveBeenLastCalledWith(true)
+    expect(instance?.vditor.lute.SetVditorMathBlockPreview).toHaveBeenLastCalledWith(true)
+
+    editor.setPresentation({
+      ...defaultEditorPresentation,
+      enableMath: false
+    })
+
+    expect(instance?.vditor.lute.SetInlineMath).toHaveBeenLastCalledWith(false)
+    expect(instance?.vditor.lute.SetVditorMathBlockPreview).toHaveBeenLastCalledWith(false)
+
+    await editor.destroy()
+  })
+
+  it('normalizes bracket-delimited display math when loading markdown', async () => {
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: ['\\[', 'E = mc^2', '\\]'].join('\n')
+    })
+
+    expect(editor.getMarkdown()).toBe(['$$', 'E = mc^2', '$$'].join('\n'))
+
+    await editor.destroy()
+  })
+
+  it('normalizes bracket-delimited display math before emitting input changes', async () => {
+    const root = document.createElement('div')
+    const onMarkdownChange = vi.fn()
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root,
+      onMarkdownChange
+    })
+    const instance = mockVditorState.instances[0]
+    const bracketMathMarkdown = ['\\[', 'E = mc^2', '\\]'].join('\n')
+
+    instance.value = bracketMathMarkdown
+    instance.options.input?.(bracketMathMarkdown)
+
+    expect(onMarkdownChange).toHaveBeenLastCalledWith(['$$', 'E = mc^2', '$$'].join('\n'))
+    expect(editor.getMarkdown()).toBe(['$$', 'E = mc^2', '$$'].join('\n'))
+
+    await editor.destroy()
+  })
+
+  it('auto-pairs a single dollar inside inline paragraph content', async () => {
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'alpha beta'
+    })
+    const instance = mockVditorState.instances[0]
+
+    editor.setSelectionInParagraph(0, 6)
+
+    if (!instance) {
+      throw new Error('expected mock Vditor instance')
+    }
+
+    const event = triggerEditorKeydown(instance, '$')
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(editor.getMarkdown()).toBe('alpha $$beta')
+    expect(editor.getSelectionOffsets()).toEqual({ anchor: 7, head: 7 })
+
+    await editor.destroy()
+  })
+
+  it('moves across the auto-paired closing dollar without changing markdown', async () => {
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'alpha beta'
+    })
+    const instance = mockVditorState.instances[0]
+
+    editor.setSelectionInParagraph(0, 6)
+
+    if (!instance) {
+      throw new Error('expected mock Vditor instance')
+    }
+
+    triggerEditorKeydown(instance, '$')
+
+    const jumpEvent = triggerEditorKeydown(instance, '$')
+
+    expect(jumpEvent.defaultPrevented).toBe(true)
+    expect(editor.getMarkdown()).toBe('alpha $$beta')
+    expect(editor.getSelectionOffsets()).toEqual({ anchor: 8, head: 8 })
+
+    await editor.destroy()
+  })
+
+  it('keeps tracking the auto-paired closing dollar after typing inside the pair', async () => {
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: 'alpha beta'
+    })
+    const instance = mockVditorState.instances[0]
+
+    editor.setSelectionInParagraph(0, 6)
+
+    if (!instance) {
+      throw new Error('expected mock Vditor instance')
+    }
+
+    triggerEditorKeydown(instance, '$')
+    instance.setValue('alpha $x$beta')
+    editor.setSelectionInParagraph(0, 8)
+    instance.options.input?.('alpha $x$beta')
+
+    const jumpEvent = triggerEditorKeydown(instance, '$')
+
+    expect(jumpEvent.defaultPrevented).toBe(true)
+    expect(editor.getMarkdown()).toBe('alpha $x$beta')
+    expect(editor.getSelectionOffsets()).toEqual({ anchor: 9, head: 9 })
+
+    await editor.destroy()
+  })
+
+  it('does not auto-pair a single dollar in an empty paragraph', async () => {
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root
+    })
+    const instance = mockVditorState.instances[0]
+
+    editor.setSelectionInParagraph(0, 0)
+
+    if (!instance) {
+      throw new Error('expected mock Vditor instance')
+    }
+
+    const event = triggerEditorKeydown(instance, '$')
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(editor.getMarkdown()).toBe('')
+    expect(editor.getSelectionOffsets()).toEqual({ anchor: 0, head: 0 })
 
     await editor.destroy()
   })

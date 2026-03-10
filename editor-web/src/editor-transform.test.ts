@@ -7,6 +7,56 @@ const createLute = async () => {
 }
 
 describe('editor IR helpers', () => {
+  it('normalizes bracket-delimited display math for the editor runtime', () => {
+    const markdown = ['\\[', 'E = mc^2', '\\]'].join('\n')
+
+    expect(__editorTestUtils.normalizeMarkdownForEditor(markdown)).toBe(['$$', 'E = mc^2', '$$'].join('\n'))
+  })
+
+  it('does not rewrite bracket-delimited math inside fenced code blocks', () => {
+    const markdown = ['```tex', '\\[', 'E = mc^2', '\\]', '```'].join('\n')
+
+    expect(__editorTestUtils.normalizeMarkdownForEditor(markdown)).toBe(markdown)
+  })
+
+  it('does not rewrite bracket-delimited math inside indented code blocks', () => {
+    const markdown = ['    \\[', '    E = mc^2', '    \\]'].join('\n')
+
+    expect(__editorTestUtils.normalizeMarkdownForEditor(markdown)).toBe(markdown)
+  })
+
+  it('locates display math blocks from original markdown without a trailing newline', async () => {
+    const lute = await createLute()
+    const markdown = ['$$', 'E = mc^2', '$$'].join('\n')
+
+    const blocks = __editorTestUtils.extractMarkdownBlocksFromVditorIRDOM(markdown, lute)
+
+    expect(blocks).toEqual([
+      {
+        from: 0,
+        to: markdown.length,
+        text: markdown,
+        type: 'math'
+      }
+    ])
+  })
+
+  it('locates compact display math blocks from the original markdown source', async () => {
+    const lute = await createLute()
+    const markdown = '$$E = mc^2$$'
+
+    const blocks = __editorTestUtils.extractMarkdownBlocksFromVditorIRDOM(markdown, lute)
+
+    expect(blocks).toEqual([
+      {
+        from: 0,
+        to: markdown.length,
+        text: markdown,
+        type: 'math'
+      }
+    ])
+  })
+
   it('maps IR block elements to markdown block types', () => {
     const heading = document.createElement('h2')
     const paragraph = document.createElement('p')
