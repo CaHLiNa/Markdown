@@ -10,7 +10,6 @@ import {
   shouldActivateLinkOnCommandClick
 } from './editor-link'
 import {
-  extractMarkdownBlocks,
   findHeadingOffset,
   type MarkdownBlock
 } from './editor-markdown'
@@ -43,29 +42,6 @@ type JSONNode = Record<string, unknown>
 type SelectionOffsets = {
   anchor: number
   head: number
-}
-
-type NormalizedSelection = SelectionOffsets & {
-  start: number
-  end: number
-}
-
-type SerializedDomPoint =
-  | {
-      kind: 'text'
-      path: number[]
-      offset: number
-    }
-  | {
-      kind: 'container'
-      path: number[]
-      offset: number
-    }
-
-type MarkdownTransform = {
-  markdown: string
-  selectionStart: number
-  selectionEnd: number
 }
 
 type ApplyMarkdownOptions = {
@@ -168,6 +144,15 @@ type LuteBlockLocator = Pick<
   'Md2VditorIRDOM' | 'VditorIRDOM2Md'
 >
 
+type DOMPoint = {
+  node: Node
+  offset: number
+}
+
+type IRBlockRecord = MarkdownBlock & {
+  element: Element | null
+}
+
 export type MarkdownEditor = {
   loadMarkdown: (markdown: string) => void
   setDocumentBaseURL: (baseURL: string | null) => void
@@ -192,8 +177,6 @@ export type MarkdownEditor = {
 }
 
 const VDITOR_CDN = './vditor'
-const ANCHOR_MARKER = 'CODEX__ANCHOR__'
-const HEAD_MARKER = 'CODEX__HEAD__'
 const DEFAULT_LINK_PLACEHOLDER = 'https://'
 const DEFAULT_INLINE_PLACEHOLDER = 'text'
 const DEFAULT_IMAGE_ALT = 'image'
@@ -381,206 +364,12 @@ const findClosestElement = <T extends Element>(node: Node | null, selector: stri
   return asElement(node)?.closest(selector) as T | null
 }
 
-const NATIVE_TAB_HANDLING_SELECTOR = [
-  '.vditor-ir__marker--pre',
-  ".vditor-ir__node[data-type='code-block']",
-  ".vditor-ir__node[data-type='math-block']",
-  "[data-type='code-block-info']",
-  "[data-type='code-block-open-marker']",
-  "[data-type='code-block-close-marker']",
-  'pre code'
-].join(', ')
-
-const shouldHandleCustomIndentation = (target: EventTarget | null) => {
-  return (
-    !(target instanceof Node) ||
-    findClosestElement(target, NATIVE_TAB_HANDLING_SELECTOR) === null
-  )
-}
-
-const getNodePath = (root: Node, target: Node) => {
-  const path: number[] = []
-  let current: Node | null = target
-
-  while (current && current !== root) {
-    const parentNode: Node | null = current.parentNode
-
-    if (!parentNode) {
-      return null
-    }
-
-    path.unshift(Array.prototype.indexOf.call(parentNode.childNodes, current) as number)
-    current = parentNode
-  }
-
-  return current === root ? path : null
-}
-
-const resolveNodePath = (root: Node, path: number[]) => {
-  let current: Node | null = root
-
-  for (const index of path) {
-    current = current?.childNodes.item(index) ?? null
-
-    if (!current) {
-      return null
-    }
-  }
-
-  return current
-}
-
-const getChildNodeIndex = (node: Node) => {
-  const parent = node.parentNode
-
-  if (!parent) {
-    return -1
-  }
-
-  return Array.prototype.indexOf.call(parent.childNodes, node) as number
-}
-
 const clampDomOffset = (node: Node, offset: number) => {
   if (node.nodeType === Node.TEXT_NODE) {
     return clamp(offset, 0, node.textContent?.length ?? 0)
   }
 
   return clamp(offset, 0, node.childNodes.length)
-}
-
-const normalizeSelection = ({ anchor, head }: SelectionOffsets): NormalizedSelection => {
-  return {
-    anchor,
-    head,
-    start: Math.min(anchor, head),
-    end: Math.max(anchor, head)
-  }
-}
-
-const replaceRange = (markdown: string, start: number, end: number, replacement: string) => {
-  return `${markdown.slice(0, start)}${replacement}${markdown.slice(end)}`
-}
-
-const insertAt = (markdown: string, offset: number, text: string) => {
-  return replaceRange(markdown, offset, offset, text)
-}
-
-const getLineStart = (markdown: string, offset: number) => {
-  let index = clampMarkdownOffset(markdown, offset)
-
-  while (index > 0 && markdown[index - 1] !== '\n') {
-    index -= 1
-  }
-
-  return index
-}
-
-const getLineEnd = (markdown: string, offset: number) => {
-  let index = clampMarkdownOffset(markdown, offset)
-
-  while (index < markdown.length && markdown[index] !== '\n') {
-    index += 1
-  }
-
-  return index
-}
-
-const getSelectedLineRange = (markdown: string, selection: NormalizedSelection) => {
-  const start = getLineStart(markdown, selection.start)
-  const effectiveEnd =
-    selection.end > selection.start && markdown[selection.end - 1] === '\n'
-      ? selection.end - 1
-      : selection.end
-  const end = getLineEnd(markdown, effectiveEnd)
-
-  return {
-    start,
-    end
-  }
-}
-
-const getLineRelativeStarts = (text: string) => {
-  const starts = [0]
-
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === '\n' && index + 1 < text.length) {
-      starts.push(index + 1)
-    }
-  }
-
-  return starts
-}
-
-const getInsertedPrefixDelta = (
-  offset: number,
-  lineStarts: number[],
-  prefixLength: number,
-  includeBoundaryLine: boolean
-) => {
-  let delta = 0
-
-  for (const lineStart of lineStarts) {
-    if (lineStart < offset || (includeBoundaryLine && lineStart === offset)) {
-      delta += prefixLength
-    }
-  }
-
-  return delta
-}
-
-const getRemovedPrefixDelta = (offset: number, lineStarts: number[], removedByLine: number[]) => {
-  let delta = 0
-
-  for (let index = 0; index < lineStarts.length; index += 1) {
-    const lineStart = lineStarts[index] ?? 0
-
-    if (offset <= lineStart) {
-      break
-    }
-
-    delta += Math.min(removedByLine[index] ?? 0, offset - lineStart)
-  }
-
-  return delta
-}
-
-const stripBlockPrefix = (line: string) => {
-  return line
-    .replace(/^\s{0,3}>\s?/, '')
-    .replace(/^\s{0,3}#{1,6}\s+/, '')
-    .replace(/^\s{0,3}[-+*]\s+\[(?: |x|X)\]\s+/, '')
-    .replace(/^\s{0,3}\d+[.)]\s+/, '')
-    .replace(/^\s{0,3}[-+*]\s+/, '')
-}
-
-const unwrapDelimitedText = (text: string, pattern: RegExp) => {
-  let current = text
-
-  while (true) {
-    const next = current.replace(pattern, '$1')
-
-    if (next === current) {
-      return current
-    }
-
-    current = next
-  }
-}
-
-const clearInlineFormatting = (text: string) => {
-  let nextText = text
-    .replace(/<\/?u>/g, '')
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '$1')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
-
-  nextText = unwrapDelimitedText(nextText, /\*\*(.+?)\*\*/g)
-  nextText = unwrapDelimitedText(nextText, /__(.+?)__/g)
-  nextText = unwrapDelimitedText(nextText, /~~(.+?)~~/g)
-  nextText = unwrapDelimitedText(nextText, /==(.+?)==/g)
-  nextText = unwrapDelimitedText(nextText, /`([^`\n]+)`/g)
-  nextText = unwrapDelimitedText(nextText, /\$([^$\n]+)\$/g)
-
-  return nextText
 }
 
 const sanitizeAssetPath = (value: string) => {
@@ -600,115 +389,6 @@ const normalizeRuntimeCommand = (command: RuntimeEditorCommand) => {
   }
 }
 
-const serializeTextPoint = (root: Node, node: Node, offset: number): SerializedDomPoint | null => {
-  const path = getNodePath(root, node)
-
-  if (!path) {
-    return null
-  }
-
-  return {
-    kind: 'text',
-    path,
-    offset
-  }
-}
-
-const serializeContainerPoint = (
-  root: Node,
-  node: Node,
-  offset: number
-): SerializedDomPoint | null => {
-  const path = getNodePath(root, node)
-
-  if (!path) {
-    return null
-  }
-
-  return {
-    kind: 'container',
-    path,
-    offset
-  }
-}
-
-const locateAndStripMarker = (root: HTMLElement, marker: string): SerializedDomPoint | null => {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-
-  while (walker.nextNode()) {
-    const textNode = walker.currentNode as Text
-    const value = textNode.nodeValue ?? ''
-    const markerIndex = value.indexOf(marker)
-
-    if (markerIndex === -1) {
-      continue
-    }
-
-    const nextValue = value.slice(0, markerIndex) + value.slice(markerIndex + marker.length)
-
-    if (nextValue.length > 0) {
-      textNode.nodeValue = nextValue
-      return serializeTextPoint(root, textNode, markerIndex)
-    }
-
-    const parent = textNode.parentNode
-
-    if (!parent) {
-      return null
-    }
-
-    const offset = getChildNodeIndex(textNode)
-    parent.removeChild(textNode)
-
-    return serializeContainerPoint(root, parent, offset)
-  }
-
-  return null
-}
-
-const mapDomPointToMarkdownOffset = (
-  root: HTMLElement,
-  lute: Vditor['vditor']['lute'],
-  node: Node,
-  offset: number,
-  marker: string
-) => {
-  const path = getNodePath(root, node)
-
-  if (!path) {
-    return null
-  }
-
-  const clone = root.cloneNode(true) as HTMLElement
-  const cloneNode = resolveNodePath(clone, path)
-
-  if (!cloneNode) {
-    return null
-  }
-
-  const range = document.createRange()
-  range.setStart(cloneNode, clampDomOffset(cloneNode, offset))
-  range.collapse(true)
-  range.insertNode(document.createTextNode(marker))
-
-  const markdown = lute.VditorIRDOM2Md(clone.innerHTML)
-  const markerIndex = markdown.indexOf(marker)
-
-  return markerIndex === -1 ? null : markerIndex
-}
-
-const mapMarkdownOffsetToDomPoint = (
-  markdown: string,
-  offset: number,
-  lute: Vditor['vditor']['lute'],
-  marker: string
-) => {
-  const container = document.createElement('div')
-  container.innerHTML = lute.Md2VditorIRDOM(insertAt(markdown, clampMarkdownOffset(markdown, offset), marker))
-
-  return locateAndStripMarker(container, marker)
-}
-
 const focusPointIntoView = (node: Node | null) => {
   const element =
     node instanceof Element ? node : node?.parentElement instanceof Element ? node.parentElement : null
@@ -719,27 +399,7 @@ const focusPointIntoView = (node: Node | null) => {
   })
 }
 
-const resolveLivePoint = (root: HTMLElement, point: SerializedDomPoint | null) => {
-  if (!point) {
-    return null
-  }
-
-  const node = resolveNodePath(root, point.path)
-
-  if (!node) {
-    return null
-  }
-
-  return {
-    node,
-    offset: clampDomOffset(node, point.offset)
-  }
-}
-
-const applySelectionPoints = (
-  anchorPoint: { node: Node; offset: number } | null,
-  headPoint: { node: Node; offset: number } | null
-) => {
+const applySelectionPoints = (anchorPoint: DOMPoint | null, headPoint: DOMPoint | null) => {
   if (!anchorPoint || !headPoint) {
     return false
   }
@@ -782,42 +442,8 @@ const applySelectionPoints = (
   return true
 }
 
-const getActiveBlock = (markdown: string, offset: number) => {
-  const normalizedOffset = clampMarkdownOffset(markdown, offset)
-
-  return (
-    extractMarkdownBlocks(markdown).find(
-      (block) => normalizedOffset >= block.from && normalizedOffset <= block.to
-    ) ?? null
-  )
-}
-
-const shouldSuppressLeadingBlockIndent = (
-  markdown: string,
-  selection: NormalizedSelection,
-  activeBlock: MarkdownBlock | null
-) => {
-  if (selection.start !== selection.end || !activeBlock) {
-    return false
-  }
-
-  if (
-    activeBlock.type !== 'paragraph' &&
-    activeBlock.type !== 'heading' &&
-    activeBlock.type !== 'blockquote'
-  ) {
-    return false
-  }
-
-  return getLineStart(markdown, selection.start) === selection.start
-}
-
 const stripTrailingBlockNewlines = (markdown: string) => {
   return markdown.replace(/\n+$/, '')
-}
-
-const isTrailingNewlineCompatible = (source: string, canonical: string) => {
-  return stripTrailingBlockNewlines(source) === stripTrailingBlockNewlines(canonical)
 }
 
 const getMarkdownBlockTypeFromIRNode = (element: Element): MarkdownBlock['type'] | null => {
@@ -859,6 +485,59 @@ const getMarkdownBlockTypeFromIRNode = (element: Element): MarkdownBlock['type']
   return null
 }
 
+const collectIRBlocksFromContainer = (
+  container: HTMLElement,
+  lute: LuteBlockLocator | null | undefined,
+  sourceMarkdown?: string | null
+): IRBlockRecord[] | null => {
+  if (!lute) {
+    return null
+  }
+
+  if (container.childElementCount === 0) {
+    return []
+  }
+
+  const canonicalMarkdown = lute.VditorIRDOM2Md(container.innerHTML)
+  const basis =
+    typeof sourceMarkdown === 'string' &&
+    stripTrailingBlockNewlines(sourceMarkdown) === stripTrailingBlockNewlines(canonicalMarkdown)
+      ? sourceMarkdown
+      : canonicalMarkdown
+  const blocks: IRBlockRecord[] = []
+  let searchOffset = 0
+
+  for (const element of Array.from(container.children)) {
+    const type = getMarkdownBlockTypeFromIRNode(element)
+
+    if (!type) {
+      continue
+    }
+
+    const rawBlockMarkdown = lute.VditorIRDOM2Md(element.outerHTML)
+    const blockMarkdown = stripTrailingBlockNewlines(rawBlockMarkdown)
+    const from = basis.indexOf(rawBlockMarkdown, searchOffset)
+
+    if (from === -1) {
+      return null
+    }
+
+    const to = from + blockMarkdown.length
+
+    blocks.push({
+      element,
+      from,
+      to,
+      text: basis.slice(from, to),
+      type
+    })
+
+    searchOffset = from + rawBlockMarkdown.length
+  }
+
+  return blocks
+}
+
 const extractMarkdownBlocksFromVditorIRDOM = (
   markdown: string,
   lute: LuteBlockLocator | null | undefined
@@ -871,521 +550,86 @@ const extractMarkdownBlocksFromVditorIRDOM = (
     return []
   }
 
-  const irdom = lute.Md2VditorIRDOM(markdown)
-  const canonicalMarkdown = lute.VditorIRDOM2Md(irdom)
-
-  if (!isTrailingNewlineCompatible(markdown, canonicalMarkdown)) {
-    return null
-  }
-
   const container = document.createElement('div')
-  container.innerHTML = irdom
+  container.innerHTML = lute.Md2VditorIRDOM(markdown)
 
-  const blocks: MarkdownBlock[] = []
-  let searchOffset = 0
-
-  for (const element of Array.from(container.children)) {
-    const type = getMarkdownBlockTypeFromIRNode(element)
-
-    if (!type) {
-      continue
-    }
-
-    const rawBlockMarkdown = lute.VditorIRDOM2Md(element.outerHTML)
-    const blockMarkdown = stripTrailingBlockNewlines(rawBlockMarkdown)
-    const from = canonicalMarkdown.indexOf(rawBlockMarkdown, searchOffset)
-
-    if (from === -1) {
-      return null
-    }
-
-    const to = from + blockMarkdown.length
-
-    blocks.push({
-      from,
-      to,
-      text: canonicalMarkdown.slice(from, to),
-      type
-    })
-
-    searchOffset = from + rawBlockMarkdown.length
-  }
-
-  return blocks
+  return collectIRBlocksFromContainer(container, lute, markdown)?.map(({ from, to, text, type }) => ({
+    from,
+    to,
+    text,
+    type
+  })) ?? null
 }
 
-const applyInlineWrap = (
-  markdown: string,
-  selection: NormalizedSelection,
-  prefix: string,
-  suffix = prefix,
-  placeholder = DEFAULT_INLINE_PLACEHOLDER
-): MarkdownTransform => {
-  const selectedText = markdown.slice(selection.start, selection.end)
-  const content = selectedText.length > 0 ? selectedText : placeholder
-  const wrapped = `${prefix}${content}${suffix}`
-
-  return {
-    markdown: replaceRange(markdown, selection.start, selection.end, wrapped),
-    selectionStart: selection.start + prefix.length,
-    selectionEnd:
-      selection.start + prefix.length + (selectedText.length > 0 ? selectedText.length : placeholder.length)
-  }
+const getClosestIRBlockElement = (node: Node | null) => {
+  return findClosestElement<HTMLElement>(node, "[data-block='0']")
 }
 
-const applyParagraphTransform = (markdown: string, selection: NormalizedSelection): MarkdownTransform => {
-  const lineRange = getSelectedLineRange(markdown, selection)
-  const nextLines = markdown
-    .slice(lineRange.start, lineRange.end)
-    .split('\n')
-    .map((line) => stripBlockPrefix(line))
-  const replacement = nextLines.join('\n')
-
-  return {
-    markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
-    selectionStart: lineRange.start,
-    selectionEnd: lineRange.start + replacement.length
-  }
-}
-
-const applyHeadingTransform = (
-  markdown: string,
-  selection: NormalizedSelection,
-  level: number
-): MarkdownTransform => {
-  const lineRange = getSelectedLineRange(markdown, selection)
-  const prefix = `${'#'.repeat(level)} `
-  const nextLines = markdown
-    .slice(lineRange.start, lineRange.end)
-    .split('\n')
-    .map((line) => {
-      if (line.trim().length === 0) {
-        return line
-      }
-
-      return `${prefix}${stripBlockPrefix(line).trimStart()}`
-    })
-  const replacement = nextLines.join('\n')
-
-  return {
-    markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
-    selectionStart: lineRange.start,
-    selectionEnd: lineRange.start + replacement.length
-  }
-}
-
-const applyLinePrefixTransform = (
-  markdown: string,
-  selection: NormalizedSelection,
-  mapper: (line: string, index: number) => string
-): MarkdownTransform => {
-  const lineRange = getSelectedLineRange(markdown, selection)
-  const nextLines = markdown
-    .slice(lineRange.start, lineRange.end)
-    .split('\n')
-    .map(mapper)
-  const replacement = nextLines.join('\n')
-
-  return {
-    markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
-    selectionStart: lineRange.start,
-    selectionEnd: lineRange.start + replacement.length
-  }
-}
-
-const applyUpgradeHeadingTransform = (
-  markdown: string,
-  selection: NormalizedSelection,
-  direction: 1 | -1
-): MarkdownTransform | null => {
-  const lineRange = getSelectedLineRange(markdown, selection)
-  let changed = false
-
-  const replacement = markdown
-    .slice(lineRange.start, lineRange.end)
-    .split('\n')
-    .map((line) => {
-      const match = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/)
-
-      if (!match) {
-        return line
-      }
-
-      changed = true
-
-      const nextLevel = clamp(match[1].length - direction, 1, 6)
-      return `${'#'.repeat(nextLevel)} ${match[2]}`
-    })
-    .join('\n')
-
-  if (!changed) {
+const getHeadingLevelFromElement = (element: Element | null) => {
+  if (!element) {
     return null
   }
 
-  return {
-    markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
-    selectionStart: lineRange.start,
-    selectionEnd: lineRange.start + replacement.length
-  }
+  const match = element.tagName.match(/^H([1-6])$/)
+  return match ? Number.parseInt(match[1] ?? '0', 10) : null
 }
 
-const applySnippetTransform = (
-  markdown: string,
-  selection: NormalizedSelection,
-  snippet: string
-): MarkdownTransform => {
-  return {
-    markdown: replaceRange(markdown, selection.start, selection.end, snippet),
-    selectionStart: selection.start,
-    selectionEnd: selection.start + snippet.length
-  }
-}
-
-const applyBlockWrapTransform = (
-  markdown: string,
-  selection: NormalizedSelection,
-  opening: string,
-  closing: string,
-  placeholder: string
-): MarkdownTransform => {
-  const selectedText = markdown.slice(selection.start, selection.end)
-  const content = selectedText.length > 0 ? selectedText : placeholder
-  const replacement = `${opening}${content}${closing}`
-
-  return {
-    markdown: replaceRange(markdown, selection.start, selection.end, replacement),
-    selectionStart: selection.start + opening.length,
-    selectionEnd:
-      selection.start + opening.length + (selectedText.length > 0 ? selectedText.length : placeholder.length)
-  }
-}
-
-const applyClearFormatTransform = (
-  markdown: string,
-  selection: NormalizedSelection
-): MarkdownTransform => {
-  const hasSelection = selection.start !== selection.end
-  const range = hasSelection
-    ? { start: selection.start, end: selection.end }
-    : getSelectedLineRange(markdown, selection)
-  const replacement = clearInlineFormatting(
-    markdown
-      .slice(range.start, range.end)
-      .split('\n')
-      .map((line) => stripBlockPrefix(line))
-      .join('\n')
-  )
-
-  return {
-    markdown: replaceRange(markdown, range.start, range.end, replacement),
-    selectionStart: range.start,
-    selectionEnd: range.start + replacement.length
-  }
-}
-
-const applyDuplicateBlockTransform = (
-  markdown: string,
-  selection: NormalizedSelection
-): MarkdownTransform | null => {
-  const block = getActiveBlock(markdown, selection.start)
-
-  if (!block) {
+const getListCommandFromElement = (element: Element | null): RuntimeEditorCommand | null => {
+  if (!element || (element.tagName !== 'UL' && element.tagName !== 'OL')) {
     return null
   }
 
-  const separator = markdown.length === 0 ? '' : '\n\n'
-  const insertion = `${separator}${block.text}`
-  const insertOffset = block.to
-
-  return {
-    markdown: insertAt(markdown, insertOffset, insertion),
-    selectionStart: insertOffset + insertion.length - block.text.length,
-    selectionEnd: insertOffset + insertion.length
+  if (element.querySelector('input[type="checkbox"]')) {
+    return 'task-list'
   }
+
+  return element.tagName === 'OL' ? 'ordered-list' : 'bullet-list'
 }
 
-const applyDeleteBlockTransform = (
-  markdown: string,
-  selection: NormalizedSelection
-): MarkdownTransform | null => {
-  const block = getActiveBlock(markdown, selection.start)
-
-  if (!block) {
+const measureTextOffsetWithinElement = (element: Element, node: Node, offset: number) => {
+  if (!element.contains(node)) {
     return null
   }
 
-  let start = block.from
-  let end = block.to
-
-  if (markdown[end] === '\n') {
-    end += 1
-  } else if (start > 0 && markdown[start - 1] === '\n') {
-    start -= 1
-  }
-
-  return {
-    markdown: replaceRange(markdown, start, end, ''),
-    selectionStart: start,
-    selectionEnd: start
-  }
+  const range = document.createRange()
+  range.setStart(element, 0)
+  range.setEnd(node, clampDomOffset(node, offset))
+  return range.toString().length
 }
 
-const countLeadingSpaces = (line: string) => {
-  const match = line.match(/^ */)
-  return match?.[0].length ?? 0
-}
+const resolveTextPointInElement = (element: Element, offset: number): DOMPoint => {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+  let remaining = Math.max(0, offset)
+  let currentNode = walker.nextNode()
+  let lastTextNode: Text | null = null
 
-const applyIndentTransform = (
-  markdown: string,
-  selection: NormalizedSelection,
-  indentUnit: string
-): MarkdownTransform => {
-  if (selection.start === selection.end) {
-    return {
-      markdown: insertAt(markdown, selection.start, indentUnit),
-      selectionStart: selection.start + indentUnit.length,
-      selectionEnd: selection.start + indentUnit.length
-    }
-  }
+  while (currentNode) {
+    const textNode = currentNode as Text
+    const length = textNode.data.length
+    lastTextNode = textNode
 
-  const lineRange = getSelectedLineRange(markdown, selection)
-  const selectedText = markdown.slice(lineRange.start, lineRange.end)
-  const lineStarts = getLineRelativeStarts(selectedText)
-  const nextLines = markdown
-    .slice(lineRange.start, lineRange.end)
-    .split('\n')
-    .map((line) => `${indentUnit}${line}`)
-  const replacement = nextLines.join('\n')
-  const selectionStartDelta = getInsertedPrefixDelta(
-    selection.start - lineRange.start,
-    lineStarts,
-    indentUnit.length,
-    true
-  )
-  const selectionEndDelta = getInsertedPrefixDelta(
-    selection.end - lineRange.start,
-    lineStarts,
-    indentUnit.length,
-    false
-  )
-
-  return {
-    markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
-    selectionStart: selection.start + selectionStartDelta,
-    selectionEnd: selection.end + selectionEndDelta
-  }
-}
-
-const applyOutdentTransform = (
-  markdown: string,
-  selection: NormalizedSelection,
-  indentUnit: string,
-  indentWidth: number,
-  useSpacesForIndent: boolean
-): MarkdownTransform => {
-  if (selection.start === selection.end) {
-    const lineStart = getLineStart(markdown, selection.start)
-    const lineText = markdown.slice(lineStart, getLineEnd(markdown, selection.start))
-
-    if (useSpacesForIndent) {
-      const removable = Math.min(indentWidth, countLeadingSpaces(lineText))
-
-      if (removable === 0) {
-        return {
-          markdown,
-          selectionStart: selection.start,
-          selectionEnd: selection.end
-        }
-      }
-
-      const removedBeforeCursor = Math.min(removable, Math.max(0, selection.start - lineStart))
-
+    if (remaining <= length) {
       return {
-        markdown: replaceRange(markdown, lineStart, lineStart + removable, ''),
-        selectionStart: selection.start - removedBeforeCursor,
-        selectionEnd: selection.end - removedBeforeCursor
+        node: textNode,
+        offset: remaining
       }
     }
 
-    if (!lineText.startsWith(indentUnit)) {
-      return {
-        markdown,
-        selectionStart: selection.start,
-        selectionEnd: selection.end
-      }
-    }
+    remaining -= length
+    currentNode = walker.nextNode()
+  }
 
-    const removedBeforeCursor = Math.min(indentUnit.length, Math.max(0, selection.start - lineStart))
-
+  if (lastTextNode) {
     return {
-      markdown: replaceRange(markdown, lineStart, lineStart + indentUnit.length, ''),
-      selectionStart: selection.start - removedBeforeCursor,
-      selectionEnd: selection.end - removedBeforeCursor
+      node: lastTextNode,
+      offset: lastTextNode.data.length
     }
   }
 
-  const lineRange = getSelectedLineRange(markdown, selection)
-  const selectedText = markdown.slice(lineRange.start, lineRange.end)
-  const sourceLines = selectedText.split('\n')
-  const lineStarts = getLineRelativeStarts(selectedText)
-  const removedByLine: number[] = []
-
-  const nextLines = sourceLines.map((line, index) => {
-    if (useSpacesForIndent) {
-      const removable = Math.min(indentWidth, countLeadingSpaces(line))
-      removedByLine[index] = removable
-
-      return line.slice(removable)
-    }
-
-    const removable = line.startsWith(indentUnit) ? indentUnit.length : 0
-    removedByLine[index] = removable
-
-    return removable > 0 ? line.slice(removable) : line
-  })
-  const replacement = nextLines.join('\n')
-  const removedBeforeSelectionStart = getRemovedPrefixDelta(
-    selection.start - lineRange.start,
-    lineStarts,
-    removedByLine
-  )
-  const removedBeforeSelectionEnd = getRemovedPrefixDelta(
-    selection.end - lineRange.start,
-    lineStarts,
-    removedByLine
-  )
-
   return {
-    markdown: replaceRange(markdown, lineRange.start, lineRange.end, replacement),
-    selectionStart: Math.max(lineRange.start, selection.start - removedBeforeSelectionStart),
-    selectionEnd: Math.max(lineRange.start, selection.end - removedBeforeSelectionEnd)
+    node: element,
+    offset: element.childNodes.length
   }
-}
-
-type MarkdownTableModel = {
-  header: string[]
-  aligns: Array<TableAlignment | null>
-  rows: string[][]
-}
-
-type MarkdownTableTarget = {
-  rowIndex: number
-  columnIndex: number
-}
-
-const splitMarkdownTableRow = (line: string) => {
-  return line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map((cell) => cell.trim())
-}
-
-const parseMarkdownTableAlignment = (cell: string): TableAlignment | null => {
-  const value = cell.trim()
-  const hasLeading = value.startsWith(':')
-  const hasTrailing = value.endsWith(':')
-
-  if (hasLeading && hasTrailing) {
-    return 'center'
-  }
-
-  if (hasTrailing) {
-    return 'right'
-  }
-
-  if (hasLeading) {
-    return 'left'
-  }
-
-  return null
-}
-
-const formatMarkdownTableAlignment = (align: TableAlignment | null) => {
-  switch (align) {
-    case 'left':
-      return ':---'
-    case 'center':
-      return ':---:'
-    case 'right':
-      return '---:'
-    default:
-      return '---'
-  }
-}
-
-const normalizeMarkdownTableRow = (cells: string[], columnCount: number) => {
-  const normalized = cells.slice(0, columnCount)
-
-  while (normalized.length < columnCount) {
-    normalized.push('')
-  }
-
-  return normalized
-}
-
-const parseMarkdownTable = (blockText: string): MarkdownTableModel | null => {
-  const lines = blockText.split('\n')
-
-  if (lines.length < 2) {
-    return null
-  }
-
-  const rawHeader = splitMarkdownTableRow(lines[0] ?? '')
-  const rawAligns = splitMarkdownTableRow(lines[1] ?? '').map(parseMarkdownTableAlignment)
-  const rawRows = lines.slice(2).map(splitMarkdownTableRow)
-  const columnCount = Math.max(rawHeader.length, rawAligns.length, ...rawRows.map((row) => row.length))
-
-  if (columnCount === 0) {
-    return null
-  }
-
-  return {
-    header: normalizeMarkdownTableRow(rawHeader, columnCount),
-    aligns: normalizeMarkdownTableRow(
-      rawAligns.map((align) => align ?? ''),
-      columnCount
-    ).map((align) => (align === 'left' || align === 'center' || align === 'right' ? align : null)),
-    rows: rawRows.map((row) => normalizeMarkdownTableRow(row, columnCount))
-  }
-}
-
-const stringifyMarkdownTable = (table: MarkdownTableModel) => {
-  const columnCount = Math.max(table.header.length, table.aligns.length, ...table.rows.map((row) => row.length))
-  const header = normalizeMarkdownTableRow(table.header, columnCount)
-  const aligns = normalizeMarkdownTableRow(
-    table.aligns.map((align) => align ?? ''),
-    columnCount
-  ).map((align) => (align === 'left' || align === 'center' || align === 'right' ? align : null))
-  const rows = table.rows.map((row) => normalizeMarkdownTableRow(row, columnCount))
-  const formatRow = (cells: string[]) => `| ${cells.join(' | ')} |`
-
-  return [
-    formatRow(header),
-    `| ${aligns.map(formatMarkdownTableAlignment).join(' | ')} |`,
-    ...rows.map(formatRow)
-  ].join('\n')
-}
-
-const getMarkdownTableCellOffset = (table: MarkdownTableModel, target: MarkdownTableTarget) => {
-  const lines = stringifyMarkdownTable(table).split('\n')
-  const rowLineIndex = clamp(target.rowIndex, 0, lines.length - 1)
-  const cells = splitMarkdownTableRow(lines[rowLineIndex] ?? '')
-  const targetColumn = clamp(target.columnIndex, 0, Math.max(0, cells.length - 1))
-  let offset = 0
-
-  for (let index = 0; index < rowLineIndex; index += 1) {
-    offset += (lines[index]?.length ?? 0) + 1
-  }
-
-  offset += 2
-
-  for (let index = 0; index < targetColumn; index += 1) {
-    offset += (cells[index]?.length ?? 0) + 3
-  }
-
-  return offset
 }
 
 const exportMarkdownJSON = (instance: Vditor, markdown: string): JSONNode => {
@@ -1401,53 +645,12 @@ const exportMarkdownJSON = (instance: Vditor, markdown: string): JSONNode => {
 
 export { type EditorCommand }
 
-const createTestingSelection = (start: number, end: number): NormalizedSelection => ({
-  anchor: start,
-  head: end,
-  start,
-  end
-})
-
 export const __editorTestUtils = {
-  applyClearFormatTransform(markdown: string, start: number, end: number) {
-    return applyClearFormatTransform(markdown, createTestingSelection(start, end))
-  },
-  applyDuplicateBlockTransform(markdown: string, start: number, end: number) {
-    return applyDuplicateBlockTransform(markdown, createTestingSelection(start, end))
-  },
-  applyIndentTransform(markdown: string, start: number, end: number, indentUnit: string) {
-    return applyIndentTransform(markdown, createTestingSelection(start, end), indentUnit)
-  },
-  applyOutdentTransform(
-    markdown: string,
-    start: number,
-    end: number,
-    indentUnit: string,
-    indentWidth: number,
-    useSpacesForIndent: boolean
-  ) {
-    return applyOutdentTransform(
-      markdown,
-      createTestingSelection(start, end),
-      indentUnit,
-      indentWidth,
-      useSpacesForIndent
-    )
-  },
-  applyUpgradeHeadingTransform(markdown: string, start: number, end: number, direction: 1 | -1) {
-    return applyUpgradeHeadingTransform(markdown, createTestingSelection(start, end), direction)
-  },
-  getMarkdownTableCellOffset(table: MarkdownTableModel, target: MarkdownTableTarget) {
-    return getMarkdownTableCellOffset(table, target)
-  },
   extractMarkdownBlocksFromVditorIRDOM(markdown: string, lute: LuteBlockLocator | null | undefined) {
     return extractMarkdownBlocksFromVditorIRDOM(markdown, lute)
   },
-  shouldSuppressLeadingBlockIndent(markdown: string, start: number, end: number, activeBlock: MarkdownBlock | null) {
-    return shouldSuppressLeadingBlockIndent(markdown, createTestingSelection(start, end), activeBlock)
-  },
-  shouldHandleCustomIndentation(target: EventTarget | null) {
-    return shouldHandleCustomIndentation(target)
+  getMarkdownBlockTypeFromIRNode(element: Element) {
+    return getMarkdownBlockTypeFromIRNode(element)
   }
 }
 
@@ -1479,7 +682,6 @@ export const createMarkdownEditor = async ({
   }
   let suppressInputDepth = 0
   let removeBackgroundPointerListener: (() => void) | null = null
-  let removeIndentKeydownListener: (() => void) | null = null
   let removeLinkActivationListener: (() => void) | null = null
   let removeTableToolbarListeners: (() => void) | null = null
   let tableToolbarRefreshFrame = 0
@@ -1506,10 +708,6 @@ export const createMarkdownEditor = async ({
     return getInstance().vditor as VditorRuntime
   }
 
-  const getIndentUnit = () => {
-    return currentPresentation.useSpacesForIndent ? ' '.repeat(currentPresentation.indentWidth) : '\t'
-  }
-
   const getResolvedLinkBase = () => {
     const imageRootURL = currentPresentation.imageRootURL.trim()
     return imageRootURL.length > 0 ? imageRootURL : currentDocumentBaseURL ?? ''
@@ -1517,8 +715,21 @@ export const createMarkdownEditor = async ({
 
   const getMarkdownBlocks = (markdown: string) => {
     return (
-      extractMarkdownBlocksFromVditorIRDOM(markdown, instance?.vditor?.lute as LuteBlockLocator | undefined) ??
-      extractMarkdownBlocks(markdown)
+      extractMarkdownBlocksFromVditorIRDOM(markdown, instance?.vditor?.lute as LuteBlockLocator | undefined) ?? []
+    )
+  }
+
+  const getLiveIRBlocks = () => {
+    if (!instance || currentMode !== 'ir') {
+      return [] as IRBlockRecord[]
+    }
+
+    return (
+      collectIRBlocksFromContainer(
+        getIRRoot(),
+        instance?.vditor?.lute as LuteBlockLocator | undefined,
+        readMarkdown()
+      ) ?? []
     )
   }
 
@@ -1530,6 +741,22 @@ export const createMarkdownEditor = async ({
         (block) => normalizedOffset >= block.from && normalizedOffset <= block.to
       ) ?? null
     )
+  }
+
+  const getCurrentIRBlock = () => {
+    const range = getSelectionRangeWithinIR()
+
+    if (!range) {
+      return null
+    }
+
+    const blockElement = getClosestIRBlockElement(range.startContainer)
+
+    if (!blockElement) {
+      return null
+    }
+
+    return getLiveIRBlocks().find((block) => block.element === blockElement) ?? null
   }
 
   const findResolvedHeadingOffset = (markdown: string, title: string) => {
@@ -1659,52 +886,8 @@ export const createMarkdownEditor = async ({
     }
   }
 
-  const mapSourceDomPointToMarkdownOffset = (root: HTMLElement, node: Node, offset: number) => {
-    const range = document.createRange()
-    range.selectNodeContents(root)
-    range.setEnd(node, clampDomOffset(node, offset))
-    return clampMarkdownOffset(readMarkdown(), range.toString().length)
-  }
-
-  const mapMarkdownOffsetToSourceDomPoint = (root: HTMLElement, offset: number) => {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    let remaining = clampMarkdownOffset(readMarkdown(), offset)
-    let currentNode = walker.nextNode()
-    let lastTextNode: Text | null = null
-
-    while (currentNode) {
-      const textNode = currentNode as Text
-      const length = textNode.data.length
-      lastTextNode = textNode
-
-      if (remaining <= length) {
-        return {
-          node: textNode,
-          offset: remaining
-        }
-      }
-
-      remaining -= length
-      currentNode = walker.nextNode()
-    }
-
-    if (lastTextNode) {
-      return {
-        node: lastTextNode,
-        offset: lastTextNode.data.length
-      }
-    }
-
-    return {
-      node: root,
-      offset: root.childNodes.length
-    }
-  }
-
   const getSelectionOffsets = (): SelectionOffsets => {
-    const editor = instance
-
-    if (!editor) {
+    if (!instance) {
       return currentSelection
     }
 
@@ -1721,68 +904,90 @@ export const createMarkdownEditor = async ({
       return currentSelection
     }
 
-    const anchor =
-      currentMode === 'sv'
-        ? mapSourceDomPointToMarkdownOffset(rootElement, selection.anchorNode, selection.anchorOffset)
-        : mapDomPointToMarkdownOffset(
-            rootElement,
-            editor.vditor.lute,
-            selection.anchorNode,
-            selection.anchorOffset,
-            ANCHOR_MARKER
-          )
-    const head =
-      currentMode === 'sv'
-        ? mapSourceDomPointToMarkdownOffset(rootElement, selection.focusNode, selection.focusOffset)
-        : mapDomPointToMarkdownOffset(
-            rootElement,
-            editor.vditor.lute,
-            selection.focusNode,
-            selection.focusOffset,
-            HEAD_MARKER
-          )
+    if (currentMode === 'sv') {
+      const anchor =
+        measureTextOffsetWithinElement(rootElement, selection.anchorNode, selection.anchorOffset) ??
+        currentSelection.anchor
+      const head =
+        measureTextOffsetWithinElement(rootElement, selection.focusNode, selection.focusOffset) ??
+        currentSelection.head
 
-    if (anchor == null || head == null) {
+      currentSelection = { anchor, head }
       return currentSelection
     }
 
-    currentSelection = { anchor, head }
+    const blocks = getLiveIRBlocks()
+    const resolveOffset = (node: Node, offset: number) => {
+      const blockElement = getClosestIRBlockElement(node)
+      const block = blocks.find((candidate) => candidate.element === blockElement)
+
+      if (!block || !blockElement) {
+        return null
+      }
+
+      if (block.type === 'table') {
+        return block.from
+      }
+
+      const measured = measureTextOffsetWithinElement(blockElement, node, offset)
+
+      if (measured == null) {
+        return null
+      }
+
+      return clamp(block.from + measured, block.from, block.to)
+    }
+
+    const anchor = resolveOffset(selection.anchorNode, selection.anchorOffset)
+    const head = resolveOffset(selection.focusNode, selection.focusOffset)
+
+    currentSelection = {
+      anchor: anchor ?? currentSelection.anchor,
+      head: head ?? currentSelection.head
+    }
+
     return currentSelection
   }
 
   const setSelectionFromOffsets = (anchor: number, head = anchor) => {
-    const editor = instance
-
-    if (!editor) {
+    if (!instance) {
       currentSelection = { anchor, head }
       return false
     }
 
     const markdown = readMarkdown()
-    const liveAnchorPoint =
-      currentMode === 'sv'
-        ? mapMarkdownOffsetToSourceDomPoint(getSVRoot(), clampMarkdownOffset(markdown, anchor))
-        : resolveLivePoint(
-            getIRRoot(),
-            mapMarkdownOffsetToDomPoint(
-              markdown,
-              clampMarkdownOffset(markdown, anchor),
-              editor.vditor.lute,
-              ANCHOR_MARKER
-            )
-          )
-    const liveHeadPoint =
-      currentMode === 'sv'
-        ? mapMarkdownOffsetToSourceDomPoint(getSVRoot(), clampMarkdownOffset(markdown, head))
-        : resolveLivePoint(
-            getIRRoot(),
-            mapMarkdownOffsetToDomPoint(
-              markdown,
-              clampMarkdownOffset(markdown, head),
-              editor.vditor.lute,
-              HEAD_MARKER
-            )
-          )
+    const resolveSourcePoint = (offset: number) => {
+      return resolveTextPointInElement(getSVRoot(), clampMarkdownOffset(markdown, offset))
+    }
+    const resolveIRPoint = (offset: number) => {
+      const blocks = getLiveIRBlocks()
+      const clampedOffset = clampMarkdownOffset(markdown, offset)
+      const block =
+        blocks.find((candidate) => clampedOffset >= candidate.from && clampedOffset <= candidate.to) ??
+        blocks[blocks.length - 1] ??
+        null
+
+      if (!block || !block.element) {
+        return null
+      }
+
+      if (block.type === 'table') {
+        const cell = block.element.querySelector('td, th')
+
+        if (!(cell instanceof HTMLElement)) {
+          return {
+            node: block.element,
+            offset: block.element.childNodes.length
+          }
+        }
+
+        return resolveTextPointInElement(cell, 0)
+      }
+
+      return resolveTextPointInElement(block.element, Math.max(0, clampedOffset - block.from))
+    }
+    const liveAnchorPoint = currentMode === 'sv' ? resolveSourcePoint(anchor) : resolveIRPoint(anchor)
+    const liveHeadPoint = currentMode === 'sv' ? resolveSourcePoint(head) : resolveIRPoint(head)
 
     if (!applySelectionPoints(liveAnchorPoint, liveHeadPoint)) {
       return false
@@ -1846,35 +1051,14 @@ export const createMarkdownEditor = async ({
       runtime.options.preview.markdown.linkBase = nextLinkBase
     }
 
-    if (!refresh) {
-      return
+    if (refresh) {
+      scheduleTableToolbarRefresh()
     }
-
-    const selection = getSelectionOffsets()
-
-    withSuppressedInput(() => {
-      editor.setValue(currentMarkdown, false)
-    })
-
-    normalizeTableLinkSpacingInIR()
-
-    scheduleSelectionFromOffsets(selection.anchor, selection.head)
-  }
-
-  const applyTransform = (transform: MarkdownTransform | null) => {
-    if (!transform) {
-      return false
-    }
-
-    applyMarkdown(transform.markdown, { emit: true })
-    scheduleSelectionFromOffsets(transform.selectionStart, transform.selectionEnd)
-    return true
   }
 
   const syncStateAfterNativeCommand = () => {
     window.requestAnimationFrame(() => {
       syncMarkdownFromEditor(true)
-      currentSelection = getSelectionOffsets()
       scheduleTableToolbarRefresh()
     })
   }
@@ -1940,56 +1124,141 @@ export const createMarkdownEditor = async ({
 
     editor.focus()
     editor.deleteValue()
-    editor.insertMD(snippet)
+    editor.insertValue(snippet)
     syncStateAfterNativeCommand()
     return true
   }
 
-  const applyResolvedDuplicateBlockTransform = (
-    markdown: string,
-    selection: NormalizedSelection
-  ): MarkdownTransform | null => {
-    const block = getResolvedActiveBlock(markdown, selection.start)
+  const getCurrentSelectionText = () => {
+    return instance?.getSelection() ?? window.getSelection()?.toString() ?? ''
+  }
 
-    if (!block) {
-      return null
+  const wrapSelectionWithMarkdown = (
+    prefix: string,
+    suffix = prefix,
+    placeholder = DEFAULT_INLINE_PLACEHOLDER
+  ) => {
+    const selectedText = getCurrentSelectionText()
+    const content = selectedText.length > 0 ? selectedText : placeholder
+    return replaceSelectionWithMarkdown(`${prefix}${content}${suffix}`)
+  }
+
+  const runNativeHeadingToggle = () => {
+    const button = instance?.vditor.toolbar?.elements?.headings?.children.item(0) as HTMLElement | null
+    return dispatchNativeToolbarButton(button)
+  }
+
+  const runParagraphCommand = () => {
+    if (currentMode !== 'ir') {
+      return false
     }
 
-    const separator = markdown.length === 0 ? '' : '\n\n'
-    const insertion = `${separator}${block.text}`
-    const insertOffset = block.to
+    const block = getCurrentIRBlock()
 
-    return {
-      markdown: insertAt(markdown, insertOffset, insertion),
-      selectionStart: insertOffset + insertion.length - block.text.length,
-      selectionEnd: insertOffset + insertion.length
+    if (!block?.element) {
+      return false
+    }
+
+    switch (block.type) {
+      case 'heading':
+        return runNativeHeadingToggle()
+      case 'blockquote':
+        return runNativeToolbarCommand('quote')
+      case 'list': {
+        const listCommand = getListCommandFromElement(block.element)
+
+        if (listCommand === 'ordered-list') {
+          return runNativeToolbarCommand('ordered-list')
+        }
+
+        if (listCommand === 'task-list') {
+          return runNativeToolbarCommand('check')
+        }
+
+        return runNativeToolbarCommand('list')
+      }
+      default:
+        return false
     }
   }
 
-  const applyResolvedDeleteBlockTransform = (
-    markdown: string,
-    selection: NormalizedSelection
-  ): MarkdownTransform | null => {
-    const block = getResolvedActiveBlock(markdown, selection.start)
+  const runRelativeHeadingCommand = (direction: 1 | -1) => {
+    const level = getHeadingLevelFromElement(getCurrentIRBlock()?.element ?? null)
 
-    if (!block) {
-      return null
+    if (level == null) {
+      return false
     }
 
-    let start = block.from
-    let end = block.to
+    return runNativeHeadingCommand(clamp(level - direction, 1, 6))
+  }
 
-    if (markdown[end] === '\n') {
-      end += 1
-    } else if (start > 0 && markdown[start - 1] === '\n') {
-      start -= 1
+  const insertFrontMatter = () => {
+    if (readMarkdown().startsWith('---\n')) {
+      return false
     }
 
-    return {
-      markdown: replaceRange(markdown, start, end, ''),
-      selectionStart: start,
-      selectionEnd: start
+    if (currentMode === 'ir') {
+      const firstElement = getIRRoot().firstElementChild
+      const range = createCollapsedRangeAtStart(firstElement ?? getIRRoot())
+
+      if (range) {
+        applySelectionPoints(
+          { node: range.startContainer, offset: range.startOffset },
+          { node: range.startContainer, offset: range.startOffset }
+        )
+      }
+    } else {
+      void setSelectionFromOffsets(0, 0)
     }
+
+    currentSelection = { anchor: 11, head: 11 }
+    return replaceSelectionWithMarkdown('---\ntitle: \n---\n\n')
+  }
+
+  const clearCurrentFormatting = () => {
+    const selectionText = getCurrentSelectionText()
+    return selectionText.length > 0 ? replaceSelectionWithMarkdown(selectionText) : false
+  }
+
+  const duplicateCurrentBlock = () => {
+    if (currentMode !== 'ir') {
+      return false
+    }
+
+    const block = getCurrentIRBlock()
+
+    if (!block?.element) {
+      return false
+    }
+
+    const clone = block.element.cloneNode(true) as Element
+    block.element.after(clone)
+    return syncIRMutation(createCollapsedRangeAtStart(clone))
+  }
+
+  const deleteCurrentBlock = () => {
+    if (currentMode !== 'ir') {
+      return false
+    }
+
+    const block = getCurrentIRBlock()
+
+    if (!block?.element) {
+      return false
+    }
+
+    const nextTarget = block.element.nextElementSibling ?? block.element.previousElementSibling
+    block.element.remove()
+
+    if (getIRRoot().childElementCount === 0) {
+      const paragraph = document.createElement('p')
+      paragraph.dataset.block = '0'
+      paragraph.append(document.createElement('br'))
+      getIRRoot().append(paragraph)
+      return syncIRMutation(createCollapsedRangeAtStart(paragraph))
+    }
+
+    return syncIRMutation(createCollapsedRangeAtStart(nextTarget ?? getIRRoot().lastElementChild))
   }
 
   const getSelectionRangeWithinIR = () => {
@@ -2135,246 +1404,191 @@ export const createMarkdownEditor = async ({
     return alignments.every((align) => align === alignments[0]) ? alignments[0] : null
   }
 
-  const getNormalizedTableMatrix = (tableElement: HTMLTableElement) => {
-    return Array.from(tableElement.rows, (row) =>
-      Array.from(row.cells, (cell) => normalizeVisualText(cell.innerText || cell.textContent || ''))
-    )
-  }
-
-  const scoreMarkdownTableMatch = (table: MarkdownTableModel, context: TableContext) => {
-    const domMatrix = getNormalizedTableMatrix(context.tableElement)
-    const markdownMatrix = [table.header, ...table.rows].map((row) => row.map((cell) => normalizeVisualText(cell)))
-
-    if (domMatrix.length === 0 || markdownMatrix.length !== domMatrix.length) {
-      return -1
-    }
-
-    const columnCount = domMatrix[0]?.length ?? 0
-
-    if (
-      columnCount === 0 ||
-      !domMatrix.every((row) => row.length === columnCount) ||
-      !markdownMatrix.every((row) => row.length === columnCount)
-    ) {
-      return -1
-    }
-
-    const targetRowIndex = clamp(
-      (context.cellElement.parentElement as HTMLTableRowElement).rowIndex,
-      0,
-      markdownMatrix.length - 1
-    )
-    const targetColumnIndex = clamp(context.cellElement.cellIndex, 0, columnCount - 1)
-    const targetCellText = domMatrix[targetRowIndex]?.[targetColumnIndex] ?? ''
-    let score = 1000
-
-    for (let rowIndex = 0; rowIndex < markdownMatrix.length; rowIndex += 1) {
-      for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
-        if ((markdownMatrix[rowIndex]?.[columnIndex] ?? '') === (domMatrix[rowIndex]?.[columnIndex] ?? '')) {
-          score += 2
-        }
-      }
-    }
-
-    if ((markdownMatrix[targetRowIndex]?.[targetColumnIndex] ?? '') === targetCellText) {
-      score += 100
-    }
-
-    if (markdownMatrix.flat().join('\n') === domMatrix.flat().join('\n')) {
-      score += 250
-    }
-
-    return score
-  }
-
-  const resolveMarkdownTableBlock = (markdown: string, context: TableContext) => {
-    const selection = normalizeSelection(getSelectionOffsets())
-    const activeBlock = getResolvedActiveBlock(markdown, selection.start)
-    const scoreBlock = (block: MarkdownBlock) => {
-      const table = parseMarkdownTable(block.text)
-
-      if (!table) {
-        return -1
-      }
-
-      return scoreMarkdownTableMatch(table, context)
-    }
-
-    if (activeBlock?.type === 'table' && scoreBlock(activeBlock) >= 0) {
-      return activeBlock
-    }
-
-    let bestBlock: MarkdownBlock | null = null
-    let bestScore = -1
-
-    for (const block of getMarkdownBlocks(markdown)) {
-      if (block.type !== 'table') {
-        continue
-      }
-
-      const score = scoreBlock(block)
-
-      if (score > bestScore) {
-        bestScore = score
-        bestBlock = block
-      }
-    }
-
-    return bestScore >= 0 ? bestBlock : null
-  }
-
-const updateMarkdownTableForContext = (
-  markdown: string,
-  context: TableContext,
-  updater: (table: MarkdownTableModel) => MarkdownTableTarget | null
-) => {
-  const block = resolveMarkdownTableBlock(markdown, context)
-
-    if (!block) {
+  const createCollapsedRangeAtStart = (element: Element | null) => {
+    if (!element) {
       return null
     }
 
-    const table = parseMarkdownTable(block.text)
-
-    if (!table) {
-      return null
-    }
-
-  const target = updater(table)
-
-  if (!target) {
-    return null
+    const point = resolveTextPointInElement(element, 0)
+    const range = document.createRange()
+    range.setStart(point.node, point.offset)
+    range.collapse(true)
+    return range
   }
 
-  const replacement = stringifyMarkdownTable(table)
-  const cellOffset = getMarkdownTableCellOffset(table, target)
-  const selectionOffset = block.from + cellOffset
+  const syncIRMutation = (range: Range | null) => {
+    if (!instance || currentMode !== 'ir') {
+      return false
+    }
+
+    if (!range) {
+      return false
+    }
+
+    const selection = window.getSelection()
+
+    if (!selection) {
+      return false
+    }
+
+    selection.removeAllRanges()
+    selection.addRange(range.cloneRange())
+    instance.focus()
+    instance.insertValue('')
+
+    syncStateAfterNativeCommand()
+    return true
+  }
+
+  const ensureTableSections = (tableElement: HTMLTableElement) => {
+    const head = tableElement.tHead ?? tableElement.createTHead()
+    const headRow = head.rows[0] ?? head.insertRow()
+    const body = tableElement.tBodies[0] ?? tableElement.createTBody()
 
     return {
-      markdown: replaceRange(markdown, block.from, block.to, replacement),
-      selectionStart: selectionOffset,
-      selectionEnd: selectionOffset
+      headRow,
+      body
     }
   }
 
-  const applyCurrentTableTransform = (
-    context: TableContext,
-    updater: (table: MarkdownTableModel) => MarkdownTableTarget | null
-  ) => {
-    const markdown = readMarkdown()
-    return applyTransform(updateMarkdownTableForContext(markdown, context, updater))
+  const insertTableCellAt = (row: HTMLTableRowElement, index: number, tagName: 'th' | 'td') => {
+    const cell = document.createElement(tagName)
+    const referenceCell = row.cells.item(index)
+
+    if (referenceCell) {
+      row.insertBefore(cell, referenceCell)
+    } else {
+      row.append(cell)
+    }
+
+    return cell
+  }
+
+  const normalizeTableColumns = (tableElement: HTMLTableElement, targetColumns: number) => {
+    const { headRow, body } = ensureTableSections(tableElement)
+    const allRows = [headRow, ...Array.from(body.rows)]
+
+    allRows.forEach((row, rowIndex) => {
+      while (row.cells.length < targetColumns) {
+        insertTableCellAt(row, row.cells.length, rowIndex === 0 ? 'th' : 'td')
+      }
+
+      while (row.cells.length > targetColumns) {
+        row.deleteCell(row.cells.length - 1)
+      }
+    })
+  }
+
+  const syncTableMutation = (context: TableContext, preferredCell?: HTMLTableCellElement | null) => {
+    const activeCell =
+      preferredCell && preferredCell.isConnected
+        ? preferredCell
+        : ((context.tableElement.querySelector('td, th') as HTMLTableCellElement | null) ?? null)
+
+    return syncIRMutation(createCollapsedRangeAtStart(activeCell ?? context.tableElement))
   }
 
   const resizeTableToDimensions = (context: TableContext, requestedRows: number, requestedColumns: number) => {
     const targetRows = Math.max(2, requestedRows)
     const targetColumns = Math.max(1, requestedColumns)
+    const { headRow, body } = ensureTableSections(context.tableElement)
 
-    return applyCurrentTableTransform(context, (table) => {
-      table.header = normalizeMarkdownTableRow(table.header, targetColumns)
-      table.aligns = normalizeMarkdownTableRow(
-        table.aligns.map((align) => align ?? ''),
-        targetColumns
-      ).map((align) => (align === 'left' || align === 'center' || align === 'right' ? align : null))
-      table.rows = table.rows
-        .slice(0, Math.max(0, targetRows - 1))
-        .map((row) => normalizeMarkdownTableRow(row, targetColumns))
+    normalizeTableColumns(context.tableElement, targetColumns)
 
-      while (table.rows.length < targetRows - 1) {
-        table.rows.push(Array.from({ length: targetColumns }, () => ''))
+    while (body.rows.length < targetRows - 1) {
+      const row = body.insertRow()
+
+      for (let index = 0; index < targetColumns; index += 1) {
+        row.append(document.createElement('td'))
       }
+    }
 
-      return {
-        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, targetRows - 1),
-        columnIndex: clamp(context.cellElement.cellIndex, 0, targetColumns - 1)
-      }
-    })
+    while (body.rows.length > targetRows - 1) {
+      body.deleteRow(body.rows.length - 1)
+    }
+
+    const targetRow = context.tableElement.rows.item(
+      clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, targetRows - 1)
+    )
+    const targetCell = targetRow?.cells.item(clamp(context.cellElement.cellIndex, 0, targetColumns - 1)) as
+      | HTMLTableCellElement
+      | null
+
+    return syncTableMutation(context, targetCell ?? headRow.cells.item(0))
   }
 
   const insertTableRow = (context: TableContext, position: 'above' | 'below') => {
-    return applyCurrentTableTransform(context, (table) => {
-      const targetColumns = Math.max(1, table.header.length)
-      const domRowIndex = (context.cellElement.parentElement as HTMLTableRowElement).rowIndex
-      const insertIndex = position === 'above' ? Math.max(0, domRowIndex - 1) : Math.max(0, domRowIndex)
+    const targetColumns = Math.max(1, context.tableElement.rows[0]?.cells.length ?? 1)
+    const { body } = ensureTableSections(context.tableElement)
+    const domRowIndex = (context.cellElement.parentElement as HTMLTableRowElement).rowIndex
+    const insertIndex =
+      domRowIndex <= 0 ? 0 : position === 'above' ? Math.max(0, domRowIndex - 1) : Math.max(0, domRowIndex)
+    const row = body.insertRow(insertIndex)
 
-      table.rows.splice(insertIndex, 0, Array.from({ length: targetColumns }, () => ''))
+    for (let index = 0; index < targetColumns; index += 1) {
+      row.append(document.createElement('td'))
+    }
 
-      return {
-        rowIndex: insertIndex + 1,
-        columnIndex: clamp(context.cellElement.cellIndex, 0, targetColumns - 1)
-      }
-    })
+    return syncTableMutation(
+      context,
+      row.cells.item(clamp(context.cellElement.cellIndex, 0, targetColumns - 1)) as HTMLTableCellElement | null
+    )
   }
 
   const deleteTableRow = (context: TableContext) => {
-    return applyCurrentTableTransform(context, (table) => {
-      if (table.rows.length === 0) {
-        return {
-          rowIndex: 0,
-          columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
-        }
-      }
+    const row = context.cellElement.parentElement as HTMLTableRowElement
 
-      const domRowIndex = (context.cellElement.parentElement as HTMLTableRowElement).rowIndex
+    if (row.rowIndex === 0) {
+      return false
+    }
 
-      if (domRowIndex === 0) {
-        return null
-      }
+    const nextRow = context.tableElement.rows.item(row.rowIndex + 1) ?? context.tableElement.rows.item(row.rowIndex - 1)
+    row.remove()
 
-      const targetRowIndex = clamp(domRowIndex - 1, 0, table.rows.length - 1)
-
-      table.rows.splice(targetRowIndex, 1)
-
-      return {
-        rowIndex: table.rows.length === 0 ? 0 : clamp(targetRowIndex + 1, 1, table.rows.length),
-        columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
-      }
-    })
+    return syncTableMutation(
+      context,
+      (nextRow?.cells.item(clamp(context.cellElement.cellIndex, 0, Math.max(0, nextRow.cells.length - 1))) as
+        | HTMLTableCellElement
+        | null) ?? null
+    )
   }
 
   const insertTableColumn = (context: TableContext, position: 'left' | 'right') => {
-    return applyCurrentTableTransform(context, (table) => {
-      const targetColumnIndex = clamp(context.cellElement.cellIndex, 0, Math.max(0, table.header.length - 1))
-      const insertIndex = position === 'left' ? targetColumnIndex : targetColumnIndex + 1
+    const insertIndex = position === 'left' ? context.cellElement.cellIndex : context.cellElement.cellIndex + 1
 
-      table.header.splice(insertIndex, 0, '')
-      table.aligns.splice(insertIndex, 0, null)
-      table.rows = table.rows.map((row) => {
-        const nextRow = [...row]
-        nextRow.splice(insertIndex, 0, '')
-        return nextRow
-      })
-
-      return {
-        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
-        columnIndex: insertIndex
-      }
+    Array.from(context.tableElement.rows).forEach((row, rowIndex) => {
+      insertTableCellAt(row, insertIndex, rowIndex === 0 ? 'th' : 'td')
     })
+
+    const targetRow = context.cellElement.parentElement as HTMLTableRowElement
+    return syncTableMutation(
+      context,
+      targetRow.cells.item(clamp(insertIndex, 0, Math.max(0, targetRow.cells.length - 1))) as
+        | HTMLTableCellElement
+        | null
+    )
   }
 
   const deleteTableColumn = (context: TableContext) => {
-    return applyCurrentTableTransform(context, (table) => {
-      if (table.header.length <= 1) {
-        return {
-          rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
-          columnIndex: 0
-        }
-      }
+    if ((context.tableElement.rows[0]?.cells.length ?? 0) <= 1) {
+      return false
+    }
 
-      const targetColumnIndex = clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+    const targetColumnIndex = context.cellElement.cellIndex
 
-      table.header.splice(targetColumnIndex, 1)
-      table.aligns.splice(targetColumnIndex, 1)
-      table.rows = table.rows.map((row) => {
-        const nextRow = [...row]
-        nextRow.splice(targetColumnIndex, 1)
-        return nextRow
-      })
-
-      return {
-        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
-        columnIndex: clamp(targetColumnIndex, 0, table.header.length - 1)
-      }
+    Array.from(context.tableElement.rows).forEach((row) => {
+      row.deleteCell(clamp(targetColumnIndex, 0, row.cells.length - 1))
     })
+
+    const targetRow = context.tableElement.rows.item(
+      clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, context.tableElement.rows.length - 1)
+    )
+    const nextColumn = clamp(targetColumnIndex, 0, Math.max(0, (targetRow?.cells.length ?? 1) - 1))
+
+    return syncTableMutation(
+      context,
+      (targetRow?.cells.item(nextColumn) as HTMLTableCellElement | null) ?? null
+    )
   }
 
   const copyTextToClipboard = async (text: string) => {
@@ -2400,15 +1614,11 @@ const updateMarkdownTableForContext = (
   }
 
   const copyCurrentTable = (context: TableContext) => {
-    const markdown = readMarkdown()
-    const block = resolveMarkdownTableBlock(markdown, context)
+    const content = instance?.vditor.lute?.VditorIRDOM2Md(context.tableElement.outerHTML)
 
-    if (!block || block.type !== 'table') {
+    if (!content) {
       return false
     }
-
-    const table = parseMarkdownTable(block.text)
-    const content = table ? stringifyMarkdownTable(table) : block.text
 
     hideTableToolbarPopover()
     void copyTextToClipboard(content)
@@ -2416,116 +1626,126 @@ const updateMarkdownTableForContext = (
   }
 
   const formatCurrentTableSource = (context: TableContext) => {
-    return applyCurrentTableTransform(context, (table) => {
-      return {
-        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
-        columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
-      }
-    })
+    const lute = instance?.vditor.lute
+
+    if (!lute) {
+      return false
+    }
+
+    const container = document.createElement('div')
+    container.innerHTML = lute.Md2VditorIRDOM(lute.VditorIRDOM2Md(context.tableElement.outerHTML))
+    const nextTable = container.querySelector('table')
+
+    if (!(nextTable instanceof HTMLTableElement)) {
+      return false
+    }
+
+    const nextCell =
+      (nextTable.querySelector('td, th') as HTMLTableCellElement | null) ??
+      (nextTable.rows[0]?.cells.item(0) as HTMLTableCellElement | null)
+
+    if (!nextCell) {
+      return false
+    }
+
+    context.tableElement.replaceWith(nextTable)
+
+    return syncTableMutation(
+      {
+        tableElement: nextTable,
+        cellElement: nextCell
+      },
+      nextCell
+    )
   }
 
   const insertParagraphNearTable = (context: TableContext, position: 'above' | 'below') => {
-    const markdown = readMarkdown()
-    const block = resolveMarkdownTableBlock(markdown, context)
-
-    if (!block || block.type !== 'table') {
-      return false
-    }
+    const paragraph = document.createElement('p')
+    paragraph.dataset.block = '0'
+    paragraph.append(document.createElement('br'))
 
     if (position === 'above') {
-      return applyTransform({
-        markdown: insertAt(markdown, block.from, '\n\n'),
-        selectionStart: block.from,
-        selectionEnd: block.from
-      })
+      context.tableElement.before(paragraph)
+    } else {
+      context.tableElement.after(paragraph)
     }
 
-    return applyTransform({
-      markdown: insertAt(markdown, block.to, '\n\n'),
-      selectionStart: block.to + 2,
-      selectionEnd: block.to + 2
-    })
+    return syncIRMutation(createCollapsedRangeAtStart(paragraph))
   }
 
   const fillTableBlanksFromHeaderRow = (context: TableContext) => {
-    return applyCurrentTableTransform(context, (table) => {
-      if (table.rows.length === 0) {
-        return {
-          rowIndex: 0,
-          columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+    const headerValues = Array.from(context.tableElement.rows[0]?.cells ?? [], (cell) => cell.textContent ?? '')
+
+    Array.from(context.tableElement.tBodies[0]?.rows ?? []).forEach((row) => {
+      Array.from(row.cells).forEach((cell, columnIndex) => {
+        if (normalizeVisualText(cell.textContent ?? '').length === 0) {
+          cell.textContent = headerValues[columnIndex] ?? ''
         }
-      }
-
-      table.rows = table.rows.map((row) =>
-        row.map((cell, columnIndex) =>
-          cell.trim().length === 0 && (table.header[columnIndex] ?? '').trim().length > 0
-            ? table.header[columnIndex] ?? ''
-            : cell
-        )
-      )
-
-      return {
-        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
-        columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
-      }
+      })
     })
+
+    return syncTableMutation(context, context.cellElement)
   }
 
   const fillTableBlanksFromFirstColumn = (context: TableContext) => {
-    return applyCurrentTableTransform(context, (table) => {
-      table.rows = table.rows.map((row) => {
-        const seed = row[0] ?? ''
+    Array.from(context.tableElement.tBodies[0]?.rows ?? []).forEach((row) => {
+      const seed = row.cells.item(0)?.textContent ?? ''
 
-        if (seed.trim().length === 0) {
-          return row
-        }
-
-        return row.map((cell, columnIndex) => {
-          if (columnIndex === 0 || cell.trim().length > 0) {
-            return cell
-          }
-
-          return seed
-        })
-      })
-
-      return {
-        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
-        columnIndex: clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+      if (normalizeVisualText(seed).length === 0) {
+        return
       }
+
+      Array.from(row.cells).forEach((cell, columnIndex) => {
+        if (columnIndex > 0 && normalizeVisualText(cell.textContent ?? '').length === 0) {
+          cell.textContent = seed
+        }
+      })
     })
+
+    return syncTableMutation(context, context.cellElement)
   }
 
   const applyTableAlignment = (context: TableContext, align: TableAlignment) => {
-    return applyCurrentTableTransform(context, (table) => {
-      const targetColumn = clamp(context.cellElement.cellIndex, 0, table.header.length - 1)
+    const targetColumn = context.cellElement.cellIndex
+    const rows = Array.from(context.tableElement.rows)
 
-      if (isWholeTableSelection(context)) {
-        table.aligns = Array.from({ length: table.header.length }, () => align)
-      } else {
-        table.aligns[targetColumn] = align
-      }
-
-      return {
-        rowIndex: clamp((context.cellElement.parentElement as HTMLTableRowElement).rowIndex, 0, table.rows.length),
-        columnIndex: targetColumn
-      }
+    rows.forEach((row) => {
+      Array.from(row.cells).forEach((cell, columnIndex) => {
+        if (isWholeTableSelection(context) || columnIndex === targetColumn) {
+          if (align === 'left') {
+            cell.removeAttribute('align')
+          } else {
+            cell.setAttribute('align', align)
+          }
+        }
+      })
     })
+
+    return syncTableMutation(context, context.cellElement)
   }
 
   const deleteCurrentTable = (context?: TableContext) => {
-    const markdown = readMarkdown()
-    const selection = normalizeSelection(getSelectionOffsets())
-    const block = context
-      ? resolveMarkdownTableBlock(markdown, context)
-      : getResolvedActiveBlock(markdown, selection.start)
+    const currentContext = context ?? getResolvedTableContext()
 
-    if (!block || block.type !== 'table') {
+    if (!currentContext) {
       return false
     }
 
+    const nextTarget =
+      currentContext.tableElement.nextElementSibling ?? currentContext.tableElement.previousElementSibling
+
+    currentContext.tableElement.remove()
     hideTableToolbar()
-    return applyTransform(applyDeleteBlockTransform(markdown, selection))
+
+    if (getIRRoot().childElementCount === 0) {
+      const paragraph = document.createElement('p')
+      paragraph.dataset.block = '0'
+      paragraph.append(document.createElement('br'))
+      getIRRoot().append(paragraph)
+      return syncIRMutation(createCollapsedRangeAtStart(paragraph))
+    }
+
+    return syncIRMutation(createCollapsedRangeAtStart(nextTarget))
   }
 
   const hideTableToolbarPopover = () => {
@@ -3148,7 +2368,7 @@ const updateMarkdownTableForContext = (
 
     window.requestAnimationFrame(() => {
       syncMarkdownFromEditor(true)
-      currentSelection = getSelectionOffsets()
+      scheduleTableToolbarRefresh()
     })
 
     return true
@@ -3163,7 +2383,7 @@ const updateMarkdownTableForContext = (
       return true
     }
 
-    const selection = getSelectionOffsets()
+    const selection = currentSelection
     const markdown = readMarkdown()
 
     withSuppressedInput(() => {
@@ -3204,7 +2424,6 @@ const updateMarkdownTableForContext = (
     scheduleSelectionFromOffsets(selection.anchor, selection.head)
     window.requestAnimationFrame(() => {
       editor.focus()
-      currentSelection = getSelectionOffsets()
       scheduleTableToolbarRefresh()
     })
 
@@ -3234,9 +2453,6 @@ const updateMarkdownTableForContext = (
       return false
     }
 
-    const markdown = readMarkdown()
-    const selection = normalizeSelection(getSelectionOffsets())
-
     switch (normalizedCommand) {
       case 'undo':
         return runHistoryCommand('undo')
@@ -3245,119 +2461,67 @@ const updateMarkdownTableForContext = (
       case 'toggle-global-source-mode':
         return toggleGlobalSourceMode()
       case 'paragraph':
-        return applyTransform(applyParagraphTransform(markdown, selection))
+        return runParagraphCommand()
       case 'heading-1':
-        return runNativeHeadingCommand(1) || applyTransform(applyHeadingTransform(markdown, selection, 1))
+        return runNativeHeadingCommand(1) || replaceSelectionWithMarkdown('# ')
       case 'heading-2':
-        return runNativeHeadingCommand(2) || applyTransform(applyHeadingTransform(markdown, selection, 2))
+        return runNativeHeadingCommand(2) || replaceSelectionWithMarkdown('## ')
       case 'heading-3':
-        return runNativeHeadingCommand(3) || applyTransform(applyHeadingTransform(markdown, selection, 3))
+        return runNativeHeadingCommand(3) || replaceSelectionWithMarkdown('### ')
       case 'heading-4':
-        return runNativeHeadingCommand(4) || applyTransform(applyHeadingTransform(markdown, selection, 4))
+        return runNativeHeadingCommand(4) || replaceSelectionWithMarkdown('#### ')
       case 'heading-5':
-        return runNativeHeadingCommand(5) || applyTransform(applyHeadingTransform(markdown, selection, 5))
+        return runNativeHeadingCommand(5) || replaceSelectionWithMarkdown('##### ')
       case 'heading-6':
-        return runNativeHeadingCommand(6) || applyTransform(applyHeadingTransform(markdown, selection, 6))
+        return runNativeHeadingCommand(6) || replaceSelectionWithMarkdown('###### ')
       case 'upgrade-heading':
-        return applyTransform(applyUpgradeHeadingTransform(markdown, selection, 1))
+        return runRelativeHeadingCommand(1)
       case 'degrade-heading':
-        return applyTransform(applyUpgradeHeadingTransform(markdown, selection, -1))
+        return runRelativeHeadingCommand(-1)
       case 'blockquote':
-        return (
-          runNativeToolbarCommand('quote') ||
-          applyTransform(
-            applyLinePrefixTransform(markdown, selection, (line) => {
-              return line.trim().length === 0 ? line : `> ${stripBlockPrefix(line).trimStart()}`
-            })
-          )
-        )
+        return runNativeToolbarCommand('quote') || replaceSelectionWithMarkdown('> ')
       case 'bullet-list':
-        return (
-          runNativeToolbarCommand('list') ||
-          applyTransform(
-            applyLinePrefixTransform(markdown, selection, (line) => {
-              return line.trim().length === 0 ? line : `- ${stripBlockPrefix(line).trimStart()}`
-            })
-          )
-        )
+        return runNativeToolbarCommand('list') || replaceSelectionWithMarkdown('- ')
       case 'ordered-list':
-        return (
-          runNativeToolbarCommand('ordered-list') ||
-          applyTransform(
-            applyLinePrefixTransform(markdown, selection, (line, index) => {
-              return line.trim().length === 0
-                ? line
-                : `${index + 1}. ${stripBlockPrefix(line).trimStart()}`
-            })
-          )
-        )
+        return runNativeToolbarCommand('ordered-list') || replaceSelectionWithMarkdown('1. ')
       case 'task-list':
-        return (
-          runNativeToolbarCommand('check') ||
-          applyTransform(
-            applyLinePrefixTransform(markdown, selection, (line) => {
-              return line.trim().length === 0 ? line : `- [ ] ${stripBlockPrefix(line).trimStart()}`
-            })
-          )
-        )
+        return runNativeToolbarCommand('check') || replaceSelectionWithMarkdown('- [ ] ')
       case 'table':
         return runNativeToolbarCommand('table') || replaceSelectionWithMarkdown(DEFAULT_TABLE_SNIPPET)
       case 'horizontal-rule':
         return runNativeToolbarCommand('line') || replaceSelectionWithMarkdown('\n\n---\n\n')
       case 'front-matter':
-        return applyTransform(
-          markdown.startsWith('---\n')
-            ? null
-            : {
-                markdown: `---\ntitle: \n---\n\n${markdown}`,
-                selectionStart: 11,
-                selectionEnd: 11
-              }
-        )
+        return insertFrontMatter()
       case 'code-block':
-        return (
-          runNativeToolbarCommand('code') ||
-          applyTransform(applyBlockWrapTransform(markdown, selection, '```text\n', '\n```', 'code'))
-        )
+        return runNativeToolbarCommand('code') || wrapSelectionWithMarkdown('```text\n', '\n```', 'code')
       case 'math-block':
-        return applyTransform(
-          applyBlockWrapTransform(markdown, selection, '$$\n', '\n$$', 'E = mc^2')
-        )
+        return wrapSelectionWithMarkdown('$$\n', '\n$$', 'E = mc^2')
       case 'bold':
-        return runNativeToolbarCommand('bold') || applyTransform(applyInlineWrap(markdown, selection, '**'))
+        return runNativeToolbarCommand('bold') || wrapSelectionWithMarkdown('**')
       case 'italic':
-        return runNativeToolbarCommand('italic') || applyTransform(applyInlineWrap(markdown, selection, '*'))
+        return runNativeToolbarCommand('italic') || wrapSelectionWithMarkdown('*')
       case 'underline':
-        return applyTransform(applyInlineWrap(markdown, selection, '<u>', '</u>'))
+        return wrapSelectionWithMarkdown('<u>', '</u>')
       case 'highlight':
-        return applyTransform(applyInlineWrap(markdown, selection, '=='))
+        return wrapSelectionWithMarkdown('==')
       case 'inline-code':
-        return (
-          runNativeToolbarCommand('inline-code') ||
-          applyTransform(applyInlineWrap(markdown, selection, '`'))
-        )
+        return runNativeToolbarCommand('inline-code') || wrapSelectionWithMarkdown('`')
       case 'inline-math':
-        return applyTransform(applyInlineWrap(markdown, selection, '$'))
+        return wrapSelectionWithMarkdown('$')
       case 'strikethrough':
-        return (
-          runNativeToolbarCommand('strike') ||
-          applyTransform(applyInlineWrap(markdown, selection, '~~'))
-        )
+        return runNativeToolbarCommand('strike') || wrapSelectionWithMarkdown('~~')
       case 'link':
-        return (
-          runNativeToolbarCommand('link') ||
-          applyTransform(applyInlineWrap(markdown, selection, '[', `](${DEFAULT_LINK_PLACEHOLDER})`))
-        )
+        return runNativeToolbarCommand('link') || wrapSelectionWithMarkdown('[', `](${DEFAULT_LINK_PLACEHOLDER})`)
       case 'image':
         return runAsyncImageCommand()
       case 'clear-format':
-        return applyTransform(applyClearFormatTransform(markdown, selection))
+        return clearCurrentFormatting()
       case 'duplicate-block':
-        return applyTransform(applyResolvedDuplicateBlockTransform(markdown, selection))
+        return duplicateCurrentBlock()
       case 'new-paragraph':
-        return replaceSelectionWithMarkdown('\n\n') || applyTransform(applySnippetTransform(markdown, selection, '\n\n'))
+        return replaceSelectionWithMarkdown('\n\n')
       case 'delete-block':
-        return applyTransform(applyResolvedDeleteBlockTransform(markdown, selection))
+        return deleteCurrentBlock()
     }
   }
 
@@ -3455,16 +2619,9 @@ const updateMarkdownTableForContext = (
       }
 
       syncMarkdownFromEditor(true)
-      currentSelection = getSelectionOffsets()
-      scheduleTableToolbarRefresh()
-    },
-    keydown() {
-      currentSelection = getSelectionOffsets()
       scheduleTableToolbarRefresh()
     },
     blur() {
-      currentSelection = getSelectionOffsets()
-
       if (!suppressTableToolbarSelectionChange) {
         hideTableToolbar()
       }
@@ -3495,38 +2652,6 @@ const updateMarkdownTableForContext = (
     focusDocumentEnd()
   }
 
-  const handleIndentKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== 'Tab' || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
-      return
-    }
-
-    if (!shouldHandleCustomIndentation(event.target)) {
-      return
-    }
-
-    event.preventDefault()
-
-    const indentUnit = getIndentUnit()
-    const markdown = readMarkdown()
-    const selection = normalizeSelection(getSelectionOffsets())
-
-    if (shouldSuppressLeadingBlockIndent(markdown, selection, getResolvedActiveBlock(markdown, selection.start))) {
-      return
-    }
-
-    const transform = event.shiftKey
-      ? applyOutdentTransform(
-          markdown,
-          selection,
-          indentUnit,
-          currentPresentation.indentWidth,
-          currentPresentation.useSpacesForIndent
-        )
-      : applyIndentTransform(markdown, selection, indentUnit)
-
-    applyTransform(transform)
-  }
-
   const handleLinkActivationClick = (event: MouseEvent) => {
     if (!shouldActivateLinkOnCommandClick(event, currentPresentation.linkOpenRequiresCommand)) {
       return
@@ -3552,13 +2677,9 @@ const updateMarkdownTableForContext = (
   }
 
   host.addEventListener('pointerdown', handleBackgroundPointerDown)
-  host.addEventListener('keydown', handleIndentKeyDown, true)
   host.addEventListener('click', handleLinkActivationClick, true)
   removeBackgroundPointerListener = () => {
     host.removeEventListener('pointerdown', handleBackgroundPointerDown)
-  }
-  removeIndentKeydownListener = () => {
-    host.removeEventListener('keydown', handleIndentKeyDown, true)
   }
   removeLinkActivationListener = () => {
     host.removeEventListener('click', handleLinkActivationClick, true)
@@ -3675,8 +2796,6 @@ const updateMarkdownTableForContext = (
     async destroy() {
       removeBackgroundPointerListener?.()
       removeBackgroundPointerListener = null
-      removeIndentKeydownListener?.()
-      removeIndentKeydownListener = null
       removeLinkActivationListener?.()
       removeLinkActivationListener = null
       removeTableToolbarListeners?.()
