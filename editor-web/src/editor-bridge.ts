@@ -44,7 +44,8 @@ type CreateEditorBridgeOptions = {
   installNativeBridge: (
     receiveMarkdown: (text: string) => void,
     runEditorCommand: (command: string) => boolean,
-    getEditorState: () => unknown
+    getEditorState: () => unknown,
+    getMarkdown: () => string
   ) => void
   applyAppearance: (appearance: EditorPresentation) => void
 }
@@ -223,7 +224,8 @@ export const createEditorBridge = ({
           })
           return true
         },
-        () => getEditorState()
+        () => getEditorState(),
+        () => editor?.getMarkdown() ?? markdown
       )
 
       window.setEditorAppearance = (nextAppearance: unknown) => {

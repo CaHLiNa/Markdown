@@ -713,6 +713,10 @@ struct EditorWebView: NSViewRepresentable {
         func currentMarkdown(completion: @escaping (Result<String, Error>) -> Void) {
             let script = """
             (() => {
+                if (typeof window.getMarkdown === 'function') {
+                    return window.getMarkdown();
+                }
+
                 if (typeof window.getEditorState === 'function') {
                     const state = window.getEditorState();
                     return typeof state?.markdown === 'string' ? state.markdown : null;
