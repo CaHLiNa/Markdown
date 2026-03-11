@@ -8,26 +8,6 @@
 import Foundation
 import UniformTypeIdentifiers
 
-struct PDFExportOptions: Codable, Equatable {
-    var paperSize: EditorPDFPaperSize
-    var margin: Double
-    var printBackground: Bool
-
-    static let defaultValue = PDFExportOptions(
-        paperSize: .a4,
-        margin: 24,
-        printBackground: true
-    )
-
-    var normalized: PDFExportOptions {
-        PDFExportOptions(
-            paperSize: paperSize,
-            margin: min(max(margin, 8), 96),
-            printBackground: printBackground
-        )
-    }
-}
-
 struct ExportPreset: Codable, Equatable, Identifiable {
     let id: UUID
     var key: String
@@ -35,7 +15,6 @@ struct ExportPreset: Codable, Equatable, Identifiable {
     var format: EditorExportFormat
     var theme: MarkdownExportTheme
     var suggestedFileStem: String
-    var pdfOptions: PDFExportOptions?
 
     init(
         id: UUID = UUID(),
@@ -43,8 +22,7 @@ struct ExportPreset: Codable, Equatable, Identifiable {
         name: String,
         format: EditorExportFormat,
         theme: MarkdownExportTheme = .matchAppearance,
-        suggestedFileStem: String = "",
-        pdfOptions: PDFExportOptions? = nil
+        suggestedFileStem: String = ""
     ) {
         self.id = id
         self.key = key
@@ -52,7 +30,6 @@ struct ExportPreset: Codable, Equatable, Identifiable {
         self.format = format
         self.theme = theme
         self.suggestedFileStem = suggestedFileStem
-        self.pdfOptions = format == .pdf ? (pdfOptions ?? .defaultValue) : nil
     }
 
     var normalized: ExportPreset {
@@ -64,19 +41,11 @@ struct ExportPreset: Codable, Equatable, Identifiable {
                 : name.trimmingCharacters(in: .whitespacesAndNewlines),
             format: format,
             theme: theme,
-            suggestedFileStem: suggestedFileStem.trimmingCharacters(in: .whitespacesAndNewlines),
-            pdfOptions: format == .pdf ? (pdfOptions ?? .defaultValue).normalized : nil
+            suggestedFileStem: suggestedFileStem.trimmingCharacters(in: .whitespacesAndNewlines)
         )
     }
 
-    var effectivePDFOptions: PDFExportOptions {
-        (pdfOptions ?? .defaultValue).normalized
-    }
-
-    static func builtInDefaults(
-        theme: MarkdownExportTheme = .matchAppearance,
-        pdfOptions: PDFExportOptions = .defaultValue
-    ) -> [ExportPreset] {
+    static func builtInDefaults(theme: MarkdownExportTheme = .matchAppearance) -> [ExportPreset] {
         [
             ExportPreset(
                 key: "html-default",
@@ -84,14 +53,6 @@ struct ExportPreset: Codable, Equatable, Identifiable {
                 format: .html,
                 theme: theme,
                 suggestedFileStem: ""
-            ),
-            ExportPreset(
-                key: "pdf-default",
-                name: "PDF 默认",
-                format: .pdf,
-                theme: theme,
-                suggestedFileStem: "",
-                pdfOptions: pdfOptions.normalized
             )
         ]
     }
@@ -104,7 +65,6 @@ struct ExportSettings: Codable, Equatable {
     var revealExportedFileInFinder: Bool
     var allowYAMLOverrides: Bool
     var activeHTMLPresetID: UUID?
-    var activePDFPresetID: UUID?
 
     init(
         defaultFormat: EditorExportFormat = .html,
@@ -112,8 +72,7 @@ struct ExportSettings: Codable, Equatable {
         openExportedFile: Bool = true,
         revealExportedFileInFinder: Bool = false,
         allowYAMLOverrides: Bool = true,
-        activeHTMLPresetID: UUID? = nil,
-        activePDFPresetID: UUID? = nil
+        activeHTMLPresetID: UUID? = nil
     ) {
         self.defaultFormat = defaultFormat
         self.destinationMode = destinationMode
@@ -121,83 +80,47 @@ struct ExportSettings: Codable, Equatable {
         self.revealExportedFileInFinder = revealExportedFileInFinder
         self.allowYAMLOverrides = allowYAMLOverrides
         self.activeHTMLPresetID = activeHTMLPresetID
-        self.activePDFPresetID = activePDFPresetID
     }
 
     func activePresetID(for format: EditorExportFormat) -> UUID? {
-        switch format {
-        case .html:
-            return activeHTMLPresetID
-        case .pdf:
-            return activePDFPresetID
-        }
+        activeHTMLPresetID
     }
 
     func settingActivePresetID(_ presetID: UUID?, for format: EditorExportFormat) -> ExportSettings {
         var copy = self
-
-        switch format {
-        case .html:
-            copy.activeHTMLPresetID = presetID
-        case .pdf:
-            copy.activePDFPresetID = presetID
-        }
-
+        copy.activeHTMLPresetID = presetID
         return copy
     }
 
     func normalized(using presets: [ExportPreset]) -> ExportSettings {
         let htmlPresets = presets.filter { $0.format == .html }
-        let pdfPresets = presets.filter { $0.format == .pdf }
-        let resolvedDefaultFormat: EditorExportFormat
-
-        switch defaultFormat {
-        case .html where htmlPresets.isEmpty:
-            resolvedDefaultFormat = pdfPresets.isEmpty ? .html : .pdf
-        case .pdf where pdfPresets.isEmpty:
-            resolvedDefaultFormat = htmlPresets.isEmpty ? .pdf : .html
-        default:
-            resolvedDefaultFormat = defaultFormat
-        }
 
         return ExportSettings(
-            defaultFormat: resolvedDefaultFormat,
+            defaultFormat: .html,
             destinationMode: destinationMode,
             openExportedFile: openExportedFile,
             revealExportedFileInFinder: revealExportedFileInFinder,
             allowYAMLOverrides: allowYAMLOverrides,
             activeHTMLPresetID: htmlPresets.contains(where: { $0.id == activeHTMLPresetID })
                 ? activeHTMLPresetID
-                : htmlPresets.first?.id,
-            activePDFPresetID: pdfPresets.contains(where: { $0.id == activePDFPresetID })
-                ? activePDFPresetID
-                : pdfPresets.first?.id
+                : htmlPresets.first?.id
         )
     }
-}
-
-struct DocumentPDFExportOverride: Equatable {
-    var paperSize: EditorPDFPaperSize?
-    var margin: Double?
-    var printBackground: Bool?
 }
 
 struct DocumentExportOverride: Equatable {
     var presetKey: String?
     var fileName: String?
     var theme: MarkdownExportTheme?
-    var pdf: DocumentPDFExportOverride
 
     init(
         presetKey: String? = nil,
         fileName: String? = nil,
-        theme: MarkdownExportTheme? = nil,
-        pdf: DocumentPDFExportOverride = .init()
+        theme: MarkdownExportTheme? = nil
     ) {
         self.presetKey = presetKey
         self.fileName = fileName
         self.theme = theme
-        self.pdf = pdf
     }
 }
 
@@ -206,7 +129,6 @@ struct ResolvedExportRequest: Equatable {
     let preset: ExportPreset
     let resolvedTheme: MarkdownRenderedTheme
     let suggestedFileStem: String
-    let pdfOptions: PDFExportOptions?
 
     var suggestedFilename: String {
         "\(suggestedFileStem).\(format.fileExtension)"
@@ -216,7 +138,6 @@ struct ResolvedExportRequest: Equatable {
 enum MarkdownExportError: LocalizedError, Equatable {
     case missingPreset(format: EditorExportFormat)
     case presetNotFound(String)
-    case presetFormatMismatch(expected: EditorExportFormat, actual: EditorExportFormat)
     case invalidOverrideValue(field: String, value: String)
     case invalidOverrideStructure(field: String)
     case unresolvedLocalResource(String)
@@ -228,8 +149,6 @@ enum MarkdownExportError: LocalizedError, Equatable {
             return "未找到可用的 \(format.rawValue) 导出预设。"
         case .presetNotFound(let key):
             return "文档引用的导出预设“\(key)”不存在。"
-        case .presetFormatMismatch(let expected, let actual):
-            return "文档引用的导出预设格式为 \(actual.rawValue)，与当前导出格式 \(expected.rawValue) 不匹配。"
         case .invalidOverrideValue(let field, let value):
             return "Front Matter 中 export.\(field) 的值“\(value)”无效。"
         case .invalidOverrideStructure(let field):
@@ -260,36 +179,28 @@ enum MarkdownExportService {
                 name: preset.name,
                 format: preset.format,
                 theme: preset.theme,
-                suggestedFileStem: preset.suggestedFileStem,
-                pdfOptions: preset.pdfOptions
+                suggestedFileStem: preset.suggestedFileStem
             ).normalized
 
             seenKeys.insert(uniqueKey)
             normalized.append(normalizedPreset)
         }
 
-        if normalized.contains(where: { $0.format == .html }) &&
-            normalized.contains(where: { $0.format == .pdf })
-        {
+        if normalized.contains(where: { $0.format == .html }) {
             return normalized
         }
 
-        let template = ExportPreset.builtInDefaults()
-        for preset in template where !normalized.contains(where: { $0.format == preset.format }) {
-            let uniqueKey = uniquePresetKey(base: preset.key, existingKeys: seenKeys)
-            seenKeys.insert(uniqueKey)
-            normalized.append(
-                ExportPreset(
-                    key: uniqueKey,
-                    name: preset.name,
-                    format: preset.format,
-                    theme: preset.theme,
-                    suggestedFileStem: preset.suggestedFileStem,
-                    pdfOptions: preset.pdfOptions
-                )
+        let htmlPreset = ExportPreset.builtInDefaults().first!
+        let uniqueKey = uniquePresetKey(base: htmlPreset.key, existingKeys: seenKeys)
+        normalized.append(
+            ExportPreset(
+                key: uniqueKey,
+                name: htmlPreset.name,
+                format: .html,
+                theme: htmlPreset.theme,
+                suggestedFileStem: htmlPreset.suggestedFileStem
             )
-        }
-
+        )
         return normalized
     }
 
@@ -353,17 +264,9 @@ enum MarkdownExportService {
         if let presetKey = override.presetKey?.trimmingCharacters(in: .whitespacesAndNewlines),
            !presetKey.isEmpty
         {
-            guard let preset = normalizedPresets.first(where: { $0.key == presetKey }) else {
+            guard let preset = formatPresets.first(where: { $0.key == presetKey }) else {
                 throw MarkdownExportError.presetNotFound(presetKey)
             }
-
-            guard preset.format == requestedFormat else {
-                throw MarkdownExportError.presetFormatMismatch(
-                    expected: requestedFormat,
-                    actual: preset.format
-                )
-            }
-
             basePreset = preset
         } else if let activePresetID = normalizedSettings.activePresetID(for: requestedFormat),
                   let preset = formatPresets.first(where: { $0.id == activePresetID })
@@ -386,30 +289,11 @@ enum MarkdownExportService {
             format: requestedFormat
         )
 
-        let resolvedPDFOptions: PDFExportOptions?
-        switch requestedFormat {
-        case .html:
-            resolvedPDFOptions = nil
-        case .pdf:
-            var options = basePreset.effectivePDFOptions
-            if let paperSize = override.pdf.paperSize {
-                options.paperSize = paperSize
-            }
-            if let margin = override.pdf.margin {
-                options.margin = margin
-            }
-            if let printBackground = override.pdf.printBackground {
-                options.printBackground = printBackground
-            }
-            resolvedPDFOptions = options.normalized
-        }
-
         return ResolvedExportRequest(
             format: requestedFormat,
             preset: basePreset,
             resolvedTheme: resolvedTheme,
-            suggestedFileStem: baseFileStem,
-            pdfOptions: resolvedPDFOptions
+            suggestedFileStem: baseFileStem
         )
     }
 
@@ -419,8 +303,7 @@ enum MarkdownExportService {
         destinationHTMLURL: URL,
         documentTitle: String,
         theme: MarkdownRenderedTheme,
-        documentBaseURL: URL?,
-        printOptions: PDFExportOptions? = nil
+        documentBaseURL: URL?
     ) throws -> URL {
         let normalizedDestinationURL = MarkdownFileService.normalizedExportURL(
             from: destinationHTMLURL,
@@ -438,37 +321,10 @@ enum MarkdownExportService {
         let htmlDocument = MarkdownFileService.renderedHTMLDocument(
             title: documentTitle,
             bodyHTML: packagedBodyHTML,
-            theme: theme,
-            printOptions: printOptions
+            theme: theme
         )
         try htmlDocument.write(to: normalizedDestinationURL, atomically: true, encoding: .utf8)
         return normalizedDestinationURL
-    }
-
-    static func createTemporaryHTMLPackage(
-        bodyHTML: String,
-        documentTitle: String,
-        theme: MarkdownRenderedTheme,
-        documentBaseURL: URL?,
-        printOptions: PDFExportOptions?
-    ) throws -> URL {
-        let temporaryRootURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MarkdownExport-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: temporaryRootURL,
-            withIntermediateDirectories: true
-        )
-
-        let htmlURL = temporaryRootURL.appendingPathComponent("document.html")
-        try writeHTMLPackage(
-            bodyHTML: bodyHTML,
-            destinationHTMLURL: htmlURL,
-            documentTitle: documentTitle,
-            theme: theme,
-            documentBaseURL: documentBaseURL,
-            printOptions: printOptions
-        )
-        return htmlURL
     }
 
     static func parseDocumentExportOverride(from markdown: String) throws -> DocumentExportOverride {
@@ -528,42 +384,6 @@ enum MarkdownExportService {
                     throw MarkdownExportError.invalidOverrideValue(field: "theme", value: scalar)
                 }
                 override.theme = theme
-            case "export.pdf":
-                guard value.isEmpty else {
-                    throw MarkdownExportError.invalidOverrideStructure(field: "pdf")
-                }
-                contextStack.append((indent, key))
-            case "export.pdf.paperSize":
-                guard !value.isEmpty else {
-                    throw MarkdownExportError.invalidOverrideStructure(field: "pdf.paperSize")
-                }
-                let scalar = scalarValue(from: value)
-                guard let paperSize = EditorPDFPaperSize(rawValue: scalar) else {
-                    throw MarkdownExportError.invalidOverrideValue(field: "pdf.paperSize", value: scalar)
-                }
-                override.pdf.paperSize = paperSize
-            case "export.pdf.margin":
-                guard !value.isEmpty else {
-                    throw MarkdownExportError.invalidOverrideStructure(field: "pdf.margin")
-                }
-                let scalar = scalarValue(from: value)
-                guard let margin = Double(scalar) else {
-                    throw MarkdownExportError.invalidOverrideValue(field: "pdf.margin", value: scalar)
-                }
-                override.pdf.margin = margin
-            case "export.pdf.printBackground":
-                guard !value.isEmpty else {
-                    throw MarkdownExportError.invalidOverrideStructure(field: "pdf.printBackground")
-                }
-                let scalar = scalarValue(from: value).lowercased()
-                switch scalar {
-                case "true":
-                    override.pdf.printBackground = true
-                case "false":
-                    override.pdf.printBackground = false
-                default:
-                    throw MarkdownExportError.invalidOverrideValue(field: "pdf.printBackground", value: scalar)
-                }
             default:
                 if value.isEmpty {
                     contextStack.append((indent, key))
@@ -844,50 +664,19 @@ enum MarkdownExportService {
 
 extension EditorExportFormat {
     var fileExtension: String {
-        switch self {
-        case .html:
-            return "html"
-        case .pdf:
-            return "pdf"
-        }
+        "html"
     }
 
     var contentType: UTType {
-        switch self {
-        case .html:
-            return .html
-        case .pdf:
-            return .pdf
-        }
+        .html
     }
 
     var defaultPresetName: String {
-        switch self {
-        case .html:
-            return "HTML 预设"
-        case .pdf:
-            return "PDF 预设"
-        }
+        "HTML 预设"
     }
 
     var defaultPresetKeyBase: String {
-        switch self {
-        case .html:
-            return "html"
-        case .pdf:
-            return "pdf"
-        }
-    }
-}
-
-extension EditorPDFPaperSize {
-    var pageSizePoints: CGSize {
-        switch self {
-        case .a4:
-            return CGSize(width: 595.2, height: 841.8)
-        case .letter:
-            return CGSize(width: 612, height: 792)
-        }
+        "html"
     }
 }
 

@@ -73,21 +73,16 @@ final class MarkdownHTMLExportPackageTests: XCTestCase {
         )
     }
 
-    func testRenderedHTMLDocumentIncludesPrintCSS() {
+    func testRenderedHTMLDocumentBuildsCleanHTMLShell() {
         let document = MarkdownFileService.renderedHTMLDocument(
             title: "Print",
             bodyHTML: "<p>Hello</p>",
-            theme: .light,
-            printOptions: PDFExportOptions(
-                paperSize: .letter,
-                margin: 36,
-                printBackground: true
-            )
+            theme: .light
         )
 
-        XCTAssertTrue(document.contains("@page"))
-        XCTAssertTrue(document.contains("size: Letter;"))
-        XCTAssertTrue(document.contains("margin: 36pt;"))
-        XCTAssertTrue(document.contains("print-color-adjust: exact;"))
+        XCTAssertTrue(document.contains("<main class=\"markdown-body\"><p>Hello</p></main>"))
+        XCTAssertTrue(document.contains("max-width: 840px;"))
+        XCTAssertFalse(document.contains("@page"))
+        XCTAssertFalse(document.contains("print-color-adjust"))
     }
 }

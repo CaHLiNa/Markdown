@@ -395,7 +395,6 @@ final class EditorDocumentController: ObservableObject {
     @Published private(set) var revealRequest: EditorRevealRequest?
 
     let editorController = EditorWebView.Controller()
-    private let pdfExportRenderer = MarkdownPDFRenderer()
     private var untitledDocumentCount = 1
     private var lastExportDirectoryURL: URL?
     private var lastSelectedWorkspaceItemID: String?
@@ -413,7 +412,6 @@ final class EditorDocumentController: ObservableObject {
     var saveTabOverride: ((UUID, @escaping (Bool) -> Void) -> Void)?
     var currentEditorMarkdownOverride: ((@escaping (Result<String, Error>) -> Void) -> Void)?
     var renderedEditorHTMLOverride: ((@escaping (Result<String, Error>) -> Void) -> Void)?
-    var exportPDFDataOverride: ((@escaping (Result<Data, Error>) -> Void) -> Void)?
     var workspaceSearchRefreshObserver: (() -> Void)?
 
     init(
@@ -592,10 +590,6 @@ final class EditorDocumentController: ObservableObject {
         )
     }
 
-    var defaultExportFormat: EditorExportFormat {
-        exportSettings.defaultFormat
-    }
-
     var selectedExportPreset: ExportPreset? {
         guard let selectedExportPresetID else {
             return nil
@@ -764,8 +758,7 @@ final class EditorDocumentController: ObservableObject {
             name: "\(baseName) \(formatCount)",
             format: format,
             theme: sourcePreset?.theme ?? .matchAppearance,
-            suggestedFileStem: "",
-            pdfOptions: format == .pdf ? (sourcePreset?.effectivePDFOptions ?? .defaultValue) : nil
+            suggestedFileStem: ""
         )
 
         exportPresets = normalizedExportPresets(exportPresets + [preset])
@@ -786,8 +779,7 @@ final class EditorDocumentController: ObservableObject {
             name: "\(preset.name) 副本",
             format: preset.format,
             theme: preset.theme,
-            suggestedFileStem: preset.suggestedFileStem,
-            pdfOptions: preset.pdfOptions
+            suggestedFileStem: preset.suggestedFileStem
         )
 
         exportPresets = normalizedExportPresets(exportPresets + [duplicate])
@@ -1567,19 +1559,14 @@ final class EditorDocumentController: ObservableObject {
                             snapshot.renderedHTML,
                             markdown: snapshot.markdown
                         )
-                        let document = MarkdownFileService.renderedHTMLDocument(
-                            title: self.currentTitle,
+                        try MarkdownExportService.writeHTMLPackage(
                             bodyHTML: bodyHTML,
+                            destinationHTMLURL: destinationURL,
+                            documentTitle: self.currentTitle,
                             theme: resolvedRequest.resolvedTheme,
-                            baseURL: snapshot.documentBaseURL
+                            documentBaseURL: snapshot.documentBaseURL
                         )
-
-                        do {
-                            try MarkdownFileService.writeHTMLDocument(document, to: destinationURL)
-                            self.finalizeExport(at: destinationURL)
-                        } catch {
-                            self.presentError(error, title: "无法导出 HTML")
-                        }
+                        self.finalizeExport(at: destinationURL)
                     } catch {
                         self.presentError(error, title: "无法导出 HTML")
                     }
@@ -1591,90 +1578,7 @@ final class EditorDocumentController: ObservableObject {
     }
 
     func exportDocument() {
-        switch defaultExportFormat {
-        case .html:
-            exportHTMLDocument()
-        case .pdf:
-            exportPDFDocument()
-        }
-    }
-
-    func exportPDFDocument() {
-        prepareStrictPDFData { [weak self] pdfPreparationResult in
-            Task { @MainActor in
-                guard let self else {
-                    return
-                }
-
-                switch pdfPreparationResult {
-                case .success(let data):
-                    let panel = NSSavePanel()
-                    panel.allowedContentTypes = [MarkdownFileService.pdfContentType]
-                    panel.canCreateDirectories = true
-                    panel.nameFieldStringValue = "\(self.exportBaseName).pdf"
-                    panel.directoryURL = self.preferredExportDirectoryURL()
-                    panel.prompt = "导出"
-
-                    guard panel.runModal() == .OK, let selectedURL = panel.url else {
-                        return
-                    }
-
-                    let destinationURL = MarkdownFileService.normalizedExportURL(
-                        from: selectedURL,
-                        contentType: MarkdownFileService.pdfContentType
-                    )
-
-                    do {
-                        try MarkdownFileService.writePDF(data, to: destinationURL)
-                        self.finalizeExport(at: destinationURL)
-                    } catch {
-                        self.presentError(error, title: "无法导出 PDF")
-                    }
-
-                case .failure(let error):
-                    self.presentError(error, title: "无法导出 PDF")
-                }
-            }
-        }
-    }
-
-    func printDocument() {
-        do {
-            try editorController.printDocument()
-        } catch {
-            presentError(error, title: "无法打印文档")
-        }
-    }
-
-    private func prepareResolvedPDFData(
-        _ snapshot: EditorSynchronizedSnapshot,
-        request: ResolvedExportRequest,
-        completion: @escaping (Result<Data, Error>) -> Void
-    ) {
-        let bodyHTML = normalizedRenderedHTMLForExport(snapshot.renderedHTML, markdown: snapshot.markdown)
-
-        do {
-            let temporaryHTMLURL = try MarkdownExportService.createTemporaryHTMLPackage(
-                bodyHTML: bodyHTML,
-                documentTitle: editableCurrentTitle,
-                theme: request.resolvedTheme,
-                documentBaseURL: snapshot.documentBaseURL,
-                printOptions: request.pdfOptions
-            )
-            let cleanupDirectoryURL = temporaryHTMLURL.deletingLastPathComponent()
-
-            pdfExportRenderer.renderPDF(
-                from: temporaryHTMLURL,
-                options: request.pdfOptions ?? .defaultValue
-            ) { renderResult in
-                Task { @MainActor in
-                    defer { try? FileManager.default.removeItem(at: cleanupDirectoryURL) }
-                    completion(renderResult)
-                }
-            }
-        } catch {
-            completion(.failure(error))
-        }
+        exportHTMLDocument()
     }
 
     func persistImageAsset(
@@ -1980,40 +1884,6 @@ final class EditorDocumentController: ObservableObject {
                 }
             case .failure(let error):
                 completion(.failure(error))
-            }
-        }
-    }
-
-    func prepareStrictPDFData(completion: @escaping (Result<Data, Error>) -> Void) {
-        prepareStrictSynchronizedEditorSnapshot { [weak self] result in
-            Task { @MainActor in
-                guard let self else {
-                    return
-                }
-
-                switch result {
-                case .success(let strictSnapshot):
-                    do {
-                        let resolvedRequest = try MarkdownExportService.resolveExportRequest(
-                            markdown: strictSnapshot.snapshot.markdown,
-                            requestedFormat: .pdf,
-                            documentTitle: self.exportBaseName,
-                            settings: self.exportSettings,
-                            presets: self.exportPresets,
-                            appearanceMode: self.appearanceMode,
-                            interfaceStyle: self.effectiveInterfaceStyle
-                        )
-                        self.prepareResolvedPDFData(
-                            strictSnapshot.snapshot,
-                            request: resolvedRequest,
-                            completion: completion
-                        )
-                    } catch {
-                        completion(.failure(error))
-                    }
-                case .failure(let error):
-                    completion(.failure(error))
-                }
             }
         }
     }
@@ -2704,12 +2574,8 @@ final class EditorDocumentController: ObservableObject {
             openFolder()
         case "file.save":
             saveDocument()
-        case "file.export-default":
-            exportDocument()
         case "file.export-html":
             exportHTMLDocument()
-        case "file.export-pdf":
-            exportPDFDocument()
         case "file.quick-open":
             showQuickOpen()
         case "view.command-palette":

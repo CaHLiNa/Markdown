@@ -4,6 +4,10 @@ import {
   normalizeEditorPresentation,
   type EditorPresentation
 } from './editor-presentation'
+import {
+  renderMarkdownForExport,
+  resolveGlobalExportLuteFactory
+} from './editor-runtime-options'
 import type { EditorRuntimeState } from './editor-state'
 import { createNativeMarkdownSync, type NativeMarkdownSync } from './native-markdown-sync'
 
@@ -79,7 +83,17 @@ const escapeHtml = (value: string) => {
     .replace(/'/g, '&#39;')
 }
 
-const renderFallbackHTML = (markdown: string) => {
+const renderFallbackHTML = (markdown: string, appearance: EditorPresentation) => {
+  const rendered = renderMarkdownForExport(markdown, {
+    luteFactory: resolveGlobalExportLuteFactory(globalThis),
+    presentation: appearance,
+    linkBase: appearance.imageRootURL.trim()
+  })
+
+  if (rendered.length > 0) {
+    return rendered
+  }
+
   if (markdown.trim().length === 0) {
     return ''
   }
@@ -206,7 +220,7 @@ export const createEditorBridge = ({
       return editor.getRenderedHTML()
     }
 
-    return renderFallbackHTML(markdown)
+    return renderFallbackHTML(markdown, appearance)
   }
 
   const getEditorState = () => {

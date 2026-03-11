@@ -35,22 +35,20 @@ enum MarkdownExportTheme: String, CaseIterable, Identifiable, Codable {
 
 enum EditorExportFormat: String, CaseIterable, Identifiable, Codable {
     case html = "HTML"
-    case pdf = "PDF"
 
     var id: String { rawValue }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = (try? container.decode(String.self)) ?? Self.html.rawValue
+        self = Self(rawValue: rawValue) ?? .html
+    }
 }
 
 enum EditorExportDestinationMode: String, CaseIterable, Identifiable, Codable {
     case askEveryTime = "每次询问"
     case sameAsDocument = "文档所在目录"
     case lastUsed = "上次导出目录"
-
-    var id: String { rawValue }
-}
-
-enum EditorPDFPaperSize: String, CaseIterable, Identifiable, Codable {
-    case a4 = "A4"
-    case letter = "Letter"
 
     var id: String { rawValue }
 }
@@ -187,9 +185,6 @@ struct EditorPreferences: Codable, Equatable {
         case exportDestinationMode
         case openExportedFile
         case revealExportedFileInFinder
-        case pdfPaperSize
-        case pdfMargin
-        case pdfPrintBackground
         case allowYAMLExportOverrides
         case startupBehavior
         case recentFileLimit
@@ -317,11 +312,6 @@ struct EditorPreferences: Codable, Equatable {
         }
 
         let legacyExportTheme = try container.decodeIfPresent(MarkdownExportTheme.self, forKey: .exportTheme) ?? .matchAppearance
-        let legacyPDFOptions = PDFExportOptions(
-            paperSize: try container.decodeIfPresent(EditorPDFPaperSize.self, forKey: .pdfPaperSize) ?? .a4,
-            margin: try container.decodeIfPresent(Double.self, forKey: .pdfMargin) ?? 24,
-            printBackground: try container.decodeIfPresent(Bool.self, forKey: .pdfPrintBackground) ?? true
-        )
         let resolvedExportConfiguration = Self.resolveExportConfiguration(
             decodedSettings: try container.decodeIfPresent(ExportSettings.self, forKey: .exportSettings),
             decodedPresets: try container.decodeIfPresent([ExportPreset].self, forKey: .exportPresets),
@@ -330,8 +320,7 @@ struct EditorPreferences: Codable, Equatable {
             legacyDestinationMode: try container.decodeIfPresent(EditorExportDestinationMode.self, forKey: .exportDestinationMode) ?? .sameAsDocument,
             legacyOpenExportedFile: try container.decodeIfPresent(Bool.self, forKey: .openExportedFile) ?? true,
             legacyRevealExportedFileInFinder: try container.decodeIfPresent(Bool.self, forKey: .revealExportedFileInFinder) ?? false,
-            legacyAllowYAMLOverrides: try container.decodeIfPresent(Bool.self, forKey: .allowYAMLExportOverrides) ?? true,
-            legacyPDFOptions: legacyPDFOptions
+            legacyAllowYAMLOverrides: try container.decodeIfPresent(Bool.self, forKey: .allowYAMLExportOverrides) ?? true
         )
 
         self.init(
@@ -444,14 +433,10 @@ struct EditorPreferences: Codable, Equatable {
         legacyDestinationMode: EditorExportDestinationMode,
         legacyOpenExportedFile: Bool,
         legacyRevealExportedFileInFinder: Bool,
-        legacyAllowYAMLOverrides: Bool,
-        legacyPDFOptions: PDFExportOptions
+        legacyAllowYAMLOverrides: Bool
     ) -> (settings: ExportSettings, presets: [ExportPreset]) {
         let presets = MarkdownExportService.normalizedPresets(
-            decodedPresets ?? ExportPreset.builtInDefaults(
-                theme: legacyTheme,
-                pdfOptions: legacyPDFOptions
-            )
+            decodedPresets ?? ExportPreset.builtInDefaults(theme: legacyTheme)
         )
         let settings = (decodedSettings ?? ExportSettings(
             defaultFormat: legacyDefaultFormat,

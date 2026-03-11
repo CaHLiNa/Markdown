@@ -931,16 +931,13 @@ struct EditorWebView: NSViewRepresentable {
         func renderedHTML(completion: @escaping (Result<String, Error>) -> Void) {
             let script = """
             (() => {
-                let renderedHTML = '';
                 if (typeof window.getRenderedHTML === 'function') {
-                    renderedHTML = window.getRenderedHTML();
-                    if (typeof renderedHTML === 'string' && renderedHTML.trim().length > 0) {
+                    const renderedHTML = window.getRenderedHTML();
+                    if (typeof renderedHTML === 'string') {
                         return renderedHTML;
                     }
                 }
-
-                const root = document.querySelector('.vditor-wysiwyg, .vditor-ir, .vditor-sv');
-                return root ? root.innerHTML : renderedHTML;
+                return '';
             })();
             """
 
@@ -965,16 +962,13 @@ struct EditorWebView: NSViewRepresentable {
         ) {
             let script = """
             (() => {
-                let renderedHTML = '';
                 if (typeof window.getRenderedHTML === 'function') {
-                    renderedHTML = window.getRenderedHTML();
-                    if (typeof renderedHTML === 'string' && renderedHTML.trim().length > 0) {
+                    const renderedHTML = window.getRenderedHTML();
+                    if (typeof renderedHTML === 'string') {
                         return renderedHTML;
                     }
                 }
-
-                const root = document.querySelector('.vditor-wysiwyg, .vditor-ir, .vditor-sv');
-                return root ? root.innerHTML : renderedHTML;
+                return '';
             })();
             """
 
@@ -1003,50 +997,6 @@ struct EditorWebView: NSViewRepresentable {
                     completion(.failure(error))
                 }
             }
-        }
-
-        @MainActor
-        func exportPDF(completion: @escaping (Result<Data, Error>) -> Void) {
-            withReadyPageContext { result in
-                switch result {
-                case .success(let context):
-                    self.createPDF(from: context, completion: completion)
-                case .failure(let error):
-                    completion(.failure(error))
-                }
-            }
-        }
-
-        @MainActor
-        func exportPDFStrict(
-            expectedGeneration: Int,
-            completion: @escaping (Result<Data, Error>) -> Void
-        ) {
-            withReadyPageContext(expectedGeneration: expectedGeneration) { [weak self] result in
-                guard let self else {
-                    completion(.failure(EditorWebViewControllerError.pageNotReady))
-                    return
-                }
-
-                switch result {
-                case .success(let context):
-                    self.createPDF(from: context, completion: completion)
-                case .failure(let error):
-                    completion(.failure(error))
-                }
-            }
-        }
-
-        @MainActor
-        func printDocument() throws {
-            guard let webView, pageLoadState.isReady else {
-                throw EditorWebViewControllerError.pageNotReady
-            }
-
-            let operation = webView.printOperation(with: .shared)
-            operation.showsPrintPanel = true
-            operation.showsProgressPanel = true
-            operation.run()
         }
 
         @MainActor
@@ -1093,31 +1043,6 @@ struct EditorWebView: NSViewRepresentable {
                 }
 
                 completion(.success(result))
-            }
-        }
-
-        @MainActor
-        private func createPDF(
-            from context: ReadyPageContext,
-            completion: @escaping (Result<Data, Error>) -> Void
-        ) {
-            let configuration = WKPDFConfiguration()
-
-            context.webView.createPDF(configuration: configuration) { [weak self] pdfResult in
-                guard let self,
-                      self.pageLoadState.acceptsMessage(for: context.generation),
-                      self.webView === context.webView
-                else {
-                    completion(.failure(EditorWebViewControllerError.pageNotReady))
-                    return
-                }
-
-                switch pdfResult {
-                case .success(let data):
-                    completion(.success(data))
-                case .failure(let error):
-                    completion(.failure(error))
-                }
             }
         }
 

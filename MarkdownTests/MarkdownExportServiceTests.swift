@@ -3,27 +3,22 @@ import XCTest
 @testable import Markdown
 
 final class MarkdownExportServiceTests: XCTestCase {
-    func testResolveExportRequestUsesFormatSpecificActivePresetAndYAMLOverrides() throws {
-        let htmlPreset = ExportPreset(
+    func testResolveExportRequestUsesHTMLPresetAndYAMLOverrides() throws {
+        let activePreset = ExportPreset(
             id: UUID(),
             key: "html-reading",
             name: "HTML 阅读",
             format: .html,
             theme: .sepia,
-            suggestedFileStem: "html-output"
+            suggestedFileStem: "reading-copy"
         )
-        let pdfPreset = ExportPreset(
+        let publishPreset = ExportPreset(
             id: UUID(),
-            key: "pdf-print",
-            name: "PDF 打印",
-            format: .pdf,
+            key: "html-publish",
+            name: "HTML 发布",
+            format: .html,
             theme: .dark,
-            suggestedFileStem: "pdf-output",
-            pdfOptions: PDFExportOptions(
-                paperSize: .letter,
-                margin: 24,
-                printBackground: false
-            )
+            suggestedFileStem: "publish-copy"
         )
         let settings = ExportSettings(
             defaultFormat: .html,
@@ -31,54 +26,42 @@ final class MarkdownExportServiceTests: XCTestCase {
             openExportedFile: true,
             revealExportedFileInFinder: false,
             allowYAMLOverrides: true,
-            activeHTMLPresetID: htmlPreset.id,
-            activePDFPresetID: pdfPreset.id
+            activeHTMLPresetID: activePreset.id
         )
         let markdown = """
         ---
-        exportPreset: pdf-print
+        exportPreset: html-publish
         export:
           fileName: Quarterly Report
           theme: light
-          pdf:
-            paperSize: A4
-            margin: 48
-            printBackground: true
+          preview:
+            mode: compact
         ---
         # Report
         """
 
         let request = try MarkdownExportService.resolveExportRequest(
             markdown: markdown,
-            requestedFormat: .pdf,
+            requestedFormat: .html,
             documentTitle: "Ignored Title",
             settings: settings,
-            presets: [htmlPreset, pdfPreset],
+            presets: [activePreset, publishPreset],
             appearanceMode: .dark,
             interfaceStyle: .dark
         )
 
-        XCTAssertEqual(request.format, .pdf)
-        XCTAssertEqual(request.preset.id, pdfPreset.id)
-        XCTAssertEqual(request.suggestedFilename, "Quarterly Report.pdf")
+        XCTAssertEqual(request.format, .html)
+        XCTAssertEqual(request.preset.id, publishPreset.id)
+        XCTAssertEqual(request.suggestedFilename, "Quarterly Report.html")
         XCTAssertEqual(request.resolvedTheme, .light)
-        XCTAssertEqual(
-            request.pdfOptions,
-            PDFExportOptions(
-                paperSize: .a4,
-                margin: 48,
-                printBackground: true
-            )
-        )
     }
 
-    func testResolveExportRequestRejectsInvalidOverrideValue() {
+    func testResolveExportRequestRejectsInvalidThemeOverride() {
         let settings = ExportSettings()
         let markdown = """
         ---
         export:
-          pdf:
-            margin: abc
+          theme: neon
         ---
         # Invalid
         """
@@ -86,7 +69,7 @@ final class MarkdownExportServiceTests: XCTestCase {
         XCTAssertThrowsError(
             try MarkdownExportService.resolveExportRequest(
                 markdown: markdown,
-                requestedFormat: .pdf,
+                requestedFormat: .html,
                 documentTitle: "Invalid",
                 settings: settings,
                 presets: ExportPreset.builtInDefaults(),
@@ -96,47 +79,31 @@ final class MarkdownExportServiceTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? MarkdownExportError,
-                .invalidOverrideValue(field: "pdf.margin", value: "abc")
+                .invalidOverrideValue(field: "theme", value: "neon")
             )
         }
     }
 
-    func testResolveExportRequestRejectsPresetFormatMismatch() {
-        let htmlPreset = ExportPreset(
-            key: "html-default",
-            name: "HTML 默认",
-            format: .html
-        )
-        let pdfPreset = ExportPreset(
-            key: "pdf-default",
-            name: "PDF 默认",
-            format: .pdf
-        )
+    func testResolveExportRequestRejectsUnknownPresetKey() {
         let markdown = """
         ---
-        exportPreset: pdf-default
+        exportPreset: missing-preset
         ---
-        # Mismatch
+        # Missing
         """
 
         XCTAssertThrowsError(
             try MarkdownExportService.resolveExportRequest(
                 markdown: markdown,
                 requestedFormat: .html,
-                documentTitle: "Mismatch",
-                settings: ExportSettings(
-                    activeHTMLPresetID: htmlPreset.id,
-                    activePDFPresetID: pdfPreset.id
-                ),
-                presets: [htmlPreset, pdfPreset],
+                documentTitle: "Missing",
+                settings: ExportSettings(),
+                presets: ExportPreset.builtInDefaults(),
                 appearanceMode: .followSystem,
                 interfaceStyle: .light
             )
         ) { error in
-            XCTAssertEqual(
-                error as? MarkdownExportError,
-                .presetFormatMismatch(expected: .html, actual: .pdf)
-            )
+            XCTAssertEqual(error as? MarkdownExportError, .presetNotFound("missing-preset"))
         }
     }
 }

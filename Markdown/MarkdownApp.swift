@@ -113,10 +113,6 @@ private struct EditorAppCommands: Commands {
 private struct EditorFileCommands: Commands {
     @ObservedObject var documentController: EditorDocumentController
 
-    private var defaultExportTitle: String {
-        "导出 \(documentController.defaultExportFormat.rawValue)..."
-    }
-
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("新建标签页") {
@@ -173,28 +169,10 @@ private struct EditorFileCommands: Commands {
         }
 
         CommandGroup(after: .saveItem) {
-            Button(defaultExportTitle) {
-                documentController.exportDocument()
+            Button("导出 HTML...") {
+                documentController.exportHTMLDocument()
             }
             .keyboardShortcut("e", modifiers: [.command])
-            .disabled(!documentController.canExportRenderedDocument)
-
-            Menu("导出为") {
-                Button("HTML...") {
-                    documentController.exportHTMLDocument()
-                }
-                .disabled(!documentController.canExportRenderedDocument)
-
-                Button("PDF...") {
-                    documentController.exportPDFDocument()
-                }
-                .disabled(!documentController.canExportRenderedDocument)
-            }
-
-            Button("打印") {
-                documentController.printDocument()
-            }
-            .keyboardShortcut("p", modifiers: [.command, .option])
             .disabled(!documentController.canExportRenderedDocument)
         }
     }
@@ -586,7 +564,7 @@ private enum EditorSettingsSection: String, CaseIterable, Identifiable {
         case .markdown:
             return ["括号", "引号", "自动配对", "提示", "表格", "数学", "mermaid"]
         case .export:
-            return ["HTML", "PDF", "导出", "预设", "YAML", "目录", "页边距"]
+            return ["HTML", "导出", "预设", "YAML", "目录"]
         case .appearance:
             return ["外观", "浅色", "深色", "护眼", "侧边栏", "标签栏", "字数"]
         case .general:
@@ -875,18 +853,6 @@ private struct EditorSettingsView: View {
         }
     }
 
-    private var exportDefaultFormatBinding: Binding<EditorExportFormat> {
-        Binding(
-            get: { documentController.exportSettings.defaultFormat },
-            set: { newValue in
-                documentController.updateExportSettings { $0.defaultFormat = newValue }
-                if let preset = documentController.activeExportPreset(for: newValue) {
-                    documentController.selectExportPreset(preset.id)
-                }
-            }
-        )
-    }
-
     private var exportDestinationModeBinding: Binding<EditorExportDestinationMode> {
         Binding(
             get: { documentController.exportSettings.destinationMode },
@@ -959,67 +925,9 @@ private struct EditorSettingsView: View {
         )
     }
 
-    private var selectedPresetPDFPaperBinding: Binding<EditorPDFPaperSize> {
-        Binding(
-            get: { documentController.selectedExportPreset?.effectivePDFOptions.paperSize ?? .a4 },
-            set: { newValue in
-                documentController.updateSelectedExportPreset { preset in
-                    guard preset.format == .pdf else {
-                        return
-                    }
-                    var options = preset.effectivePDFOptions
-                    options.paperSize = newValue
-                    preset.pdfOptions = options
-                }
-            }
-        )
-    }
-
-    private var selectedPresetPDFMarginBinding: Binding<Double> {
-        Binding(
-            get: { documentController.selectedExportPreset?.effectivePDFOptions.margin ?? 24 },
-            set: { newValue in
-                documentController.updateSelectedExportPreset { preset in
-                    guard preset.format == .pdf else {
-                        return
-                    }
-                    var options = preset.effectivePDFOptions
-                    options.margin = newValue
-                    preset.pdfOptions = options
-                }
-            }
-        )
-    }
-
-    private var selectedPresetPDFBackgroundBinding: Binding<Bool> {
-        Binding(
-            get: { documentController.selectedExportPreset?.effectivePDFOptions.printBackground ?? true },
-            set: { newValue in
-                documentController.updateSelectedExportPreset { preset in
-                    guard preset.format == .pdf else {
-                        return
-                    }
-                    var options = preset.effectivePDFOptions
-                    options.printBackground = newValue
-                    preset.pdfOptions = options
-                }
-            }
-        )
-    }
-
     private var exportSettingsContent: some View {
         VStack(alignment: .leading, spacing: 30) {
             SettingsSectionGroup(title: "默认行为") {
-                SettingsControlRow(title: "默认格式") {
-                    Picker("", selection: exportDefaultFormatBinding) {
-                        ForEach(EditorExportFormat.allCases) { format in
-                            Text(format.rawValue).tag(format)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 140)
-                }
-
                 SettingsControlRow(title: "导出位置") {
                     Picker("", selection: exportDestinationModeBinding) {
                         ForEach(EditorExportDestinationMode.allCases) { mode in
@@ -1038,14 +946,8 @@ private struct EditorSettingsView: View {
             SettingsSectionGroup(title: "导出预设") {
                 HStack(alignment: .top, spacing: 18) {
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 8) {
-                            Button("新建 HTML") {
-                                documentController.addExportPreset(format: .html)
-                            }
-
-                            Button("新建 PDF") {
-                                documentController.addExportPreset(format: .pdf)
-                            }
+                        Button("新建 HTML") {
+                            documentController.addExportPreset(format: .html)
                         }
                         .buttonStyle(.bordered)
 
@@ -1059,7 +961,7 @@ private struct EditorSettingsView: View {
                                             Text(preset.name)
                                                 .font(.system(size: 13, weight: .medium))
                                                 .foregroundStyle(palette.primaryText)
-                                            Text("\(preset.format.rawValue) · \(preset.key)")
+                                            Text(preset.key)
                                                 .font(.system(size: 11, weight: .regular))
                                                 .foregroundStyle(palette.secondaryText)
                                         }
@@ -1126,13 +1028,6 @@ private struct EditorSettingsView: View {
                                     .frame(width: 240)
                             }
 
-                            SettingsControlRow(title: "格式") {
-                                Text(selectedPreset.format.rawValue)
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(palette.primaryText)
-                                    .frame(width: 80, alignment: .leading)
-                            }
-
                             SettingsControlRow(title: "颜色方案") {
                                 Picker("", selection: selectedPresetThemeBinding) {
                                     ForEach(MarkdownExportTheme.allCases) { theme in
@@ -1154,33 +1049,6 @@ private struct EditorSettingsView: View {
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(documentController.isPresetActive(selectedPreset))
-
-                            if selectedPreset.format == .pdf {
-                                Divider()
-
-                                SettingsControlRow(title: "纸张尺寸") {
-                                    Picker("", selection: selectedPresetPDFPaperBinding) {
-                                        ForEach(EditorPDFPaperSize.allCases) { size in
-                                            Text(size.rawValue).tag(size)
-                                        }
-                                    }
-                                    .labelsHidden()
-                                    .frame(width: 140)
-                                }
-
-                                SettingsControlRow(title: "页边距") {
-                                    SettingsStepperField(
-                                        value: selectedPresetPDFMarginBinding,
-                                        range: 8...64,
-                                        step: 2,
-                                        format: .number.precision(.fractionLength(0)),
-                                        suffix: "pt",
-                                        width: 88
-                                    )
-                                }
-
-                                SettingsSwitchRow(title: "打印背景", isOn: selectedPresetPDFBackgroundBinding)
-                            }
                         } else {
                             Text("选择左侧预设后即可编辑其导出参数。")
                                 .font(.system(size: 13, weight: .regular))

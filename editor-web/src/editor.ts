@@ -24,7 +24,14 @@ import {
 import {
   applyEditableRootRuntimeOptions,
   applyLuteRuntimeOptions,
-  getEditorTabString
+  getEditorTabString,
+  renderMarkdownForExport,
+  resolveGlobalExportLuteFactory,
+  type EditorExportHintOptions,
+  type EditorExportLuteFactory,
+  type EditorExportLute,
+  type EditorExportMarkdownOptions,
+  type EditorExportMathOptions
 } from './editor-runtime-options'
 import type { EditorRuntimeState } from './editor-state'
 import {
@@ -145,14 +152,24 @@ type VditorRuntime = Vditor['vditor'] & {
     SetVditorWYSIWYG?: (enabled: boolean) => void
   }
   options?: {
+    hint?: EditorExportHintOptions
     tab?: string
     preview?: {
+      math?: EditorExportMathOptions
       mode?: 'both' | 'editor'
       markdown?: {
         footnotes?: boolean
+        gfmAutoLink?: boolean
         linkBase?: string
+        linkPrefix?: string
+        codeBlockPreview?: boolean
+        fixTermTypo?: boolean
+        listStyle?: boolean
+        mark?: boolean
         mathBlockPreview?: boolean
         paragraphBeginningSpace?: boolean
+        sanitize?: boolean
+        toc?: boolean
       }
     }
   }
@@ -566,6 +583,22 @@ export const createMarkdownEditor = async ({
 
   const readMarkdown = () => {
     return normalizeMarkdownForEditor(instance?.getValue() ?? currentMarkdown)
+  }
+
+  const renderHeadlessHTML = (markdown: string) => {
+    const runtime = instance?.vditor as VditorRuntime | undefined
+
+    return renderMarkdownForExport(markdown, {
+      luteFactory: resolveGlobalExportLuteFactory(
+        globalThis as typeof globalThis & { Lute?: EditorExportLuteFactory }
+      ),
+      fallbackLute: runtime?.lute as EditorExportLute | undefined,
+      presentation: currentPresentation,
+      linkBase: getResolvedLinkBase(),
+      hint: runtime?.options?.hint,
+      markdown: runtime?.options?.preview?.markdown as EditorExportMarkdownOptions | undefined,
+      math: runtime?.options?.preview?.math
+    })
   }
 
   const getIRRoot = () => {
@@ -1343,7 +1376,7 @@ export const createMarkdownEditor = async ({
       return readMarkdown()
     },
     getRenderedHTML() {
-      return instance?.getHTML().trim() ?? ''
+      return renderHeadlessHTML(readMarkdown())
     },
     getDocumentJSON() {
       return exportMarkdownJSON(getInstance(), readMarkdown())
