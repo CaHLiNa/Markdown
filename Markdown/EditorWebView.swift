@@ -931,12 +931,16 @@ struct EditorWebView: NSViewRepresentable {
         func renderedHTML(completion: @escaping (Result<String, Error>) -> Void) {
             let script = """
             (() => {
+                let renderedHTML = '';
                 if (typeof window.getRenderedHTML === 'function') {
-                    return window.getRenderedHTML();
+                    renderedHTML = window.getRenderedHTML();
+                    if (typeof renderedHTML === 'string' && renderedHTML.trim().length > 0) {
+                        return renderedHTML;
+                    }
                 }
 
-                const root = document.querySelector('.md-editor__wysiwyg .ProseMirror');
-                return root ? root.innerHTML : '';
+                const root = document.querySelector('.vditor-wysiwyg, .vditor-ir, .vditor-sv');
+                return root ? root.innerHTML : renderedHTML;
             })();
             """
 
@@ -961,12 +965,16 @@ struct EditorWebView: NSViewRepresentable {
         ) {
             let script = """
             (() => {
+                let renderedHTML = '';
                 if (typeof window.getRenderedHTML === 'function') {
-                    return window.getRenderedHTML();
+                    renderedHTML = window.getRenderedHTML();
+                    if (typeof renderedHTML === 'string' && renderedHTML.trim().length > 0) {
+                        return renderedHTML;
+                    }
                 }
 
-                const root = document.querySelector('.md-editor__wysiwyg .ProseMirror');
-                return root ? root.innerHTML : '';
+                const root = document.querySelector('.vditor-wysiwyg, .vditor-ir, .vditor-sv');
+                return root ? root.innerHTML : renderedHTML;
             })();
             """
 

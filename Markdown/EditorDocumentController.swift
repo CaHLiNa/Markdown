@@ -1513,26 +1513,6 @@ final class EditorDocumentController: ObservableObject {
     }
 
     func exportHTMLDocument() {
-        exportDocument(as: .html)
-    }
-
-    func exportDocument() {
-        exportDocument(as: defaultExportFormat)
-    }
-
-    func exportPDFDocument() {
-        exportDocument(as: .pdf)
-    }
-
-    func printDocument() {
-        do {
-            try editorController.printDocument()
-        } catch {
-            presentError(error, title: "无法打印文档")
-        }
-    }
-
-    private func exportDocument(as format: EditorExportFormat) {
         prepareStrictSynchronizedEditorSnapshot { [weak self] result in
             Task { @MainActor in
                 guard let self else {
@@ -1544,15 +1524,16 @@ final class EditorDocumentController: ObservableObject {
                     do {
                         let resolvedRequest = try MarkdownExportService.resolveExportRequest(
                             markdown: strictSnapshot.snapshot.markdown,
-                            requestedFormat: format,
+                            requestedFormat: .html,
                             documentTitle: self.exportBaseName,
                             settings: self.exportSettings,
                             presets: self.exportPresets,
                             appearanceMode: self.appearanceMode,
                             interfaceStyle: self.effectiveInterfaceStyle
                         )
+
                         let panel = NSSavePanel()
-                        panel.allowedContentTypes = [resolvedRequest.format.contentType]
+                        panel.allowedContentTypes = [MarkdownFileService.htmlContentType]
                         panel.canCreateDirectories = true
                         panel.nameFieldStringValue = resolvedRequest.suggestedFilename
                         panel.directoryURL = self.preferredExportDirectoryURL()
@@ -1564,82 +1545,117 @@ final class EditorDocumentController: ObservableObject {
 
                         let destinationURL = MarkdownFileService.normalizedExportURL(
                             from: selectedURL,
-                            contentType: resolvedRequest.format.contentType
+                            contentType: MarkdownFileService.htmlContentType
                         )
-                        self.performResolvedExport(
-                            strictSnapshot.snapshot,
-                            request: resolvedRequest,
-                            destinationURL: destinationURL
+
+                        let snapshot = strictSnapshot.snapshot
+                        let document = MarkdownFileService.renderedHTMLDocument(
+                            title: self.currentTitle,
+                            bodyHTML: snapshot.renderedHTML ?? "",
+                            theme: resolvedRequest.resolvedTheme,
+                            baseURL: snapshot.documentBaseURL
                         )
+
+                        do {
+                            try MarkdownFileService.writeHTMLDocument(document, to: destinationURL)
+                            self.finalizeExport(at: destinationURL)
+                        } catch {
+                            self.presentError(error, title: "无法导出 HTML")
+                        }
                     } catch {
-                        self.presentError(error, title: "无法导出 \(format.rawValue)")
+                        self.presentError(error, title: "无法导出 HTML")
                     }
                 case .failure(let error):
-                    self.presentError(error, title: "无法导出 \(format.rawValue)")
+                    self.presentError(error, title: "无法导出 HTML")
                 }
             }
         }
     }
 
-    private func performResolvedExport(
+    func exportDocument() {
+        switch defaultExportFormat {
+        case .html:
+            exportHTMLDocument()
+        case .pdf:
+            exportPDFDocument()
+        }
+    }
+
+    func exportPDFDocument() {
+        prepareStrictPDFData { [weak self] pdfPreparationResult in
+            Task { @MainActor in
+                guard let self else {
+                    return
+                }
+
+                switch pdfPreparationResult {
+                case .success(let data):
+                    let panel = NSSavePanel()
+                    panel.allowedContentTypes = [MarkdownFileService.pdfContentType]
+                    panel.canCreateDirectories = true
+                    panel.nameFieldStringValue = "\(self.exportBaseName).pdf"
+                    panel.directoryURL = self.preferredExportDirectoryURL()
+                    panel.prompt = "导出"
+
+                    guard panel.runModal() == .OK, let selectedURL = panel.url else {
+                        return
+                    }
+
+                    let destinationURL = MarkdownFileService.normalizedExportURL(
+                        from: selectedURL,
+                        contentType: MarkdownFileService.pdfContentType
+                    )
+
+                    do {
+                        try MarkdownFileService.writePDF(data, to: destinationURL)
+                        self.finalizeExport(at: destinationURL)
+                    } catch {
+                        self.presentError(error, title: "无法导出 PDF")
+                    }
+
+                case .failure(let error):
+                    self.presentError(error, title: "无法导出 PDF")
+                }
+            }
+        }
+    }
+
+    func printDocument() {
+        do {
+            try editorController.printDocument()
+        } catch {
+            presentError(error, title: "无法打印文档")
+        }
+    }
+
+    private func prepareResolvedPDFData(
         _ snapshot: EditorSynchronizedSnapshot,
         request: ResolvedExportRequest,
-        destinationURL: URL
+        completion: @escaping (Result<Data, Error>) -> Void
     ) {
         let bodyHTML = snapshot.renderedHTML ?? MarkdownFileService.fallbackRenderedHTMLBody(for: snapshot.markdown)
 
-        switch request.format {
-        case .html:
-            do {
-                try MarkdownExportService.writeHTMLPackage(
-                    bodyHTML: bodyHTML,
-                    destinationHTMLURL: destinationURL,
-                    documentTitle: editableCurrentTitle,
-                    theme: request.resolvedTheme,
-                    documentBaseURL: snapshot.documentBaseURL
-                )
-                finalizeExport(at: destinationURL)
-            } catch {
-                presentError(error, title: "无法导出 HTML")
-            }
-        case .pdf:
-            do {
-                let temporaryHTMLURL = try MarkdownExportService.createTemporaryHTMLPackage(
-                    bodyHTML: bodyHTML,
-                    documentTitle: editableCurrentTitle,
-                    theme: request.resolvedTheme,
-                    documentBaseURL: snapshot.documentBaseURL,
-                    printOptions: request.pdfOptions
-                )
-                let cleanupDirectoryURL = temporaryHTMLURL.deletingLastPathComponent()
+        do {
+            let temporaryHTMLURL = try MarkdownExportService.createTemporaryHTMLPackage(
+                bodyHTML: bodyHTML,
+                documentTitle: editableCurrentTitle,
+                theme: request.resolvedTheme,
+                documentBaseURL: snapshot.documentBaseURL,
+                printOptions: request.pdfOptions
+            )
+            let cleanupDirectoryURL = temporaryHTMLURL.deletingLastPathComponent()
 
-                pdfExportRenderer.renderPDF(
-                    from: temporaryHTMLURL,
-                    options: request.pdfOptions ?? .defaultValue
-                ) { [weak self] renderResult in
-                    Task { @MainActor in
-                        defer { try? FileManager.default.removeItem(at: cleanupDirectoryURL) }
-
-                        guard let self else {
-                            return
-                        }
-
-                        switch renderResult {
-                        case .success(let pdfData):
-                            do {
-                                try MarkdownFileService.writePDF(pdfData, to: destinationURL)
-                                self.finalizeExport(at: destinationURL)
-                            } catch {
-                                self.presentError(error, title: "无法导出 PDF")
-                            }
-                        case .failure(let error):
-                            self.presentError(error, title: "无法导出 PDF")
-                        }
-                    }
+            pdfExportRenderer.renderPDF(
+                from: temporaryHTMLURL,
+                options: request.pdfOptions ?? .defaultValue
+            ) { renderResult in
+                Task { @MainActor in
+                    defer { try? FileManager.default.removeItem(at: cleanupDirectoryURL) }
+                    completion(renderResult)
                 }
-            } catch {
-                presentError(error, title: "无法导出 PDF")
             }
+        } catch {
+            completion(.failure(error))
         }
     }
 
@@ -1948,16 +1964,35 @@ final class EditorDocumentController: ObservableObject {
     }
 
     func prepareStrictPDFData(completion: @escaping (Result<Data, Error>) -> Void) {
-        prepareStrictSynchronizedEditorSnapshot(includeRenderedHTML: false) { [weak self] result in
-            guard let self else {
-                return
-            }
+        prepareStrictSynchronizedEditorSnapshot { [weak self] result in
+            Task { @MainActor in
+                guard let self else {
+                    return
+                }
 
-            switch result {
-            case .success(let strictSnapshot):
-                self.exportPDFData(expectedGeneration: strictSnapshot.generation, completion: completion)
-            case .failure(let error):
-                completion(.failure(error))
+                switch result {
+                case .success(let strictSnapshot):
+                    do {
+                        let resolvedRequest = try MarkdownExportService.resolveExportRequest(
+                            markdown: strictSnapshot.snapshot.markdown,
+                            requestedFormat: .pdf,
+                            documentTitle: self.exportBaseName,
+                            settings: self.exportSettings,
+                            presets: self.exportPresets,
+                            appearanceMode: self.appearanceMode,
+                            interfaceStyle: self.effectiveInterfaceStyle
+                        )
+                        self.prepareResolvedPDFData(
+                            strictSnapshot.snapshot,
+                            request: resolvedRequest,
+                            completion: completion
+                        )
+                    } catch {
+                        completion(.failure(error))
+                    }
+                case .failure(let error):
+                    completion(.failure(error))
+                }
             }
         }
     }
