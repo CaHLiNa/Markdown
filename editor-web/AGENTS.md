@@ -13,7 +13,7 @@
 - 涉及 bug、测试失败、构建失败、同步异常时先用 `systematic-debugging`。
 - 查询 Vite、TypeScript、DOM API、Web Selection、Vditor 等文档时用 `documentation-lookup`。
 - 涉及交互、工具栏、上下文菜单、页面样式、编辑器 UI 体验时用 `frontend-design`。
-- 需要真实浏览器复现、截图、操作页面时用 `playwright` 或 `agent-browser`。
+- 需要真实浏览器复现、截图、操作页面时用 `agent-browser`。
 - 完成前必须用 `verification-before-completion`。
 
 ## 本目录的典型任务判断

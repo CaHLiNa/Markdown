@@ -79,11 +79,11 @@ xcodebuild -project Markdown.xcodeproj -scheme Markdown -destination 'platform=m
 - `documentation-lookup`
 - `xcode-build`
 
-如需浏览器交互复现，可额外使用 `playwright` 或 `agent-browser`。
+如需浏览器交互复现，可额外使用 `agent-browser`。
 
 ## 文档与计划
 
-- 多步骤实现前使用 `writing-plans`。
+- 多步骤实现前开了plan模式才使用 `writing-plans`。
 - 任务较大、工具调用较多时，可使用 `planning-with-files`。
 - 执行既有实施计划时，可使用 `executing-plans` 或 `subagent-driven-development`。
 
