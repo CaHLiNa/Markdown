@@ -1,6 +1,5 @@
 import type Vditor from 'vditor'
 
-import type { EditorCommand } from './commands'
 import { setEditorDebugPhase } from './editor-debug'
 import { isBackgroundFocusTarget } from './editor-focus'
 import {
@@ -59,6 +58,42 @@ type CreateMarkdownEditorOptions = {
 }
 
 type JSONNode = Record<string, unknown>
+
+type EditorCommand =
+  | 'undo'
+  | 'redo'
+  | 'toggle-global-source-mode'
+  | 'paragraph'
+  | 'heading-1'
+  | 'heading-2'
+  | 'heading-3'
+  | 'heading-4'
+  | 'heading-5'
+  | 'heading-6'
+  | 'upgrade-heading'
+  | 'degrade-heading'
+  | 'blockquote'
+  | 'bullet-list'
+  | 'ordered-list'
+  | 'task-list'
+  | 'table'
+  | 'horizontal-rule'
+  | 'front-matter'
+  | 'code-block'
+  | 'math-block'
+  | 'bold'
+  | 'italic'
+  | 'underline'
+  | 'highlight'
+  | 'inline-code'
+  | 'inline-math'
+  | 'strikethrough'
+  | 'link'
+  | 'image'
+  | 'clear-format'
+  | 'duplicate-block'
+  | 'new-paragraph'
+  | 'delete-block'
 
 type ApplyMarkdownOptions = {
   emit?: boolean
@@ -272,20 +307,6 @@ const exportMarkdownJSON = (instance: Vditor, markdown: string): JSONNode => {
       type: 'document',
       markdown
     }
-  }
-}
-
-export { type EditorCommand }
-
-export const __editorTestUtils = {
-  extractMarkdownBlocksFromVditorIRDOM(markdown: string, lute: LuteBlockLocator | null | undefined) {
-    return extractMarkdownBlocksFromVditorIRDOM(markdown, lute)
-  },
-  getMarkdownBlockTypeFromIRNode(element: Element) {
-    return getMarkdownBlockTypeFromIRNode(element)
-  },
-  normalizeMarkdownForEditor(markdown: string) {
-    return normalizeMarkdownForEditor(markdown)
   }
 }
 

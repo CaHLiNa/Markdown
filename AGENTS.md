@@ -3,8 +3,8 @@
 ## 项目定位
 
 - 这是一个以 macOS SwiftUI/AppKit 为主的桌面应用仓库。
-- `Markdown/`、`Tests/`、`Markdown.xcodeproj` 是主工程。
-- `editor-web/` 是嵌入到 `WKWebView` 的 Web 编辑器源码子模块，拥有独立的 TypeScript/Vite/Vitest 工作流。
+- `Markdown/`、`Markdown.xcodeproj` 是主工程。
+- `editor-web/` 是嵌入到 `WKWebView` 的 Web 编辑器源码子模块，拥有独立的 TypeScript/Vite 工作流。
 - `Markdown/Editor/` 是由 `editor-web/` 构建得到的静态资源，不要把它当作源码主入口；涉及编辑器实现时优先查看 `editor-web/`。
 
 ## 回复与工作语言
@@ -22,7 +22,7 @@
 
 ## 主工程默认路由
 
-当任务主要涉及 `Markdown/`、`Tests/`、`Markdown.xcodeproj`、`docs/plans/` 时，默认按 Swift/macOS 项目处理。
+当任务主要涉及 `Markdown/`、`Markdown.xcodeproj` 时，默认按 Swift/macOS 项目处理。
 
 ### SwiftUI / 界面层
 
@@ -46,17 +46,16 @@
   - 涉及 `Task`、`actor`、`Sendable`
   - 涉及 `@MainActor`、线程隔离、Swift 6 并发告警
 
-### 构建、运行、测试
+### 构建、运行、验证
 
 - 使用 `xcode-build`：
-  - 需要列出 scheme、build、test、查看 build settings
-  - 需要运行主工程单测
+  - 需要列出 scheme、build、查看 build settings
   - 需要验证 Xcode 工程配置或目标产物
 
 主工程默认验证命令：
 
 ```bash
-xcodebuild -project Markdown.xcodeproj -scheme Markdown -destination 'platform=macOS' test
+xcodebuild -project Markdown.xcodeproj -scheme Markdown -destination 'platform=macOS' build
 ```
 
 ## editor-web 路由

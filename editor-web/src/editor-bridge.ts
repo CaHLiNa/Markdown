@@ -87,7 +87,7 @@ const renderFallbackHTML = (markdown: string) => {
   return `<pre>${escapeHtml(markdown)}</pre>`
 }
 
-export type EditorBridgeController = {
+type EditorBridgeController = {
   readonly currentMarkdown: string
   readonly currentAppearance: EditorPresentation
   beginEditorSession: () => number

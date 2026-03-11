@@ -1,6 +1,6 @@
 import type { EditorPresentation } from './editor-presentation'
 
-export type EditorRuntimeLute = {
+type EditorRuntimeLute = {
   SetChineseParagraphBeginningSpace?: (enabled: boolean) => void
   SetIndentCodeBlock?: (enabled: boolean) => void
   SetInlineMath?: (enabled: boolean) => void

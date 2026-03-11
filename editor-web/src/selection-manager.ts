@@ -5,7 +5,7 @@ export type SelectionOffsets = {
   head: number
 }
 
-export type DOMPoint = {
+type DOMPoint = {
   node: Node
   offset: number
 }
@@ -88,7 +88,7 @@ const focusPointIntoView = (node: Node | null) => {
   })
 }
 
-export const applySelectionPoints = (anchorPoint: DOMPoint | null, headPoint: DOMPoint | null) => {
+const applySelectionPoints = (anchorPoint: DOMPoint | null, headPoint: DOMPoint | null) => {
   if (!anchorPoint || !headPoint) {
     return false
   }
@@ -208,7 +208,7 @@ const measureTextOffsetWithinElement = (
   return resolved ? total : null
 }
 
-export const resolveTextPointInElement = (
+const resolveTextPointInElement = (
   element: Element,
   offset: number,
   { treatLineBreaksAsNewline = false }: TextPointOptions = {}

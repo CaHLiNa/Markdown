@@ -3,7 +3,7 @@ export type MarkdownSelection = {
   head: number
 }
 
-export type MarkdownReplacementResult = {
+type MarkdownReplacementResult = {
   markdown: string
   selection: MarkdownSelection
 }

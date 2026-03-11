@@ -1,4 +1,4 @@
-export type EditorTheme = 'light' | 'dark' | 'sepia'
+type EditorTheme = 'light' | 'dark' | 'sepia'
 
 export type EditorPresentation = {
   theme: EditorTheme

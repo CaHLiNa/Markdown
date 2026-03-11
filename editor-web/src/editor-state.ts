@@ -1,4 +1,4 @@
-export type EditorBlockType =
+type EditorBlockType =
   | 'heading'
   | 'paragraph'
   | 'blockquote'
@@ -8,12 +8,12 @@ export type EditorBlockType =
   | 'math'
   | 'hr'
 
-export type EditorSelectionState = {
+type EditorSelectionState = {
   anchor: number
   head: number
 }
 
-export type EditorActiveBlockState = {
+type EditorActiveBlockState = {
   type: EditorBlockType
   text: string
   from: number
