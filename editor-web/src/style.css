@@ -204,6 +204,14 @@ body {
   margin: 0 0 0.48rem;
 }
 
+@supports (contain: paint) {
+  /* Isolate repaints per block so long documents don't invalidate the full editor on scroll. */
+  .vditor-ir [data-block='0'],
+  .vditor-reset [data-block='0'] {
+    contain: paint;
+  }
+}
+
 .vditor-ir p,
 .vditor-ir li,
 .vditor-reset p,
