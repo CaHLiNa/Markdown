@@ -129,6 +129,20 @@ struct EditorEvaluatedResult<Value> {
     let generation: Int?
 }
 
+func normalizedRenderedHTMLForExport(_ renderedHTML: String?, markdown: String) -> String {
+    if let renderedHTML,
+       !renderedHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
+        return renderedHTML
+    }
+
+    guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        return ""
+    }
+
+    return MarkdownFileService.fallbackRenderedHTMLBody(for: markdown)
+}
+
 @MainActor
 private final class DeferredActionScheduler {
     private let delay: TimeInterval
@@ -1549,9 +1563,13 @@ final class EditorDocumentController: ObservableObject {
                         )
 
                         let snapshot = strictSnapshot.snapshot
+                        let bodyHTML = normalizedRenderedHTMLForExport(
+                            snapshot.renderedHTML,
+                            markdown: snapshot.markdown
+                        )
                         let document = MarkdownFileService.renderedHTMLDocument(
                             title: self.currentTitle,
-                            bodyHTML: snapshot.renderedHTML ?? "",
+                            bodyHTML: bodyHTML,
                             theme: resolvedRequest.resolvedTheme,
                             baseURL: snapshot.documentBaseURL
                         )
@@ -1633,7 +1651,7 @@ final class EditorDocumentController: ObservableObject {
         request: ResolvedExportRequest,
         completion: @escaping (Result<Data, Error>) -> Void
     ) {
-        let bodyHTML = snapshot.renderedHTML ?? MarkdownFileService.fallbackRenderedHTMLBody(for: snapshot.markdown)
+        let bodyHTML = normalizedRenderedHTMLForExport(snapshot.renderedHTML, markdown: snapshot.markdown)
 
         do {
             let temporaryHTMLURL = try MarkdownExportService.createTemporaryHTMLPackage(
@@ -1946,7 +1964,10 @@ final class EditorDocumentController: ObservableObject {
                                 StrictEditorSynchronizedSnapshot(
                                     snapshot: EditorSynchronizedSnapshot(
                                         markdown: markdown.value,
-                                        renderedHTML: renderedHTML.value,
+                                        renderedHTML: normalizedRenderedHTMLForExport(
+                                            renderedHTML.value,
+                                            markdown: markdown.value
+                                        ),
                                         documentBaseURL: documentBaseURL
                                     ),
                                     generation: markdown.generation ?? renderedHTML.generation
@@ -2029,7 +2050,10 @@ final class EditorDocumentController: ObservableObject {
                             .success(
                                 EditorSynchronizedSnapshot(
                                     markdown: markdown,
-                                    renderedHTML: renderedHTML,
+                                    renderedHTML: normalizedRenderedHTMLForExport(
+                                        renderedHTML,
+                                        markdown: markdown
+                                    ),
                                     documentBaseURL: documentBaseURL
                                 )
                             )
@@ -2048,23 +2072,6 @@ final class EditorDocumentController: ObservableObject {
                 }
             }
         }
-    }
-
-    private func exportPDFData(
-        expectedGeneration: Int?,
-        completion: @escaping (Result<Data, Error>) -> Void
-    ) {
-        if let exportPDFDataOverride {
-            exportPDFDataOverride(completion)
-            return
-        }
-
-        if let expectedGeneration {
-            editorController.exportPDFStrict(expectedGeneration: expectedGeneration, completion: completion)
-            return
-        }
-
-        editorController.exportPDF(completion: completion)
     }
 
     @discardableResult

@@ -1102,7 +1102,6 @@ struct EditorWebView: NSViewRepresentable {
             completion: @escaping (Result<Data, Error>) -> Void
         ) {
             let configuration = WKPDFConfiguration()
-            configuration.rect = context.webView.bounds
 
             context.webView.createPDF(configuration: configuration) { [weak self] pdfResult in
                 guard let self,

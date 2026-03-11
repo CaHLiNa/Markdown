@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		23B9FC9EB50F2E79CBF35A70 /* MarkdownHTMLExportPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF085DAFD21BE140AB207CB8 /* MarkdownHTMLExportPackageTests.swift */; };
+		2A71054A27565301B765F77C /* EditorDocumentControllerExportSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35F0D9C99B0DA95FEE22DD10 /* EditorDocumentControllerExportSnapshotTests.swift */; };
 		56C9AD20C2485A2B01976D99 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 355EFAE4B0E3CD10198CFC7C /* Cocoa.framework */; };
 		6F24463E5099B79F75C4456C /* MarkdownPDFRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E4ABDB0EFB6123120A62DA0 /* MarkdownPDFRendererTests.swift */; };
 		BEEFBA3AD2A61D44E6E328B6 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9AABC867B0E75322150332 /* TestSupport.swift */; };
@@ -27,6 +28,7 @@
 
 /* Begin PBXFileReference section */
 		2F762752EC41F42017A665E8 /* MarkdownExportServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MarkdownExportServiceTests.swift; sourceTree = "<group>"; };
+		35F0D9C99B0DA95FEE22DD10 /* EditorDocumentControllerExportSnapshotTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = EditorDocumentControllerExportSnapshotTests.swift; sourceTree = "<group>"; };
 		355EFAE4B0E3CD10198CFC7C /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		3EB369478A61131900508386 /* EditorPreferencesExportMigrationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = EditorPreferencesExportMigrationTests.swift; sourceTree = "<group>"; };
 		4A5D266360B0D65D40C12B04 /* MarkdownTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MarkdownTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -93,6 +95,7 @@
 		98E5D74745588059B642FA15 /* MarkdownTests */ = {
 			isa = PBXGroup;
 			children = (
+				35F0D9C99B0DA95FEE22DD10 /* EditorDocumentControllerExportSnapshotTests.swift */,
 				3EB369478A61131900508386 /* EditorPreferencesExportMigrationTests.swift */,
 				2F762752EC41F42017A665E8 /* MarkdownExportServiceTests.swift */,
 				BF085DAFD21BE140AB207CB8 /* MarkdownHTMLExportPackageTests.swift */,
@@ -241,6 +244,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2A71054A27565301B765F77C /* EditorDocumentControllerExportSnapshotTests.swift in Sources */,
 				FD797D89DF07AF636D353C70 /* EditorPreferencesExportMigrationTests.swift in Sources */,
 				DBA424D215343150EC64C97A /* MarkdownExportServiceTests.swift in Sources */,
 				23B9FC9EB50F2E79CBF35A70 /* MarkdownHTMLExportPackageTests.swift in Sources */,
