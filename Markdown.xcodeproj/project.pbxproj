@@ -7,10 +7,33 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		23B9FC9EB50F2E79CBF35A70 /* MarkdownHTMLExportPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF085DAFD21BE140AB207CB8 /* MarkdownHTMLExportPackageTests.swift */; };
+		56C9AD20C2485A2B01976D99 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 355EFAE4B0E3CD10198CFC7C /* Cocoa.framework */; };
+		6F24463E5099B79F75C4456C /* MarkdownPDFRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E4ABDB0EFB6123120A62DA0 /* MarkdownPDFRendererTests.swift */; };
+		BEEFBA3AD2A61D44E6E328B6 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9AABC867B0E75322150332 /* TestSupport.swift */; };
+		DBA424D215343150EC64C97A /* MarkdownExportServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F762752EC41F42017A665E8 /* MarkdownExportServiceTests.swift */; };
+		FD797D89DF07AF636D353C70 /* EditorPreferencesExportMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EB369478A61131900508386 /* EditorPreferencesExportMigrationTests.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		91E2D68E4A52CAD8D64E0A58 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8CF485922F5C458400A74B00 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8CF485992F5C458500A74B00;
+			remoteInfo = Markdown;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		2F762752EC41F42017A665E8 /* MarkdownExportServiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MarkdownExportServiceTests.swift; sourceTree = "<group>"; };
+		355EFAE4B0E3CD10198CFC7C /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		3EB369478A61131900508386 /* EditorPreferencesExportMigrationTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = EditorPreferencesExportMigrationTests.swift; sourceTree = "<group>"; };
+		4A5D266360B0D65D40C12B04 /* MarkdownTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MarkdownTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8CF4859A2F5C458500A74B00 /* Markdown.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Markdown.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9E4ABDB0EFB6123120A62DA0 /* MarkdownPDFRendererTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MarkdownPDFRendererTests.swift; sourceTree = "<group>"; };
+		AF9AABC867B0E75322150332 /* TestSupport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
+		BF085DAFD21BE140AB207CB8 /* MarkdownHTMLExportPackageTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MarkdownHTMLExportPackageTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -22,6 +45,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		85A622F7E6040B64D51E126C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				56C9AD20C2485A2B01976D99 /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8CF485972F5C458500A74B00 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -37,6 +68,8 @@
 			children = (
 				8CF4859C2F5C458500A74B00 /* Markdown */,
 				8CF4859B2F5C458500A74B00 /* Products */,
+				8ECF88D516D313D13DCC89F9 /* Frameworks */,
+				98E5D74745588059B642FA15 /* MarkdownTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -44,8 +77,38 @@
 			isa = PBXGroup;
 			children = (
 				8CF4859A2F5C458500A74B00 /* Markdown.app */,
+				4A5D266360B0D65D40C12B04 /* MarkdownTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		8ECF88D516D313D13DCC89F9 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				DDE5C981DD35640D33BDD38E /* OS X */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		98E5D74745588059B642FA15 /* MarkdownTests */ = {
+			isa = PBXGroup;
+			children = (
+				3EB369478A61131900508386 /* EditorPreferencesExportMigrationTests.swift */,
+				2F762752EC41F42017A665E8 /* MarkdownExportServiceTests.swift */,
+				BF085DAFD21BE140AB207CB8 /* MarkdownHTMLExportPackageTests.swift */,
+				9E4ABDB0EFB6123120A62DA0 /* MarkdownPDFRendererTests.swift */,
+				AF9AABC867B0E75322150332 /* TestSupport.swift */,
+			);
+			name = MarkdownTests;
+			path = MarkdownTests;
+			sourceTree = "<group>";
+		};
+		DDE5C981DD35640D33BDD38E /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				355EFAE4B0E3CD10198CFC7C /* Cocoa.framework */,
+			);
+			name = "OS X";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -71,6 +134,24 @@
 			productName = Markdown;
 			productReference = 8CF4859A2F5C458500A74B00 /* Markdown.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A69837E9F9AB548806C2DCE5 /* MarkdownTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CD6683F5E0A7252E1C51FF63 /* Build configuration list for PBXNativeTarget "MarkdownTests" */;
+			buildPhases = (
+				AB0A41A5088C72FA7893F6F7 /* Sources */,
+				85A622F7E6040B64D51E126C /* Frameworks */,
+				CC04CCE60E78312776E32E47 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				084B7C8976832E68B578EBAF /* PBXTargetDependency */,
+			);
+			name = MarkdownTests;
+			productName = MarkdownTests;
+			productReference = 4A5D266360B0D65D40C12B04 /* MarkdownTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -103,12 +184,20 @@
 			projectRoot = "";
 			targets = (
 				8CF485992F5C458500A74B00 /* Markdown */,
+				A69837E9F9AB548806C2DCE5 /* MarkdownTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		8CF485982F5C458500A74B00 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CC04CCE60E78312776E32E47 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -148,7 +237,28 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AB0A41A5088C72FA7893F6F7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FD797D89DF07AF636D353C70 /* EditorPreferencesExportMigrationTests.swift in Sources */,
+				DBA424D215343150EC64C97A /* MarkdownExportServiceTests.swift in Sources */,
+				23B9FC9EB50F2E79CBF35A70 /* MarkdownHTMLExportPackageTests.swift in Sources */,
+				6F24463E5099B79F75C4456C /* MarkdownPDFRendererTests.swift in Sources */,
+				BEEFBA3AD2A61D44E6E328B6 /* TestSupport.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		084B7C8976832E68B578EBAF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Markdown;
+			target = 8CF485992F5C458500A74B00 /* Markdown */;
+			targetProxy = 91E2D68E4A52CAD8D64E0A58 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		8CF485A32F5C458500A74B00 /* Debug */ = {
@@ -345,6 +455,48 @@
 			};
 			name = Release;
 		};
+		A5FBC961D7A1EA6B7C78613E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/../Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				PRODUCT_BUNDLE_IDENTIFIER = com.Markdown.MarkdownTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Markdown.app/Contents/MacOS/Markdown";
+				TEST_TARGET_NAME = Markdown;
+			};
+			name = Debug;
+		};
+		B381CBAAD2FE6C91EA345722 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/../Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.7;
+				PRODUCT_BUNDLE_IDENTIFIER = com.Markdown.MarkdownTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Markdown.app/Contents/MacOS/Markdown";
+				TEST_TARGET_NAME = Markdown;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -362,6 +514,15 @@
 			buildConfigurations = (
 				8CF485A62F5C458500A74B00 /* Debug */,
 				8CF485A72F5C458500A74B00 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CD6683F5E0A7252E1C51FF63 /* Build configuration list for PBXNativeTarget "MarkdownTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B381CBAAD2FE6C91EA345722 /* Release */,
+				A5FBC961D7A1EA6B7C78613E /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

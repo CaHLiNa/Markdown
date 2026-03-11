@@ -204,9 +204,6 @@ final class EditorDocumentController: ObservableObject {
     @Published var appearanceMode: EditorAppearanceMode {
         didSet { schedulePreferencesPersistence() }
     }
-    @Published var htmlExportTheme: MarkdownExportTheme {
-        didSet { schedulePreferencesPersistence() }
-    }
     @Published var isSidebarVisible: Bool {
         didSet { schedulePreferencesPersistence() }
     }
@@ -318,30 +315,13 @@ final class EditorDocumentController: ObservableObject {
     @Published var enableYAMLFrontMatter: Bool {
         didSet { schedulePreferencesPersistence() }
     }
-    @Published var defaultExportFormat: EditorExportFormat {
+    @Published var exportSettings: ExportSettings {
         didSet { schedulePreferencesPersistence() }
     }
-    @Published var exportDestinationMode: EditorExportDestinationMode {
+    @Published var exportPresets: [ExportPreset] {
         didSet { schedulePreferencesPersistence() }
     }
-    @Published var openExportedFile: Bool {
-        didSet { schedulePreferencesPersistence() }
-    }
-    @Published var revealExportedFileInFinder: Bool {
-        didSet { schedulePreferencesPersistence() }
-    }
-    @Published var pdfPaperSize: EditorPDFPaperSize {
-        didSet { schedulePreferencesPersistence() }
-    }
-    @Published var pdfMargin: Double {
-        didSet { schedulePreferencesPersistence() }
-    }
-    @Published var pdfPrintBackground: Bool {
-        didSet { schedulePreferencesPersistence() }
-    }
-    @Published var allowYAMLExportOverrides: Bool {
-        didSet { schedulePreferencesPersistence() }
-    }
+    @Published var selectedExportPresetID: UUID?
     @Published var startupBehavior: EditorStartupBehavior {
         didSet { schedulePreferencesPersistence() }
     }
@@ -401,6 +381,7 @@ final class EditorDocumentController: ObservableObject {
     @Published private(set) var revealRequest: EditorRevealRequest?
 
     let editorController = EditorWebView.Controller()
+    private let pdfExportRenderer = MarkdownPDFRenderer()
     private var untitledDocumentCount = 1
     private var lastExportDirectoryURL: URL?
     private var lastSelectedWorkspaceItemID: String?
@@ -439,7 +420,6 @@ final class EditorDocumentController: ObservableObject {
         }
         self.recentFiles = Array(Self.loadRecentFiles().prefix(preferences.recentFileLimit))
         self.appearanceMode = preferences.appearanceMode
-        self.htmlExportTheme = preferences.exportTheme
         self.isSidebarVisible = preferences.sidebarVisibility
         self.isFocusModeEnabled = preferences.focusMode
         self.isTypewriterModeEnabled = preferences.typewriterMode
@@ -477,14 +457,11 @@ final class EditorDocumentController: ObservableObject {
         self.enableMath = preferences.enableMath
         self.enableMermaid = preferences.enableMermaid
         self.enableYAMLFrontMatter = preferences.enableYAMLFrontMatter
-        self.defaultExportFormat = preferences.defaultExportFormat
-        self.exportDestinationMode = preferences.exportDestinationMode
-        self.openExportedFile = preferences.openExportedFile
-        self.revealExportedFileInFinder = preferences.revealExportedFileInFinder
-        self.pdfPaperSize = preferences.pdfPaperSize
-        self.pdfMargin = preferences.pdfMargin
-        self.pdfPrintBackground = preferences.pdfPrintBackground
-        self.allowYAMLExportOverrides = preferences.allowYAMLExportOverrides
+        self.exportSettings = preferences.exportSettings
+        self.exportPresets = preferences.exportPresets
+        self.selectedExportPresetID = preferences.exportSettings.activePresetID(
+            for: preferences.exportSettings.defaultFormat
+        )
         self.startupBehavior = preferences.startupBehavior
         self.recentFileLimit = preferences.recentFileLimit
         self.alwaysConfirmUnsavedChanges = preferences.alwaysConfirmUnsavedChanges
@@ -601,17 +578,21 @@ final class EditorDocumentController: ObservableObject {
         )
     }
 
-    var currentExportTheme: MarkdownRenderedTheme {
-        htmlExportTheme.resolvedTheme(
-            matching: appearanceMode,
-            style: effectiveInterfaceStyle
-        )
+    var defaultExportFormat: EditorExportFormat {
+        exportSettings.defaultFormat
+    }
+
+    var selectedExportPreset: ExportPreset? {
+        guard let selectedExportPresetID else {
+            return nil
+        }
+
+        return exportPresets.first(where: { $0.id == selectedExportPresetID })
     }
 
     var currentPreferences: EditorPreferences {
         EditorPreferences(
             appearanceMode: appearanceMode,
-            exportTheme: htmlExportTheme,
             tabBarVisibility: isTabStripVisible,
             sidebarVisibility: isSidebarVisible,
             typewriterMode: isTypewriterModeEnabled,
@@ -649,14 +630,8 @@ final class EditorDocumentController: ObservableObject {
             enableMath: enableMath,
             enableMermaid: enableMermaid,
             enableYAMLFrontMatter: enableYAMLFrontMatter,
-            defaultExportFormat: defaultExportFormat,
-            exportDestinationMode: exportDestinationMode,
-            openExportedFile: openExportedFile,
-            revealExportedFileInFinder: revealExportedFileInFinder,
-            pdfPaperSize: pdfPaperSize,
-            pdfMargin: pdfMargin,
-            pdfPrintBackground: pdfPrintBackground,
-            allowYAMLExportOverrides: allowYAMLExportOverrides,
+            exportSettings: exportSettings.normalized(using: exportPresets),
+            exportPresets: MarkdownExportService.normalizedPresets(exportPresets),
             startupBehavior: startupBehavior,
             recentFileLimit: recentFileLimit,
             alwaysConfirmUnsavedChanges: alwaysConfirmUnsavedChanges,
@@ -719,6 +694,116 @@ final class EditorDocumentController: ObservableObject {
 
     var canReplaceCurrentDocumentSearchMatch: Bool {
         documentSearchCurrentMatchIndex != nil && !documentSearchResults.isEmpty
+    }
+
+    func activeExportPreset(for format: EditorExportFormat) -> ExportPreset? {
+        let activePresetID = exportSettings.activePresetID(for: format)
+        let formatPresets = exportPresets.filter { $0.format == format }
+
+        if let activePresetID,
+           let activePreset = formatPresets.first(where: { $0.id == activePresetID })
+        {
+            return activePreset
+        }
+
+        return formatPresets.first
+    }
+
+    func updateExportSettings(_ update: (inout ExportSettings) -> Void) {
+        var settings = exportSettings
+        update(&settings)
+        exportSettings = settings.normalized(using: exportPresets)
+
+        if selectedExportPreset == nil {
+            selectedExportPresetID = exportSettings.activePresetID(for: exportSettings.defaultFormat)
+        }
+    }
+
+    func selectExportPreset(_ presetID: UUID?) {
+        selectedExportPresetID = presetID
+    }
+
+    func updateSelectedExportPreset(_ update: (inout ExportPreset) -> Void) {
+        guard let selectedExportPresetID,
+              let index = exportPresets.firstIndex(where: { $0.id == selectedExportPresetID })
+        else {
+            return
+        }
+
+        var presets = exportPresets
+        update(&presets[index])
+        exportPresets = normalizedExportPresets(presets)
+        exportSettings = exportSettings.normalized(using: exportPresets)
+        syncSelectedExportPreset(preferredID: selectedExportPresetID)
+    }
+
+    func addExportPreset(format: EditorExportFormat) {
+        let sourcePreset = activeExportPreset(for: format)
+        let baseName = "\(format.rawValue) 预设"
+        let formatCount = exportPresets.filter { $0.format == format }.count + 1
+        let existingKeys = Set(exportPresets.map(\.key))
+        let preset = ExportPreset(
+            key: MarkdownExportService.uniquePresetKey(
+                base: format.defaultPresetKeyBase,
+                existingKeys: existingKeys
+            ),
+            name: "\(baseName) \(formatCount)",
+            format: format,
+            theme: sourcePreset?.theme ?? .matchAppearance,
+            suggestedFileStem: "",
+            pdfOptions: format == .pdf ? (sourcePreset?.effectivePDFOptions ?? .defaultValue) : nil
+        )
+
+        exportPresets = normalizedExportPresets(exportPresets + [preset])
+        exportSettings = exportSettings.normalized(using: exportPresets)
+        selectedExportPresetID = preset.id
+    }
+
+    func duplicateSelectedExportPreset() {
+        guard let preset = selectedExportPreset else {
+            return
+        }
+
+        let duplicate = ExportPreset(
+            key: MarkdownExportService.uniquePresetKey(
+                base: "\(preset.key)-copy",
+                existingKeys: Set(exportPresets.map(\.key))
+            ),
+            name: "\(preset.name) 副本",
+            format: preset.format,
+            theme: preset.theme,
+            suggestedFileStem: preset.suggestedFileStem,
+            pdfOptions: preset.pdfOptions
+        )
+
+        exportPresets = normalizedExportPresets(exportPresets + [duplicate])
+        exportSettings = exportSettings.normalized(using: exportPresets)
+        selectedExportPresetID = duplicate.id
+    }
+
+    func deleteSelectedExportPreset() {
+        guard let selectedExportPresetID else {
+            return
+        }
+
+        let remainingPresets = exportPresets.filter { $0.id != selectedExportPresetID }
+        exportPresets = normalizedExportPresets(remainingPresets)
+        exportSettings = exportSettings.normalized(using: exportPresets)
+        syncSelectedExportPreset(preferredID: nil)
+    }
+
+    func setSelectedExportPresetAsActive() {
+        guard let preset = selectedExportPreset else {
+            return
+        }
+
+        exportSettings = exportSettings
+            .settingActivePresetID(preset.id, for: preset.format)
+            .normalized(using: exportPresets)
+    }
+
+    func isPresetActive(_ preset: ExportPreset) -> Bool {
+        exportSettings.activePresetID(for: preset.format) == preset.id
     }
 
     func openDocument() {
@@ -1428,22 +1513,26 @@ final class EditorDocumentController: ObservableObject {
     }
 
     func exportHTMLDocument() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [MarkdownFileService.htmlContentType]
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "\(exportBaseName).html"
-        panel.directoryURL = preferredExportDirectoryURL()
-        panel.prompt = "导出"
+        exportDocument(as: .html)
+    }
 
-        guard panel.runModal() == .OK, let selectedURL = panel.url else {
-            return
+    func exportDocument() {
+        exportDocument(as: defaultExportFormat)
+    }
+
+    func exportPDFDocument() {
+        exportDocument(as: .pdf)
+    }
+
+    func printDocument() {
+        do {
+            try editorController.printDocument()
+        } catch {
+            presentError(error, title: "无法打印文档")
         }
+    }
 
-        let destinationURL = MarkdownFileService.normalizedExportURL(
-            from: selectedURL,
-            contentType: MarkdownFileService.htmlContentType
-        )
-
+    private func exportDocument(as format: EditorExportFormat) {
         prepareStrictSynchronizedEditorSnapshot { [weak self] result in
             Task { @MainActor in
                 guard let self else {
@@ -1452,79 +1541,105 @@ final class EditorDocumentController: ObservableObject {
 
                 switch result {
                 case .success(let strictSnapshot):
-                    let snapshot = strictSnapshot.snapshot
-                    let document = MarkdownFileService.renderedHTMLDocument(
-                        title: self.currentTitle,
-                        bodyHTML: snapshot.renderedHTML ?? "",
-                        theme: self.currentExportTheme,
-                        baseURL: snapshot.documentBaseURL
-                    )
-
                     do {
-                        try MarkdownFileService.writeHTMLDocument(document, to: destinationURL)
-                        self.finalizeExport(at: destinationURL)
+                        let resolvedRequest = try MarkdownExportService.resolveExportRequest(
+                            markdown: strictSnapshot.snapshot.markdown,
+                            requestedFormat: format,
+                            documentTitle: self.exportBaseName,
+                            settings: self.exportSettings,
+                            presets: self.exportPresets,
+                            appearanceMode: self.appearanceMode,
+                            interfaceStyle: self.effectiveInterfaceStyle
+                        )
+                        let panel = NSSavePanel()
+                        panel.allowedContentTypes = [resolvedRequest.format.contentType]
+                        panel.canCreateDirectories = true
+                        panel.nameFieldStringValue = resolvedRequest.suggestedFilename
+                        panel.directoryURL = self.preferredExportDirectoryURL()
+                        panel.prompt = "导出"
+
+                        guard panel.runModal() == .OK, let selectedURL = panel.url else {
+                            return
+                        }
+
+                        let destinationURL = MarkdownFileService.normalizedExportURL(
+                            from: selectedURL,
+                            contentType: resolvedRequest.format.contentType
+                        )
+                        self.performResolvedExport(
+                            strictSnapshot.snapshot,
+                            request: resolvedRequest,
+                            destinationURL: destinationURL
+                        )
                     } catch {
-                        self.presentError(error, title: "无法导出 HTML")
+                        self.presentError(error, title: "无法导出 \(format.rawValue)")
                     }
                 case .failure(let error):
-                    self.presentError(error, title: "无法导出 HTML")
+                    self.presentError(error, title: "无法导出 \(format.rawValue)")
                 }
             }
         }
     }
 
-    func exportDocument() {
-        switch defaultExportFormat {
+    private func performResolvedExport(
+        _ snapshot: EditorSynchronizedSnapshot,
+        request: ResolvedExportRequest,
+        destinationURL: URL
+    ) {
+        let bodyHTML = snapshot.renderedHTML ?? MarkdownFileService.fallbackRenderedHTMLBody(for: snapshot.markdown)
+
+        switch request.format {
         case .html:
-            exportHTMLDocument()
-        case .pdf:
-            exportPDFDocument()
-        }
-    }
-
-    func exportPDFDocument() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [MarkdownFileService.pdfContentType]
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "\(exportBaseName).pdf"
-        panel.directoryURL = preferredExportDirectoryURL()
-        panel.prompt = "导出"
-
-        guard panel.runModal() == .OK, let selectedURL = panel.url else {
-            return
-        }
-
-        let destinationURL = MarkdownFileService.normalizedExportURL(
-            from: selectedURL,
-            contentType: MarkdownFileService.pdfContentType
-        )
-
-        prepareStrictPDFData { [weak self] pdfPreparationResult in
-            Task { @MainActor in
-                guard let self else {
-                    return
-                }
-
-                switch pdfPreparationResult {
-                case .success(let data):
-                    do {
-                        try MarkdownFileService.writePDF(data, to: destinationURL)
-                        self.finalizeExport(at: destinationURL)
-                    } catch {
-                        self.presentError(error, title: "无法导出 PDF")
-                    }
-                case .failure(let error):
-                    self.presentError(error, title: "无法导出 PDF")
-                }
+            do {
+                try MarkdownExportService.writeHTMLPackage(
+                    bodyHTML: bodyHTML,
+                    destinationHTMLURL: destinationURL,
+                    documentTitle: editableCurrentTitle,
+                    theme: request.resolvedTheme,
+                    documentBaseURL: snapshot.documentBaseURL
+                )
+                finalizeExport(at: destinationURL)
+            } catch {
+                presentError(error, title: "无法导出 HTML")
             }
-        }
-    }
+        case .pdf:
+            do {
+                let temporaryHTMLURL = try MarkdownExportService.createTemporaryHTMLPackage(
+                    bodyHTML: bodyHTML,
+                    documentTitle: editableCurrentTitle,
+                    theme: request.resolvedTheme,
+                    documentBaseURL: snapshot.documentBaseURL,
+                    printOptions: request.pdfOptions
+                )
+                let cleanupDirectoryURL = temporaryHTMLURL.deletingLastPathComponent()
 
-    func printDocument() {
-        do {
-            try editorController.printDocument()
-        } catch {
-            presentError(error, title: "无法打印文档")
+                pdfExportRenderer.renderPDF(
+                    from: temporaryHTMLURL,
+                    options: request.pdfOptions ?? .defaultValue
+                ) { [weak self] renderResult in
+                    Task { @MainActor in
+                        defer { try? FileManager.default.removeItem(at: cleanupDirectoryURL) }
+
+                        guard let self else {
+                            return
+                        }
+
+                        switch renderResult {
+                        case .success(let pdfData):
+                            do {
+                                try MarkdownFileService.writePDF(pdfData, to: destinationURL)
+                                self.finalizeExport(at: destinationURL)
+                            } catch {
+                                self.presentError(error, title: "无法导出 PDF")
+                            }
+                        case .failure(let error):
+                            self.presentError(error, title: "无法导出 PDF")
+                        }
+                    }
+                }
+            } catch {
+                presentError(error, title: "无法导出 PDF")
+            }
         }
     }
 
@@ -2745,8 +2860,30 @@ final class EditorDocumentController: ObservableObject {
         return currentTitle
     }
 
+    private func normalizedExportPresets(_ presets: [ExportPreset]) -> [ExportPreset] {
+        MarkdownExportService.normalizedPresets(presets)
+    }
+
+    private func syncSelectedExportPreset(preferredID: UUID?) {
+        if let preferredID,
+           exportPresets.contains(where: { $0.id == preferredID })
+        {
+            selectedExportPresetID = preferredID
+            return
+        }
+
+        if let activePresetID = exportSettings.activePresetID(for: exportSettings.defaultFormat),
+           exportPresets.contains(where: { $0.id == activePresetID })
+        {
+            selectedExportPresetID = activePresetID
+            return
+        }
+
+        selectedExportPresetID = exportPresets.first?.id
+    }
+
     private func preferredExportDirectoryURL() -> URL? {
-        switch exportDestinationMode {
+        switch exportSettings.destinationMode {
         case .askEveryTime, .sameAsDocument:
             return currentFileURL?.deletingLastPathComponent() ?? folderURL ?? lastExportDirectoryURL
         case .lastUsed:
@@ -2758,11 +2895,11 @@ final class EditorDocumentController: ObservableObject {
         lastExportDirectoryURL = destinationURL.deletingLastPathComponent()
         Self.persistLastExportDirectory(lastExportDirectoryURL)
 
-        if openExportedFile {
+        if exportSettings.openExportedFile {
             NSWorkspace.shared.open(destinationURL)
         }
 
-        if revealExportedFileInFinder {
+        if exportSettings.revealExportedFileInFinder {
             NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
         }
     }

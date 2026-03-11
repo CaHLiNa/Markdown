@@ -403,13 +403,51 @@ enum MarkdownFileService {
         title: String,
         bodyHTML: String,
         theme: MarkdownRenderedTheme = .light,
-        baseURL: URL? = nil
+        baseURL: URL? = nil,
+        printOptions: PDFExportOptions? = nil
     ) -> String {
         let escapedTitle = htmlEscaped(title)
         let palette = exportPalette(for: theme)
         let optionalBaseElement = baseURL.map {
             "  <base href=\"\(htmlEscaped($0.absoluteString))\">\n"
         } ?? ""
+        let printStyleBlock: String
+
+        if let printOptions {
+            let normalizedPrintOptions = printOptions.normalized
+            let colorAdjustmentRules = normalizedPrintOptions.printBackground
+                ? """
+                    * {
+                      -webkit-print-color-adjust: exact;
+                      print-color-adjust: exact;
+                    }
+                  """
+                : ""
+
+            printStyleBlock = """
+              @page {
+                size: \(normalizedPrintOptions.paperSize.rawValue);
+                margin: \(Int(normalizedPrintOptions.margin.rounded()))pt;
+              }
+
+              @media print {
+                html,
+                body {
+                  background: #ffffff !important;
+                }
+
+                .markdown-body {
+                  max-width: none;
+                  margin: 0;
+                  padding: 0;
+                }
+
+            \(colorAdjustmentRules)
+              }
+            """
+        } else {
+            printStyleBlock = ""
+        }
 
         return """
         <!doctype html>
@@ -491,6 +529,7 @@ enum MarkdownFileService {
               border-left: 4px solid \(palette.blockquoteBorderColor);
               color: \(palette.blockquoteTextColor);
             }
+        \(printStyleBlock)
           </style>
         </head>
         <body>

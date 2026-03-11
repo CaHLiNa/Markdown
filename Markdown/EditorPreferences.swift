@@ -93,7 +93,6 @@ enum EditorDocumentExtension: String, CaseIterable, Identifiable, Codable {
 
 struct EditorPreferences: Codable, Equatable {
     var appearanceMode: EditorAppearanceMode
-    var exportTheme: MarkdownExportTheme
     var tabBarVisibility: Bool
     var sidebarVisibility: Bool
     var typewriterMode: Bool
@@ -131,14 +130,8 @@ struct EditorPreferences: Codable, Equatable {
     var enableMath: Bool
     var enableMermaid: Bool
     var enableYAMLFrontMatter: Bool
-    var defaultExportFormat: EditorExportFormat
-    var exportDestinationMode: EditorExportDestinationMode
-    var openExportedFile: Bool
-    var revealExportedFileInFinder: Bool
-    var pdfPaperSize: EditorPDFPaperSize
-    var pdfMargin: Double
-    var pdfPrintBackground: Bool
-    var allowYAMLExportOverrides: Bool
+    var exportSettings: ExportSettings
+    var exportPresets: [ExportPreset]
     var startupBehavior: EditorStartupBehavior
     var recentFileLimit: Int
     var alwaysConfirmUnsavedChanges: Bool
@@ -150,6 +143,8 @@ struct EditorPreferences: Codable, Equatable {
         case appearanceMode
         case legacyEditorTheme = "editorTheme"
         case exportTheme
+        case exportSettings
+        case exportPresets
         case tabBarVisibility
         case sidebarVisibility
         case typewriterMode
@@ -187,6 +182,7 @@ struct EditorPreferences: Codable, Equatable {
         case enableMath
         case enableMermaid
         case enableYAMLFrontMatter
+        // Legacy export keys kept for migration.
         case defaultExportFormat
         case exportDestinationMode
         case openExportedFile
@@ -205,7 +201,6 @@ struct EditorPreferences: Codable, Equatable {
 
     init(
         appearanceMode: EditorAppearanceMode = .followSystem,
-        exportTheme: MarkdownExportTheme = .matchAppearance,
         tabBarVisibility: Bool = true,
         sidebarVisibility: Bool = true,
         typewriterMode: Bool = false,
@@ -243,14 +238,8 @@ struct EditorPreferences: Codable, Equatable {
         enableMath: Bool = true,
         enableMermaid: Bool = true,
         enableYAMLFrontMatter: Bool = true,
-        defaultExportFormat: EditorExportFormat = .html,
-        exportDestinationMode: EditorExportDestinationMode = .sameAsDocument,
-        openExportedFile: Bool = true,
-        revealExportedFileInFinder: Bool = false,
-        pdfPaperSize: EditorPDFPaperSize = .a4,
-        pdfMargin: Double = 24,
-        pdfPrintBackground: Bool = true,
-        allowYAMLExportOverrides: Bool = true,
+        exportSettings: ExportSettings? = nil,
+        exportPresets: [ExportPreset]? = nil,
         startupBehavior: EditorStartupBehavior = .emptyWindow,
         recentFileLimit: Int = 12,
         alwaysConfirmUnsavedChanges: Bool = true,
@@ -258,8 +247,13 @@ struct EditorPreferences: Codable, Equatable {
         inheritWorkspaceOnNewWindow: Bool = true,
         linkOpenRequiresCommand: Bool = true
     ) {
+        let normalizedExportPresets = MarkdownExportService.normalizedPresets(
+            exportPresets ?? ExportPreset.builtInDefaults()
+        )
+        let normalizedExportSettings = (exportSettings ?? ExportSettings())
+            .normalized(using: normalizedExportPresets)
+
         self.appearanceMode = appearanceMode
-        self.exportTheme = exportTheme
         self.tabBarVisibility = tabBarVisibility
         self.sidebarVisibility = sidebarVisibility
         self.typewriterMode = typewriterMode
@@ -297,14 +291,8 @@ struct EditorPreferences: Codable, Equatable {
         self.enableMath = enableMath
         self.enableMermaid = enableMermaid
         self.enableYAMLFrontMatter = enableYAMLFrontMatter
-        self.defaultExportFormat = defaultExportFormat
-        self.exportDestinationMode = exportDestinationMode
-        self.openExportedFile = openExportedFile
-        self.revealExportedFileInFinder = revealExportedFileInFinder
-        self.pdfPaperSize = pdfPaperSize
-        self.pdfMargin = pdfMargin
-        self.pdfPrintBackground = pdfPrintBackground
-        self.allowYAMLExportOverrides = allowYAMLExportOverrides
+        self.exportSettings = normalizedExportSettings
+        self.exportPresets = normalizedExportPresets
         self.startupBehavior = startupBehavior
         self.recentFileLimit = recentFileLimit
         self.alwaysConfirmUnsavedChanges = alwaysConfirmUnsavedChanges
@@ -328,9 +316,26 @@ struct EditorPreferences: Codable, Equatable {
             resolvedAppearance = decodedAppearance ?? .followSystem
         }
 
+        let legacyExportTheme = try container.decodeIfPresent(MarkdownExportTheme.self, forKey: .exportTheme) ?? .matchAppearance
+        let legacyPDFOptions = PDFExportOptions(
+            paperSize: try container.decodeIfPresent(EditorPDFPaperSize.self, forKey: .pdfPaperSize) ?? .a4,
+            margin: try container.decodeIfPresent(Double.self, forKey: .pdfMargin) ?? 24,
+            printBackground: try container.decodeIfPresent(Bool.self, forKey: .pdfPrintBackground) ?? true
+        )
+        let resolvedExportConfiguration = Self.resolveExportConfiguration(
+            decodedSettings: try container.decodeIfPresent(ExportSettings.self, forKey: .exportSettings),
+            decodedPresets: try container.decodeIfPresent([ExportPreset].self, forKey: .exportPresets),
+            legacyTheme: legacyExportTheme,
+            legacyDefaultFormat: try container.decodeIfPresent(EditorExportFormat.self, forKey: .defaultExportFormat) ?? .html,
+            legacyDestinationMode: try container.decodeIfPresent(EditorExportDestinationMode.self, forKey: .exportDestinationMode) ?? .sameAsDocument,
+            legacyOpenExportedFile: try container.decodeIfPresent(Bool.self, forKey: .openExportedFile) ?? true,
+            legacyRevealExportedFileInFinder: try container.decodeIfPresent(Bool.self, forKey: .revealExportedFileInFinder) ?? false,
+            legacyAllowYAMLOverrides: try container.decodeIfPresent(Bool.self, forKey: .allowYAMLExportOverrides) ?? true,
+            legacyPDFOptions: legacyPDFOptions
+        )
+
         self.init(
             appearanceMode: resolvedAppearance,
-            exportTheme: try container.decodeIfPresent(MarkdownExportTheme.self, forKey: .exportTheme) ?? .matchAppearance,
             tabBarVisibility: try container.decodeIfPresent(Bool.self, forKey: .tabBarVisibility) ?? true,
             sidebarVisibility: try container.decodeIfPresent(Bool.self, forKey: .sidebarVisibility) ?? true,
             typewriterMode: try container.decodeIfPresent(Bool.self, forKey: .typewriterMode) ?? false,
@@ -368,14 +373,8 @@ struct EditorPreferences: Codable, Equatable {
             enableMath: try container.decodeIfPresent(Bool.self, forKey: .enableMath) ?? true,
             enableMermaid: try container.decodeIfPresent(Bool.self, forKey: .enableMermaid) ?? true,
             enableYAMLFrontMatter: try container.decodeIfPresent(Bool.self, forKey: .enableYAMLFrontMatter) ?? true,
-            defaultExportFormat: try container.decodeIfPresent(EditorExportFormat.self, forKey: .defaultExportFormat) ?? .html,
-            exportDestinationMode: try container.decodeIfPresent(EditorExportDestinationMode.self, forKey: .exportDestinationMode) ?? .sameAsDocument,
-            openExportedFile: try container.decodeIfPresent(Bool.self, forKey: .openExportedFile) ?? true,
-            revealExportedFileInFinder: try container.decodeIfPresent(Bool.self, forKey: .revealExportedFileInFinder) ?? false,
-            pdfPaperSize: try container.decodeIfPresent(EditorPDFPaperSize.self, forKey: .pdfPaperSize) ?? .a4,
-            pdfMargin: try container.decodeIfPresent(Double.self, forKey: .pdfMargin) ?? 24,
-            pdfPrintBackground: try container.decodeIfPresent(Bool.self, forKey: .pdfPrintBackground) ?? true,
-            allowYAMLExportOverrides: try container.decodeIfPresent(Bool.self, forKey: .allowYAMLExportOverrides) ?? true,
+            exportSettings: resolvedExportConfiguration.settings,
+            exportPresets: resolvedExportConfiguration.presets,
             startupBehavior: try container.decodeIfPresent(EditorStartupBehavior.self, forKey: .startupBehavior) ?? .emptyWindow,
             recentFileLimit: clamped(try container.decodeIfPresent(Int.self, forKey: .recentFileLimit) ?? 12, minimum: 5, maximum: 50),
             alwaysConfirmUnsavedChanges: try container.decodeIfPresent(Bool.self, forKey: .alwaysConfirmUnsavedChanges) ?? true,
@@ -388,7 +387,8 @@ struct EditorPreferences: Codable, Equatable {
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(appearanceMode, forKey: .appearanceMode)
-        try container.encode(exportTheme, forKey: .exportTheme)
+        try container.encode(exportSettings, forKey: .exportSettings)
+        try container.encode(exportPresets, forKey: .exportPresets)
         try container.encode(tabBarVisibility, forKey: .tabBarVisibility)
         try container.encode(sidebarVisibility, forKey: .sidebarVisibility)
         try container.encode(typewriterMode, forKey: .typewriterMode)
@@ -426,14 +426,6 @@ struct EditorPreferences: Codable, Equatable {
         try container.encode(enableMath, forKey: .enableMath)
         try container.encode(enableMermaid, forKey: .enableMermaid)
         try container.encode(enableYAMLFrontMatter, forKey: .enableYAMLFrontMatter)
-        try container.encode(defaultExportFormat, forKey: .defaultExportFormat)
-        try container.encode(exportDestinationMode, forKey: .exportDestinationMode)
-        try container.encode(openExportedFile, forKey: .openExportedFile)
-        try container.encode(revealExportedFileInFinder, forKey: .revealExportedFileInFinder)
-        try container.encode(pdfPaperSize, forKey: .pdfPaperSize)
-        try container.encode(pdfMargin, forKey: .pdfMargin)
-        try container.encode(pdfPrintBackground, forKey: .pdfPrintBackground)
-        try container.encode(allowYAMLExportOverrides, forKey: .allowYAMLExportOverrides)
         try container.encode(startupBehavior, forKey: .startupBehavior)
         try container.encode(recentFileLimit, forKey: .recentFileLimit)
         try container.encode(alwaysConfirmUnsavedChanges, forKey: .alwaysConfirmUnsavedChanges)
@@ -443,6 +435,34 @@ struct EditorPreferences: Codable, Equatable {
     }
 
     static let defaultValue = EditorPreferences()
+
+    private static func resolveExportConfiguration(
+        decodedSettings: ExportSettings?,
+        decodedPresets: [ExportPreset]?,
+        legacyTheme: MarkdownExportTheme,
+        legacyDefaultFormat: EditorExportFormat,
+        legacyDestinationMode: EditorExportDestinationMode,
+        legacyOpenExportedFile: Bool,
+        legacyRevealExportedFileInFinder: Bool,
+        legacyAllowYAMLOverrides: Bool,
+        legacyPDFOptions: PDFExportOptions
+    ) -> (settings: ExportSettings, presets: [ExportPreset]) {
+        let presets = MarkdownExportService.normalizedPresets(
+            decodedPresets ?? ExportPreset.builtInDefaults(
+                theme: legacyTheme,
+                pdfOptions: legacyPDFOptions
+            )
+        )
+        let settings = (decodedSettings ?? ExportSettings(
+            defaultFormat: legacyDefaultFormat,
+            destinationMode: legacyDestinationMode,
+            openExportedFile: legacyOpenExportedFile,
+            revealExportedFileInFinder: legacyRevealExportedFileInFinder,
+            allowYAMLOverrides: legacyAllowYAMLOverrides
+        )).normalized(using: presets)
+
+        return (settings, presets)
+    }
 }
 
 private func clamped<T: Comparable>(_ value: T, minimum: T, maximum: T) -> T {
