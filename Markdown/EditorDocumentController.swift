@@ -119,6 +119,16 @@ struct EditorSynchronizedSnapshot: Equatable {
     let documentBaseURL: URL?
 }
 
+struct StrictEditorSynchronizedSnapshot {
+    let snapshot: EditorSynchronizedSnapshot
+    let generation: Int?
+}
+
+struct EditorEvaluatedResult<Value> {
+    let value: Value
+    let generation: Int?
+}
+
 @MainActor
 private final class DeferredActionScheduler {
     private let delay: TimeInterval
@@ -406,8 +416,10 @@ final class EditorDocumentController: ObservableObject {
     private var pendingWorkspaceSearchRefresh = false
     var unsavedChangesDecisionHandler: ((EditorTab) -> EditorUnsavedChangesDecision)?
     var saveTabOverride: ((UUID, @escaping (Bool) -> Void) -> Void)?
-    var currentEditorMarkdownOverride: ((@escaping (String) -> Void) -> Void)?
+    var currentEditorMarkdownOverride: ((@escaping (Result<String, Error>) -> Void) -> Void)?
     var renderedEditorHTMLOverride: ((@escaping (Result<String, Error>) -> Void) -> Void)?
+    var exportPDFDataOverride: ((@escaping (Result<Data, Error>) -> Void) -> Void)?
+    var workspaceSearchRefreshObserver: (() -> Void)?
 
     init(
         markdown: String? = nil,
@@ -1432,14 +1444,15 @@ final class EditorDocumentController: ObservableObject {
             contentType: MarkdownFileService.htmlContentType
         )
 
-        prepareSynchronizedEditorSnapshot { [weak self] result in
+        prepareStrictSynchronizedEditorSnapshot { [weak self] result in
             Task { @MainActor in
                 guard let self else {
                     return
                 }
 
                 switch result {
-                case .success(let snapshot):
+                case .success(let strictSnapshot):
+                    let snapshot = strictSnapshot.snapshot
                     let document = MarkdownFileService.renderedHTMLDocument(
                         title: self.currentTitle,
                         bodyHTML: snapshot.renderedHTML ?? "",
@@ -1486,32 +1499,19 @@ final class EditorDocumentController: ObservableObject {
             contentType: MarkdownFileService.pdfContentType
         )
 
-        prepareSynchronizedEditorSnapshot(includeRenderedHTML: false) { [weak self] snapshotResult in
+        prepareStrictPDFData { [weak self] pdfPreparationResult in
             Task { @MainActor in
                 guard let self else {
                     return
                 }
 
-                switch snapshotResult {
-                case .success:
-                    self.editorController.exportPDF { [weak self] result in
-                        Task { @MainActor in
-                            guard let self else {
-                                return
-                            }
-
-                            switch result {
-                            case .success(let data):
-                                do {
-                                    try MarkdownFileService.writePDF(data, to: destinationURL)
-                                    self.finalizeExport(at: destinationURL)
-                                } catch {
-                                    self.presentError(error, title: "无法导出 PDF")
-                                }
-                            case .failure(let error):
-                                self.presentError(error, title: "无法导出 PDF")
-                            }
-                        }
+                switch pdfPreparationResult {
+                case .success(let data):
+                    do {
+                        try MarkdownFileService.writePDF(data, to: destinationURL)
+                        self.finalizeExport(at: destinationURL)
+                    } catch {
+                        self.presentError(error, title: "无法导出 PDF")
                     }
                 case .failure(let error):
                     self.presentError(error, title: "无法导出 PDF")
@@ -1640,24 +1640,12 @@ final class EditorDocumentController: ObservableObject {
         tabs.first(where: { $0.id == id })
     }
 
-    private func currentEditorMarkdown(completion: @escaping (String) -> Void) {
+    private func currentEditorMarkdownResult(
+        strict: Bool,
+        completion: @escaping (Result<EditorEvaluatedResult<String>, Error>) -> Void
+    ) {
         if let currentEditorMarkdownOverride {
-            currentEditorMarkdownOverride { [weak self] markdown in
-                guard let self else {
-                    return
-                }
-
-                if self.currentMarkdown != markdown {
-                    self.currentMarkdown = markdown
-                }
-
-                completion(markdown)
-            }
-            return
-        }
-
-        editorController.currentMarkdown { [weak self] result in
-            Task { @MainActor in
+            currentEditorMarkdownOverride { [weak self] result in
                 guard let self else {
                     return
                 }
@@ -1667,10 +1655,104 @@ final class EditorDocumentController: ObservableObject {
                     if self.currentMarkdown != markdown {
                         self.currentMarkdown = markdown
                     }
-                    completion(markdown)
-                case .failure:
-                    completion(self.currentMarkdown)
+
+                    completion(.success(EditorEvaluatedResult(value: markdown, generation: nil)))
+                case .failure(let error):
+                    completion(.failure(error))
                 }
+            }
+            return
+        }
+
+        let handleSuccess: @MainActor (String, Int?) -> Void = { [weak self] markdown, generation in
+            guard let self else {
+                return
+            }
+
+            if self.currentMarkdown != markdown {
+                self.currentMarkdown = markdown
+            }
+
+            completion(.success(EditorEvaluatedResult(value: markdown, generation: generation)))
+        }
+
+        if strict {
+            editorController.currentMarkdownStrict { result in
+                Task { @MainActor in
+                    switch result {
+                    case .success(let evaluated):
+                        handleSuccess(evaluated.value, evaluated.generation)
+                    case .failure(let error):
+                        completion(.failure(error))
+                    }
+                }
+            }
+            return
+        }
+
+        editorController.currentMarkdown { result in
+            Task { @MainActor in
+                switch result {
+                case .success(let markdown):
+                    handleSuccess(markdown, nil)
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    private func currentEditorMarkdown(completion: @escaping (String) -> Void) {
+        currentEditorMarkdownResult(strict: false) { [weak self] result in
+            guard let self else {
+                return
+            }
+
+            switch result {
+            case .success(let evaluated):
+                completion(evaluated.value)
+            case .failure:
+                completion(self.currentMarkdown)
+            }
+        }
+    }
+
+    private func currentRenderedHTMLResult(
+        strict: Bool,
+        completion: @escaping (Result<EditorEvaluatedResult<String>, Error>) -> Void
+    ) {
+        if let renderedEditorHTMLOverride {
+            renderedEditorHTMLOverride { result in
+                switch result {
+                case .success(let renderedHTML):
+                    completion(.success(EditorEvaluatedResult(value: renderedHTML, generation: nil)))
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+            return
+        }
+
+        let respond: (Result<EditorWebViewEvaluatedValue<String>, Error>) -> Void = { result in
+            switch result {
+            case .success(let evaluated):
+                completion(.success(EditorEvaluatedResult(value: evaluated.value, generation: evaluated.generation)))
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+
+        if strict {
+            editorController.renderedHTMLStrict(completion: respond)
+            return
+        }
+
+        editorController.renderedHTML { result in
+            switch result {
+            case .success(let renderedHTML):
+                completion(.success(EditorEvaluatedResult(value: renderedHTML, generation: nil)))
+            case .failure(let error):
+                completion(.failure(error))
             }
         }
     }
@@ -1678,12 +1760,91 @@ final class EditorDocumentController: ObservableObject {
     private func currentRenderedHTML(
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        if let renderedEditorHTMLOverride {
-            renderedEditorHTMLOverride(completion)
-            return
+        currentRenderedHTMLResult(strict: false) { result in
+            switch result {
+            case .success(let evaluated):
+                completion(.success(evaluated.value))
+            case .failure(let error):
+                completion(.failure(error))
+            }
         }
+    }
 
-        editorController.renderedHTML(completion: completion)
+    func prepareStrictSynchronizedEditorSnapshot(
+        includeRenderedHTML: Bool = true,
+        completion: @escaping (Result<StrictEditorSynchronizedSnapshot, Error>) -> Void
+    ) {
+        currentEditorMarkdownResult(strict: true) { [weak self] markdownResult in
+            guard let self else {
+                return
+            }
+
+            let documentBaseURL = self.currentFileURL
+
+            switch markdownResult {
+            case .success(let markdown):
+                guard includeRenderedHTML else {
+                    completion(
+                        .success(
+                            StrictEditorSynchronizedSnapshot(
+                                snapshot: EditorSynchronizedSnapshot(
+                                    markdown: markdown.value,
+                                    renderedHTML: nil,
+                                    documentBaseURL: documentBaseURL
+                                ),
+                                generation: markdown.generation
+                            )
+                        )
+                    )
+                    return
+                }
+
+                self.currentRenderedHTMLResult(strict: true) { renderedHTMLResult in
+                    switch renderedHTMLResult {
+                    case .success(let renderedHTML):
+                        if let markdownGeneration = markdown.generation,
+                           let renderedGeneration = renderedHTML.generation,
+                           markdownGeneration != renderedGeneration
+                        {
+                            completion(.failure(EditorWebViewControllerError.pageNotReady))
+                            return
+                        }
+
+                        completion(
+                            .success(
+                                StrictEditorSynchronizedSnapshot(
+                                    snapshot: EditorSynchronizedSnapshot(
+                                        markdown: markdown.value,
+                                        renderedHTML: renderedHTML.value,
+                                        documentBaseURL: documentBaseURL
+                                    ),
+                                    generation: markdown.generation ?? renderedHTML.generation
+                                )
+                            )
+                        )
+                    case .failure(let error):
+                        completion(.failure(error))
+                    }
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func prepareStrictPDFData(completion: @escaping (Result<Data, Error>) -> Void) {
+        prepareStrictSynchronizedEditorSnapshot(includeRenderedHTML: false) { [weak self] result in
+            guard let self else {
+                return
+            }
+
+            switch result {
+            case .success(let strictSnapshot):
+                self.exportPDFData(expectedGeneration: strictSnapshot.generation, completion: completion)
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
     }
 
     func prepareSynchronizedEditorSnapshot(
@@ -1737,6 +1898,23 @@ final class EditorDocumentController: ObservableObject {
                 }
             }
         }
+    }
+
+    private func exportPDFData(
+        expectedGeneration: Int?,
+        completion: @escaping (Result<Data, Error>) -> Void
+    ) {
+        if let exportPDFDataOverride {
+            exportPDFDataOverride(completion)
+            return
+        }
+
+        if let expectedGeneration {
+            editorController.exportPDFStrict(expectedGeneration: expectedGeneration, completion: completion)
+            return
+        }
+
+        editorController.exportPDF(completion: completion)
     }
 
     @discardableResult
@@ -1857,7 +2035,7 @@ final class EditorDocumentController: ObservableObject {
         }
 
         configureWorkspaceMonitor(rootFolderURL: rootFolderURL)
-        refreshWorkspaceSearchResults()
+        scheduleWorkspaceSearchRefresh()
     }
 
     private func refreshWorkspace(expanding directoryURLs: [URL]) {
@@ -2255,6 +2433,7 @@ final class EditorDocumentController: ObservableObject {
 
     private func refreshWorkspaceSearchResults() {
         pendingWorkspaceSearchRefresh = false
+        workspaceSearchRefreshObserver?()
         let query = workspaceSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             workspaceSearchResults = []
@@ -2450,6 +2629,10 @@ final class EditorDocumentController: ObservableObject {
 
     private func scheduleWorkspaceSearchRefresh() {
         pendingWorkspaceSearchRefresh = true
+        guard persistenceSuspensionDepth == 0 else {
+            return
+        }
+
         workspaceSearchRefreshScheduler?.schedule()
     }
 

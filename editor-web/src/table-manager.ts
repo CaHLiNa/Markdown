@@ -94,6 +94,9 @@ export type TableManager = {
   destroy: () => void
 }
 
+export const DEFAULT_TABLE_SNIPPET =
+  '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1 | Value 2 |'
+
 const TABLE_TOOLBAR_MIN_WIDTH = 176
 const TABLE_GRID_MIN_SIZE = 8
 const TABLE_GRID_BUFFER = 4

@@ -8,7 +8,7 @@
 import SwiftUI
 import WebKit
 
-enum EditorWebViewControllerError: LocalizedError {
+enum EditorWebViewControllerError: LocalizedError, Equatable {
     case pageNotReady
     case renderedContentUnavailable
     case markdownUnavailable
@@ -23,6 +23,11 @@ enum EditorWebViewControllerError: LocalizedError {
             return "当前无法读取编辑器的 Markdown 内容。"
         }
     }
+}
+
+struct EditorWebViewEvaluatedValue<Value> {
+    let generation: Int
+    let value: Value
 }
 
 struct EditorReadyMessagePayload: Equatable {
@@ -169,7 +174,7 @@ struct EditorWebView: NSViewRepresentable {
         controller.runCommand(command, completion: completion)
     }
 
-    static func javaScriptStringLiteral(for string: String) -> String {
+    nonisolated static func javaScriptStringLiteral(for string: String) -> String {
         guard
             let data = try? JSONSerialization.data(withJSONObject: [string]),
             let jsonArray = String(data: data, encoding: .utf8)
@@ -618,7 +623,7 @@ struct EditorWebView: NSViewRepresentable {
         )
     }
 
-    struct SynchronizedPageState {
+    nonisolated struct SynchronizedPageState {
         var markdown: String?
         var documentBaseURL: URL?
         var presentation: Presentation?
@@ -632,7 +637,7 @@ struct EditorWebView: NSViewRepresentable {
         }
     }
 
-    struct PageLoadState {
+    nonisolated struct PageLoadState {
         private(set) var currentGeneration = 0
         private(set) var readyGeneration: Int?
 
@@ -672,12 +677,18 @@ struct EditorWebView: NSViewRepresentable {
         let data: Data
     }
 
-    @MainActor
-    final class Controller {
-        private struct ReadyWaiter {
+    // Keep this controller nonisolated so queued callback storage and deinit stay
+    // out of global-actor destruction paths; all call sites remain on the UI path.
+    nonisolated final class Controller {
+        nonisolated private struct ReadyPageContext {
+            let webView: WKWebView
+            let generation: Int
+        }
+
+        nonisolated private struct ReadyWaiter {
             let id: UUID
             let timeoutWorkItem: DispatchWorkItem
-            let completion: (Result<WKWebView, Error>) -> Void
+            let completion: (Result<ReadyPageContext, Error>) -> Void
         }
 
         private weak var webView: WKWebView?
@@ -685,12 +696,14 @@ struct EditorWebView: NSViewRepresentable {
         private var pendingScripts: [PendingScript] = []
         private var readyWaiters: [UUID: ReadyWaiter] = [:]
 
+        @MainActor
         func attach(webView: WKWebView) {
             self.webView = webView
 
             flushPendingScriptsIfPossible()
         }
 
+        @MainActor
         func detach(webView: WKWebView) {
             guard self.webView === webView else {
                 return
@@ -698,16 +711,19 @@ struct EditorWebView: NSViewRepresentable {
 
             self.webView = nil
             pageLoadState.resetReadyState()
-            pendingScripts.removeAll()
+            invalidatePendingScripts()
             resolveReadyWaiters(with: .failure(EditorWebViewControllerError.pageNotReady))
         }
 
+        @MainActor
         @discardableResult
         func prepareForPageLoad() -> Int {
             resolveReadyWaiters(with: .failure(EditorWebViewControllerError.pageNotReady))
+            invalidatePendingScripts()
             return pageLoadState.prepareForPageLoad()
         }
 
+        @MainActor
         @discardableResult
         func markPageReady(for generation: Int) -> Bool {
             guard pageLoadState.markReady(for: generation) else {
@@ -719,22 +735,32 @@ struct EditorWebView: NSViewRepresentable {
             return true
         }
 
+        @MainActor
         func acceptsMessage(for generation: Int) -> Bool {
             pageLoadState.acceptsMessage(for: generation)
         }
 
+        @MainActor
         var currentGeneration: Int {
             pageLoadState.currentGeneration
         }
 
+        @MainActor
         var debugIsPageReady: Bool {
             pageLoadState.isReady
         }
 
+        @MainActor
         var debugCurrentGeneration: Int {
             pageLoadState.currentGeneration
         }
 
+        @MainActor
+        var debugPendingScriptCount: Int {
+            pendingScripts.count
+        }
+
+        @MainActor
         func evaluateJavaScript(
             _ javaScript: String,
             completion: ((Result<Any?, Error>) -> Void)? = nil
@@ -754,6 +780,7 @@ struct EditorWebView: NSViewRepresentable {
             }
         }
 
+        @MainActor
         func loadMarkdown(
             _ markdown: String,
             completion: ((Result<Any?, Error>) -> Void)? = nil
@@ -767,6 +794,7 @@ struct EditorWebView: NSViewRepresentable {
             evaluateJavaScript(script, completion: completion)
         }
 
+        @MainActor
         func setDocumentBaseURL(
             _ documentBaseURL: URL?,
             completion: ((Result<Any?, Error>) -> Void)? = nil
@@ -780,6 +808,7 @@ struct EditorWebView: NSViewRepresentable {
             evaluateJavaScript(script, completion: completion)
         }
 
+        @MainActor
         func revealHeading(_ title: String, completion: ((Result<Any?, Error>) -> Void)? = nil) {
             let literal = EditorWebView.javaScriptStringLiteral(for: title)
             let script = """
@@ -790,6 +819,7 @@ struct EditorWebView: NSViewRepresentable {
             evaluateJavaScript(script, completion: completion)
         }
 
+        @MainActor
         func revealOffset(
             _ offset: Int,
             length: Int = 0,
@@ -805,6 +835,7 @@ struct EditorWebView: NSViewRepresentable {
             evaluateJavaScript(script, completion: completion)
         }
 
+        @MainActor
         func runCommand(
             _ command: String,
             completion: ((Result<Any?, Error>) -> Void)? = nil
@@ -818,6 +849,7 @@ struct EditorWebView: NSViewRepresentable {
             evaluateJavaScript(script, completion: completion)
         }
 
+        @MainActor
         func currentMarkdown(completion: @escaping (Result<String, Error>) -> Void) {
             let script = """
             (() => {
@@ -849,6 +881,53 @@ struct EditorWebView: NSViewRepresentable {
             }
         }
 
+        @MainActor
+        func currentMarkdownStrict(
+            completion: @escaping (Result<EditorWebViewEvaluatedValue<String>, Error>) -> Void
+        ) {
+            let script = """
+            (() => {
+                if (typeof window.getMarkdown === 'function') {
+                    return window.getMarkdown();
+                }
+
+                if (typeof window.getEditorState === 'function') {
+                    const state = window.getEditorState();
+                    return typeof state?.markdown === 'string' ? state.markdown : null;
+                }
+
+                return null;
+            })();
+            """
+
+            withReadyPageContext { [weak self] result in
+                guard let self else {
+                    completion(.failure(EditorWebViewControllerError.pageNotReady))
+                    return
+                }
+
+                switch result {
+                case .success(let context):
+                    self.evaluateJavaScript(script, in: context) { evaluationResult in
+                        switch evaluationResult {
+                        case .success(let value):
+                            guard let markdown = value as? String else {
+                                completion(.failure(EditorWebViewControllerError.markdownUnavailable))
+                                return
+                            }
+
+                            completion(.success(EditorWebViewEvaluatedValue(generation: context.generation, value: markdown)))
+                        case .failure(let error):
+                            completion(.failure(error))
+                        }
+                    }
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+        }
+
+        @MainActor
         func renderedHTML(completion: @escaping (Result<String, Error>) -> Void) {
             let script = """
             (() => {
@@ -876,17 +955,38 @@ struct EditorWebView: NSViewRepresentable {
             }
         }
 
-        func exportPDF(completion: @escaping (Result<Data, Error>) -> Void) {
-            withReadyWebView { result in
-                switch result {
-                case .success(let webView):
-                    let configuration = WKPDFConfiguration()
-                    configuration.rect = webView.bounds
+        @MainActor
+        func renderedHTMLStrict(
+            completion: @escaping (Result<EditorWebViewEvaluatedValue<String>, Error>) -> Void
+        ) {
+            let script = """
+            (() => {
+                if (typeof window.getRenderedHTML === 'function') {
+                    return window.getRenderedHTML();
+                }
 
-                    webView.createPDF(configuration: configuration) { pdfResult in
-                        switch pdfResult {
-                        case .success(let data):
-                            completion(.success(data))
+                const root = document.querySelector('.md-editor__wysiwyg .ProseMirror');
+                return root ? root.innerHTML : '';
+            })();
+            """
+
+            withReadyPageContext { [weak self] result in
+                guard let self else {
+                    completion(.failure(EditorWebViewControllerError.pageNotReady))
+                    return
+                }
+
+                switch result {
+                case .success(let context):
+                    self.evaluateJavaScript(script, in: context) { evaluationResult in
+                        switch evaluationResult {
+                        case .success(let value):
+                            guard let html = value as? String else {
+                                completion(.failure(EditorWebViewControllerError.renderedContentUnavailable))
+                                return
+                            }
+
+                            completion(.success(EditorWebViewEvaluatedValue(generation: context.generation, value: html)))
                         case .failure(let error):
                             completion(.failure(error))
                         }
@@ -897,6 +997,39 @@ struct EditorWebView: NSViewRepresentable {
             }
         }
 
+        @MainActor
+        func exportPDF(completion: @escaping (Result<Data, Error>) -> Void) {
+            withReadyPageContext { result in
+                switch result {
+                case .success(let context):
+                    self.createPDF(from: context, completion: completion)
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+        }
+
+        @MainActor
+        func exportPDFStrict(
+            expectedGeneration: Int,
+            completion: @escaping (Result<Data, Error>) -> Void
+        ) {
+            withReadyPageContext(expectedGeneration: expectedGeneration) { [weak self] result in
+                guard let self else {
+                    completion(.failure(EditorWebViewControllerError.pageNotReady))
+                    return
+                }
+
+                switch result {
+                case .success(let context):
+                    self.createPDF(from: context, completion: completion)
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+        }
+
+        @MainActor
         func printDocument() throws {
             guard let webView, pageLoadState.isReady else {
                 throw EditorWebViewControllerError.pageNotReady
@@ -908,13 +1041,16 @@ struct EditorWebView: NSViewRepresentable {
             operation.run()
         }
 
+        @MainActor
         private func flushPendingScriptsIfPossible() {
             guard let webView, pageLoadState.isReady, !pendingScripts.isEmpty else {
                 return
             }
 
-            let scripts = pendingScripts
-            pendingScripts.removeAll()
+            // Move queued scripts out before mutating storage to avoid iterating a
+            // view that was invalidated by `removeAll()`.
+            var scripts: [PendingScript] = []
+            swap(&scripts, &pendingScripts)
 
             for pendingScript in scripts {
                 webView.evaluateJavaScript(pendingScript.javaScript) { result, error in
@@ -928,17 +1064,84 @@ struct EditorWebView: NSViewRepresentable {
             }
         }
 
-        private func withReadyWebView(
+        @MainActor
+        private func evaluateJavaScript(
+            _ javaScript: String,
+            in context: ReadyPageContext,
+            completion: @escaping (Result<Any?, Error>) -> Void
+        ) {
+            context.webView.evaluateJavaScript(javaScript) { [weak self] result, error in
+                guard let self,
+                      self.pageLoadState.acceptsMessage(for: context.generation),
+                      self.webView === context.webView
+                else {
+                    completion(.failure(EditorWebViewControllerError.pageNotReady))
+                    return
+                }
+
+                if let error {
+                    completion(.failure(error))
+                    return
+                }
+
+                completion(.success(result))
+            }
+        }
+
+        @MainActor
+        private func createPDF(
+            from context: ReadyPageContext,
+            completion: @escaping (Result<Data, Error>) -> Void
+        ) {
+            let configuration = WKPDFConfiguration()
+            configuration.rect = context.webView.bounds
+
+            context.webView.createPDF(configuration: configuration) { [weak self] pdfResult in
+                guard let self,
+                      self.pageLoadState.acceptsMessage(for: context.generation),
+                      self.webView === context.webView
+                else {
+                    completion(.failure(EditorWebViewControllerError.pageNotReady))
+                    return
+                }
+
+                switch pdfResult {
+                case .success(let data):
+                    completion(.success(data))
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+        }
+
+        @MainActor
+        private func withReadyPageContext(
             timeout: TimeInterval = 1.5,
-            completion: @escaping (Result<WKWebView, Error>) -> Void
+            expectedGeneration: Int? = nil,
+            completion: @escaping (Result<ReadyPageContext, Error>) -> Void
         ) {
             guard let webView else {
                 completion(.failure(EditorWebViewControllerError.pageNotReady))
                 return
             }
 
+            if let expectedGeneration {
+                guard pageLoadState.acceptsMessage(for: expectedGeneration) else {
+                    completion(.failure(EditorWebViewControllerError.pageNotReady))
+                    return
+                }
+
+                completion(.success(ReadyPageContext(webView: webView, generation: expectedGeneration)))
+                return
+            }
+
             guard !pageLoadState.isReady else {
-                completion(.success(webView))
+                completion(.success(ReadyPageContext(webView: webView, generation: pageLoadState.currentGeneration)))
+                return
+            }
+
+            guard timeout > 0 else {
+                completion(.failure(EditorWebViewControllerError.pageNotReady))
                 return
             }
 
@@ -959,26 +1162,65 @@ struct EditorWebView: NSViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
         }
 
+        @MainActor
         private func resolveReadyWaitersWithCurrentWebView() {
             guard let webView else {
                 resolveReadyWaiters(with: .failure(EditorWebViewControllerError.pageNotReady))
                 return
             }
 
-            resolveReadyWaiters(with: .success(webView))
+            resolveReadyWaiters(
+                with: .success(
+                    ReadyPageContext(webView: webView, generation: pageLoadState.currentGeneration)
+                )
+            )
         }
 
-        private func resolveReadyWaiters(with result: Result<WKWebView, Error>) {
+        @MainActor
+        private func resolveReadyWaiters(with result: Result<ReadyPageContext, Error>) {
             guard !readyWaiters.isEmpty else {
                 return
             }
 
-            let waiters = readyWaiters.values
+            let waiters = Array(readyWaiters.values)
             readyWaiters.removeAll()
 
             for waiter in waiters {
                 waiter.timeoutWorkItem.cancel()
                 waiter.completion(result)
+            }
+        }
+
+        @MainActor
+        private func invalidatePendingScripts() {
+            guard !pendingScripts.isEmpty else {
+                return
+            }
+
+            // Move queued scripts out before mutating storage to avoid iterating a
+            // view that was invalidated by `removeAll()`.
+            var scripts: [PendingScript] = []
+            swap(&scripts, &pendingScripts)
+
+            for pendingScript in scripts {
+                deliverPendingScriptResult(
+                    .failure(EditorWebViewControllerError.pageNotReady),
+                    to: pendingScript.completion
+                )
+            }
+        }
+
+        @MainActor
+        private func deliverPendingScriptResult(
+            _ result: Result<Any?, Error>,
+            to completion: ((Result<Any?, Error>) -> Void)?
+        ) {
+            guard let completion else {
+                return
+            }
+
+            DispatchQueue.main.async {
+                completion(result)
             }
         }
     }
@@ -1514,7 +1756,7 @@ struct EditorWebView: NSViewRepresentable {
 
     }
 
-    private struct PendingScript {
+    nonisolated private struct PendingScript {
         let javaScript: String
         let completion: ((Result<Any?, Error>) -> Void)?
     }

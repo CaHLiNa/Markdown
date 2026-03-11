@@ -29,7 +29,7 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         controller.createUntitledDocument()
         controller.currentMarkdown = "modified"
         controller.currentEditorMarkdownOverride = { completion in
-            completion("modified")
+            completion(.success("modified"))
         }
         controller.unsavedChangesDecisionHandler = { _ in .cancel }
 
@@ -45,7 +45,7 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         controller.createUntitledDocument()
         controller.currentMarkdown = "modified"
         controller.currentEditorMarkdownOverride = { completion in
-            completion("modified")
+            completion(.success("modified"))
         }
         controller.unsavedChangesDecisionHandler = { _ in .discard }
 
@@ -60,7 +60,7 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         let controller = EditorDocumentController()
         controller.createUntitledDocument()
         controller.currentEditorMarkdownOverride = { completion in
-            completion("modified just before close")
+            completion(.success("modified just before close"))
         }
         controller.unsavedChangesDecisionHandler = { tab in
             XCTAssertEqual(tab.markdown, "modified just before close")
@@ -79,7 +79,7 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         controller.createUntitledDocument()
         controller.currentMarkdown = "modified"
         controller.currentEditorMarkdownOverride = { completion in
-            completion("modified")
+            completion(.success("modified"))
         }
         controller.unsavedChangesDecisionHandler = { _ in .save }
         controller.saveTabOverride = { _, completion in
@@ -147,7 +147,7 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
 
         controller.currentMarkdown = "déjà vu"
         controller.currentEditorMarkdownOverride = { completion in
-            completion("déjà vu")
+            completion(.success("déjà vu"))
         }
 
         controller.saveDocument()
@@ -177,7 +177,7 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
 
         let controller = makeControllerRestoringOpenFile(at: fileURL, workspaceURL: temporaryDirectory)
         controller.currentEditorMarkdownOverride = { completion in
-            completion("# Updated")
+            completion(.success("# Updated"))
         }
         controller.renderedEditorHTMLOverride = { completion in
             completion(.success("<h1>Updated</h1>"))
@@ -207,7 +207,7 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         let controller = EditorDocumentController()
         controller.createUntitledDocument()
         controller.currentEditorMarkdownOverride = { completion in
-            completion("line <one>")
+            completion(.success("line <one>"))
         }
         controller.renderedEditorHTMLOverride = { completion in
             completion(.failure(EditorWebViewControllerError.renderedContentUnavailable))
@@ -227,6 +227,97 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
 
         XCTAssertEqual(capturedSnapshot?.renderedHTML, "<pre>line &lt;one&gt;</pre>")
         XCTAssertEqual(capturedSnapshot?.markdown, "line <one>")
+    }
+
+    func testPrepareStrictSynchronizedEditorSnapshotUsesLatestEditorMarkdownAndBaseURL() {
+        resetPersistentState()
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        XCTAssertNoThrow(try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true))
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let fileURL = temporaryDirectory.appendingPathComponent("strict-export.md")
+        XCTAssertNoThrow(try "# Initial".write(to: fileURL, atomically: true, encoding: .utf8))
+
+        let controller = makeControllerRestoringOpenFile(at: fileURL, workspaceURL: temporaryDirectory)
+        controller.currentEditorMarkdownOverride = { completion in
+            completion(.success("# Strict"))
+        }
+        controller.renderedEditorHTMLOverride = { completion in
+            completion(.success("<h1>Strict</h1>"))
+        }
+
+        let expectation = expectation(description: "strict snapshot")
+        var capturedSnapshot: EditorSynchronizedSnapshot?
+
+        controller.prepareStrictSynchronizedEditorSnapshot { result in
+            if case .success(let snapshot) = result {
+                capturedSnapshot = snapshot.snapshot
+            }
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: 1.0)
+
+        XCTAssertEqual(capturedSnapshot?.markdown, "# Strict")
+        XCTAssertEqual(capturedSnapshot?.renderedHTML, "<h1>Strict</h1>")
+        XCTAssertEqual(capturedSnapshot?.documentBaseURL, fileURL)
+        XCTAssertEqual(controller.currentMarkdown, "# Strict")
+    }
+
+    func testPrepareStrictSynchronizedEditorSnapshotFailsInsteadOfFallingBackWhenMarkdownReadFails() {
+        resetPersistentState()
+
+        let controller = EditorDocumentController(markdown: "# Cached")
+        controller.currentEditorMarkdownOverride = { completion in
+            completion(.failure(EditorWebViewControllerError.markdownUnavailable))
+        }
+
+        let expectation = expectation(description: "strict snapshot failure")
+        var capturedError: Error?
+
+        controller.prepareStrictSynchronizedEditorSnapshot { result in
+            if case .failure(let error) = result {
+                capturedError = error
+            }
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: 1.0)
+
+        XCTAssertNotNil(capturedError, "Expected strict snapshot to fail when the latest editor markdown is unavailable.")
+        XCTAssertEqual(controller.currentMarkdown, "# Cached", "Expected fail-closed strict export preparation to leave the cached markdown untouched.")
+    }
+
+    func testPrepareStrictPDFDataFailsWhenLatestMarkdownCannotBeRead() {
+        resetPersistentState()
+
+        let controller = EditorDocumentController(markdown: "# Cached")
+        controller.currentEditorMarkdownOverride = { completion in
+            completion(.failure(EditorWebViewControllerError.markdownUnavailable))
+        }
+
+        var didAttemptPDFExport = false
+        controller.exportPDFDataOverride = { completion in
+            didAttemptPDFExport = true
+            completion(.success(Data("pdf".utf8)))
+        }
+
+        let expectation = expectation(description: "strict pdf failure")
+        var capturedError: Error?
+
+        controller.prepareStrictPDFData { result in
+            if case .failure(let error) = result {
+                capturedError = error
+            }
+            expectation.fulfill()
+        }
+
+        wait(for: [expectation], timeout: 1.0)
+
+        XCTAssertNotNil(capturedError, "Expected strict PDF export preparation to fail when the latest editor markdown is unavailable.")
+        XCTAssertFalse(didAttemptPDFExport, "Expected PDF rendering to be skipped when strict snapshot preparation fails.")
     }
 
     func testPreferencePersistenceIsCoalescedAcrossMultipleChanges() {
@@ -412,6 +503,47 @@ final class EditorDocumentControllerTabTests: HostedXCTestCase {
         XCTAssertFalse(
             controller.isFolderExpanded("notes"),
             "Expected a manual collapse choice to survive workspace refresh."
+        )
+    }
+
+    func testWorkspaceRefreshCoalescesSearchRefreshes() {
+        resetPersistentState()
+
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = workspaceURL.appendingPathComponent("notes.md")
+
+        do {
+            try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+            try "alpha beta".write(to: fileURL, atomically: true, encoding: .utf8)
+        } catch {
+            XCTFail("Failed to prepare workspace search fixture: \(error)")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+
+        let controller = makeControllerRestoringWorkspace(at: workspaceURL)
+        var refreshCount = 0
+        controller.workspaceSearchRefreshObserver = {
+            refreshCount += 1
+        }
+
+        controller.workspaceSearchQuery = "alpha"
+        controller.debugFlushDeferredSideEffects()
+        XCTAssertEqual(refreshCount, 1)
+
+        refreshCount = 0
+        controller.refreshWorkspace()
+        controller.refreshWorkspace()
+        controller.refreshWorkspace()
+        XCTAssertEqual(refreshCount, 0, "Expected repeated workspace refreshes to stay coalesced until deferred side effects are flushed.")
+
+        controller.debugFlushDeferredSideEffects()
+
+        XCTAssertEqual(
+            refreshCount,
+            1,
+            "Expected multiple workspace refreshes in the same burst to trigger a single workspace search refresh."
         )
     }
 

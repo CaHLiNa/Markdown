@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createMarkdownEditor } from './editor'
 import { defaultEditorPresentation } from './editor-presentation'
+import { DEFAULT_TABLE_SNIPPET } from './table-manager'
 
 const mockVditorState = vi.hoisted(() => ({
   instances: [] as MockVditor[]
@@ -449,6 +450,36 @@ describe('editor behavior', () => {
     expect(editor.getEditorState().mode).toBe('global-source')
     expect(editor.runCommand('toggle-global-source-mode')).toBe(true)
     expect(editor.getEditorState().mode).toBe('wysiwyg')
+
+    await editor.destroy()
+  })
+
+  it('falls back to the default table snippet when the native table toolbar is unavailable', async () => {
+    const root = document.createElement('div')
+
+    document.body.append(root)
+
+    const editor = await createMarkdownEditor({
+      root,
+      initialMarkdown: ''
+    })
+
+    const instance = mockVditorState.instances[mockVditorState.instances.length - 1]
+    expect(instance).toBeDefined()
+
+    instance?.deleteValue.mockImplementation(() => {
+      instance.setValue('')
+    })
+    instance?.insertValue.mockImplementation((markdown: string) => {
+      instance.setValue(markdown)
+    })
+
+    if (instance?.vditor.toolbar?.elements) {
+      instance.vditor.toolbar.elements.table = undefined
+    }
+
+    expect(editor.runCommand('table')).toBe(true)
+    expect(editor.getMarkdown()).toBe(DEFAULT_TABLE_SNIPPET)
 
     await editor.destroy()
   })

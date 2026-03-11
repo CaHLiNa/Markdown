@@ -40,6 +40,7 @@ import {
 } from './selection-manager'
 import {
   createTableManager,
+  DEFAULT_TABLE_SNIPPET,
   type TableManager
 } from './table-manager'
 
@@ -148,7 +149,6 @@ export type MarkdownEditor = {
 const VDITOR_CDN = new URL('./vditor', window.location.href).toString()
 const DEFAULT_INLINE_PLACEHOLDER = 'text'
 const DEFAULT_IMAGE_ALT = 'image'
-const DEFAULT_TABLE_SNIPPET = '| Column 1 | Column 2 |\n| --- | --- |\n| Value 1 | Value 2 |'
 const HIDDEN_NATIVE_TOOLBAR_ITEMS = [
   'headings',
   'bold',

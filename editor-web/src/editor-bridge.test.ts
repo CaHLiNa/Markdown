@@ -191,4 +191,30 @@ describe('editor-bridge', () => {
     expect(postMarkdownToNative).toHaveBeenCalledWith('current markdown')
     expect(bridge.currentMarkdown).toBe('current markdown')
   })
+
+  it('ignores delayed markdown callbacks from a replaced editor session', () => {
+    const postMarkdownToNative = vi.fn()
+    const bridge = createEditorBridge({
+      postMarkdownToNative,
+      applyAppearance: vi.fn(),
+      installNativeBridge() {}
+    })
+
+    const staleEditor = createEditorDouble()
+    const staleSessionID = bridge.beginEditorSession()
+    bridge.attachEditor(staleEditor, staleSessionID)
+    bridge.detachEditor(staleSessionID)
+
+    const activeEditor = createEditorDouble()
+    const activeSessionID = bridge.beginEditorSession()
+    bridge.attachEditor(activeEditor, activeSessionID)
+
+    bridge.handleEditorMarkdownChange('late stale markdown', staleSessionID)
+    bridge.handleEditorMarkdownChange('fresh attached markdown', activeSessionID)
+    bridge.flush()
+
+    expect(postMarkdownToNative).toHaveBeenCalledTimes(1)
+    expect(postMarkdownToNative).toHaveBeenCalledWith('fresh attached markdown')
+    expect(bridge.currentMarkdown).toBe('fresh attached markdown')
+  })
 })
